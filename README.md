@@ -34,7 +34,7 @@ var vm = new VM();
 vm.run("process.exit()");
 ```
 
-## CM
+## VM
 
 VM is a simple sandbox, without `require` feature, to synchronously run an untrusted code. Only JavaScript built-in objects are available.
 

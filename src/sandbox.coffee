@@ -67,7 +67,7 @@ return do (vm, parent) =>
 			return vm.natives[modulename].exports
 
 		# precompile native source
-		script = new Script "(function (exports, require, module, process) { #{NATIVE_MODULES[modulename]} \n});", 
+		script = new Script "(function (exports, require, module, process) { 'use strict'; #{NATIVE_MODULES[modulename]} \n});", 
 			filename: "#{modulename}.sb.js"
 		
 		# setup module scope
@@ -170,7 +170,7 @@ return do (vm, parent) =>
 	
 			try
 				# Load module
-				code = "(function (exports, require, module, __filename, __dirname) { #{fs.readFileSync(filename, "utf8")} \n});"
+				code = "(function (exports, require, module, __filename, __dirname) { 'use strict'; #{fs.readFileSync(filename, "utf8")} \n});"
 				
 			catch ex
 				throw new VMError "Failed to load '#{filename}': [#{ex.message}]", "ELOADFAIL"

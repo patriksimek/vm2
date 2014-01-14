@@ -9,8 +9,8 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 * Sandbox has limited access to process's methods
 * Sandbox can require modules (native and external)
 * You can limit access to certain (or all) native modules
-* You can securely call methods inside sandbox with parameters
-* Timeout on `while (true) {}`
+* You can securely call methods inside sandbox with callbacks
+* Is immune to `while (true) {}`
 * Is immune to all known methods of attacks
 
 ## How does it work
@@ -18,6 +18,7 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 * It uses internal VM module to create secure context
 * It compiles native modules inside a new context
 * It overrides native require to control access to modules
+* It forces modules (even native ones) to use `use strict`
 
 ## Installation
 

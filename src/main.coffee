@@ -105,6 +105,7 @@ class VM extends EventEmitter
 		@context = vm.createContext()
 		contextify = vm.runInContext("(function(require) { #{cf} \n})", @context, {filename: "contextify.js", displayErrors: false}).call @context, require
 		
+		# prepare global sandbox
 		if @options.sandbox
 			unless typeof @options.sandbox is 'object'
 				throw new VMError "Sandbox must be object"
@@ -153,6 +154,7 @@ class NodeVM extends VM
 		
 		# defaults
 		@options =
+			sandbox: options.sandbox ? null
 			console: options.console ? 'inherit'
 			require: options.require ? false
 			requireExternal: options.requireExternal ? false
@@ -256,12 +258,21 @@ class NodeVM extends VM
 		
 		@context = vm.createContext()
 		contextify = vm.runInContext("(function(require) { #{cf} \n})", @context, {filename: "contextify.js", displayErrors: false}).call @context, require
+		
 		closure = vm.runInContext "(function (vm, parent, contextify, __dirname, __filename) { #{sb} \n})", @context,
 			filename: "sandbox.js"
 			displayErrors: false
 		
 		{@cache, @module, @proxy} = closure.call @context, @, parent, contextify, dirname, filename
 		@cache[filename] = @module
+		
+		# prepare global sandbox
+		if @options.sandbox
+			unless typeof @options.sandbox is 'object'
+				throw new VMError "Sandbox must be object"
+			
+			for name, value of @options.sandbox
+				contextify _prepareContextify(value), name
 
 		# run script
 		@running = true

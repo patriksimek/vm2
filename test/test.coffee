@@ -196,6 +196,16 @@ describe 'modules', ->
 		
 		done()
 	
+	it 'native module arguments attack', (done) ->
+		vm = new NodeVM
+			require: true
+			requireNative: ['fs']
+			sandbox:
+				parentfilename: __filename
+				done: done
+		
+		vm.run "var fs = require('fs'); fs.exists(parentfilename, function() {try {arguments.callee.caller.toString()} catch (err) {return done();}; done(new Error('Missing expected exception'))});"
+	
 	after (done) ->
 		vm = null
 		done()

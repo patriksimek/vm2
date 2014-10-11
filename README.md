@@ -12,6 +12,7 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 * You can securely call methods inside sandbox with callbacks
 * Is immune to `while (true) {}`
 * Is immune to all known methods of attacks
+* Coffee-Script support
 
 ## How does it work
 
@@ -43,6 +44,7 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 
 * `timeout` - Script timeout in milliseconds
 * `sandbox` - VM's global object
+* `language` - `javascript` (default) or `coffeescript`
 
 ```javascript
 var VM = require('vm2').VM;
@@ -64,6 +66,7 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 
 * `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`)
 * `sandbox` - VM's global object
+* `language` - `javascript` (default) or `coffeescript`
 * `require` - `true` to enable `require` method (default: `false`)
 * `requireExternal` - `true` to enable `require` of external modules (default: `false`)
 * `requireNative` - Array of allowed native modules. (default: all available)

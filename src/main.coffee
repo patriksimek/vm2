@@ -56,6 +56,17 @@ _prepareContextify = (value) ->
 	else
 		value
 
+_compileToJS = (code, language) ->
+	switch language
+		when 'coffeescript', 'coffee-script', 'cs', 'text/coffeescript'
+			return require('coffee-script').compile code, {header: false, bare: true}
+		
+		when 'javascript', 'java-script', 'js', 'text/javascript'
+			return code
+		
+		else
+			throw new VMError "Unsupported language '#{language}'."
+
 ###
 Class VM.
 
@@ -81,6 +92,7 @@ class VM extends EventEmitter
 		@options =
 			timeout: options.timeout ? undefined
 			sandbox: options.sandbox ? null
+			language: options.language ? 'javascript'
 	
 	###
 	Run the code in VM.
@@ -91,6 +103,9 @@ class VM extends EventEmitter
 	
 	run: (code) ->
 		'use strict'
+
+		if @options.language isnt 'javascript'
+			code = _compileToJS code, @options.language
 		
 		if @running
 			script = new vm.Script code,
@@ -157,6 +172,7 @@ class NodeVM extends VM
 			sandbox: options.sandbox ? null
 			console: options.console ? 'inherit'
 			require: options.require ? false
+			language: options.language ? 'javascript'
 			requireExternal: options.requireExternal ? false
 			requireNative: {}
 
@@ -208,6 +224,9 @@ class NodeVM extends VM
 		
 		if global.isVM
 			throw new VMError "You can't nest VMs"
+		
+		if @options.language isnt 'javascript'
+			code = _compileToJS code, @options.language
 
 		if filename
 			filename = pa.resolve filename

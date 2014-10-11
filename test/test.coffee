@@ -112,14 +112,14 @@ describe 'NodeVM', ->
 	it 'prevent global access', (done) ->
 		assert.throws ->
 			vm.run "process.exit()"
-		, /Object #<Object> has no method 'exit'/
+		, /undefined is not a function/
 		
 		done()
 	
 	it 'arguments attack', (done) ->
 		assert.throws ->
 			console.log vm.run("(function() {return arguments.callee.caller.toString()})()")
-		, /Cannot call method 'toString' of null/
+		, /Cannot read property 'toString' of null/
 		
 		done()
 	
@@ -142,12 +142,13 @@ describe 'modules', ->
 		
 		done()
 	
-	it.skip 'require coffee-script (not supported atm)', (done) ->
+	it 'run coffee-script', (done) ->
 		vm = new NodeVM
 			require: true
 			requireExternal: true
+			language: 'coffeescript'
 		
-		assert.equal vm.run("require('coffee-script'); module.exports = require('#{__dirname}/data/coffee.coffee')", __filename).working, true
+		assert.equal vm.run("module.exports = working: true").working, true
 		
 		done()
 		
@@ -184,7 +185,7 @@ describe 'modules', ->
 			
 			# proxied call, good practice
 			vm.call vm.module.exports.fce
-		, /Cannot call method 'toString' of null/
+		, /Cannot read property 'toString' of null/
 		
 		vm = new NodeVM
 		assert.throws ->
@@ -192,7 +193,7 @@ describe 'modules', ->
 			
 			# proxied call, good practice
 			vm.call vm.module.exports.fce
-		, /Cannot call method 'toString' of null/
+		, /Cannot read property 'toString' of null/
 		
 		done()
 	

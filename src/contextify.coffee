@@ -11,13 +11,11 @@ contextify = (value, addtoglobal) =>
 	
 	# using util of parent
 	ut = require 'util'
-	
+
 	switch typeof value
 		when 'object'
-			if ut.isNull value
+			if value is null
 				o = null
-			if ut.isUndefined value
-				o = undefined
 			else if ut.isDate value
 				o = new Date value.getTime()
 			else if ut.isError value
@@ -39,6 +37,9 @@ contextify = (value, addtoglobal) =>
 
 		when 'function'
 			o = -> value arguments...
+		
+		when 'undefined'
+			o = undefined
 			
 		else
 			o = value

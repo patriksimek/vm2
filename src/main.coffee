@@ -40,6 +40,7 @@ Prepare value for contextification.
 
 _prepareContextify = (value) ->
 	if typeof value is 'object'
+		if value is null then return value
 		if value instanceof String then return String value
 		if value instanceof Number then return Number value
 		if value instanceof Boolean then return Boolean value

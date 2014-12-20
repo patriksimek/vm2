@@ -19,6 +19,8 @@ describe 'contextify', ->
 					buffer: new Buffer 0
 					function: ->
 					object: {x: 1}
+					nil: null
+					undef: undefined
 					
 		done()
 		
@@ -52,6 +54,14 @@ describe 'contextify', ->
 	
 	it 'object', (done) ->
 		assert.equal vm.run("test.object instanceof Object && test.object.x === 1"), true
+		done()
+	
+	it 'null', (done) ->
+		assert.equal vm.run("test.nil === null"), true
+		done()
+	
+	it 'undefined', (done) ->
+		assert.equal vm.run("test.undef === undefined"), true
 		done()
 	
 	after (done) ->

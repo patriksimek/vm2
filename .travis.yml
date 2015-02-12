@@ -1,6 +1,8 @@
 language: node_js
 node_js:
   - "0.11"
+  - "0.12"
+  - iojs
 
 before_script:
   coffee --compile --bare --output ./lib ./src

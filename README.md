@@ -23,7 +23,7 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 
 ## Installation
 
-**IMPORTANT: Works only with Node.js 0.11 and above**
+**IMPORTANT: Requires Node.js 0.11+ / io.js 1.0+**
 
     npm install vm2
 

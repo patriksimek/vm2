@@ -29,14 +29,16 @@
 		
 	},
 	"devDependencies": {
-		"coffee-script": "^1.8.0",
+		"coffee-script": "1.9.0",
 		"mocha": "^1.12.0"
 	},
 	"engines": {
 		"node": ">=0.11"
 	},
 	"scripts": {
-		"test": "mocha"
+		"test": "mocha",
+		"build": "coffee -b -o lib -c src",
+		"watch": "coffee -w -b -o lib -c src"
 	},
 	"bin": {
 		"vm2": "./bin/vm2"

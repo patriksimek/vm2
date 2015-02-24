@@ -281,7 +281,12 @@ class NodeVM extends VM
 			parent.COUNTER_HTTP_CLIENT_RESPONSE = global.COUNTER_HTTP_CLIENT_RESPONSE
 
 		@context = vm.createContext()
-		contextify = vm.runInContext("(function(require) { #{cf} \n})", @context, {filename: "contextify.js", displayErrors: false}).call @context, require
+		opts =
+			filename: "contextify.js"
+			displayErrors: false
+		if @options.timeout
+			opts.timeout = timeout
+		contextify = vm.runInContext("(function(require) { #{cf} \n})", @context, opts).call @context, require
 
 		closure = vm.runInContext "(function (vm, parent, contextify, __dirname, __filename) { #{sb} \n})", @context,
 			filename: "sandbox.js"

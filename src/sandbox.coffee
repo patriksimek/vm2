@@ -63,6 +63,11 @@ return do (vm, parent) =>
 	_requireNative = (modulename) ->
 		'use strict'
 
+		if modulename is "buffer"
+      # use the pure JS version of buffer as the native does some crazy binding
+      # and somehow crashes the non-contexted buffer
+			modulename = "buffer/"
+
 		if vm.natives[modulename]
 			return vm.natives[modulename].exports
 

@@ -10,7 +10,7 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 * Sandbox can require modules (native and external)
 * You can limit access to certain (or all) native modules
 * You can securely call methods inside sandbox with callbacks
-* Is immune to `while (true) {}`
+* Is immune to `while (true) {}` (VM only, see docs)
 * Is immune to all known methods of attacks
 * Coffee-Script support
 
@@ -42,8 +42,8 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 
 **Options:**
 
-* `timeout` - Script timeout in milliseconds
-* `sandbox` - VM's global object
+* `timeout` - Script timeout in milliseconds. 
+* `sandbox` - VM's global object.
 * `language` - `javascript` (default) or `coffeescript`
 
 ```javascript
@@ -55,8 +55,16 @@ var options = {
 };
 
 var vm = new VM(options);
-vm.run("process.exit()");
+vm.run("process.exit()"); // throws ReferenceError: process is not defined
 ```
+
+You can also retrieve values from VM.
+
+```javascript
+var number = vm.run("1337"); // returns 1337
+```
+
+**IMPORTANT**: Timeout is only effective on code you run trough `run`. Timeout is NOT effective on any method returned by VM.
 
 ## NodeVM
 
@@ -73,7 +81,8 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 
 **Available modules:** `assert`, `buffer`, `child_process`, `crypto`, `tls`, `dgram`, `dns`, `http`, `https`, `net`, `querystring`, `url`, `domain`, `events`,  `fs`, `path`, `os`, `stream`, `string_decoder`, `timers`, `tty`,  `util`, `sys`, `vm`, `zlib`
 
-Remember: the more modules you allow, the more fragile your sandbox becomes.
+**REMEMBER**: The more modules you allow, the more fragile your sandbox becomes.
+**IMPORTANT**: Timeout is not effective for NodeVM so it is not immune to `while (true) {}` or similar evil.
 
 ```javascript
 var NodeVM = require('vm2').NodeVM;

@@ -15,16 +15,17 @@ AVAILABLE_NATIVE_MODULES = [
 	'assert',
 	'buffer',
 	'child_process',
-	'crypto', 'tls', 
+	'constants',
+	'crypto', 'tls',
 	'dgram', 'dns', 'http', 'https', 'net', 'querystring', 'url',
 	'domain',
-	'events', 
+	'events',
 	'fs', 'path',
 	'os',
 	'stream',
 	'string_decoder',
 	'timers',
-	'tty', 
+	'tty',
 	'util', 'sys',
 	'vm',
 	'zlib'
@@ -50,7 +51,7 @@ _prepareContextify = (value) ->
 		if value instanceof Date then return value
 		if value instanceof RegExp then return value
 		if value instanceof Buffer then return value
-		
+
 		o = {}
 		o[k] = _prepareContextify v for k, v of value
 		return o
@@ -62,10 +63,10 @@ _compileToJS = (code, language) ->
 	switch language
 		when 'coffeescript', 'coffee-script', 'cs', 'text/coffeescript'
 			return require('coffee-script').compile code, {header: false, bare: true}
-		
+
 		when 'javascript', 'java-script', 'js', 'text/javascript'
 			return code
-		
+
 		else
 			throw new VMError "Unsupported language '#{language}'."
 
@@ -81,66 +82,66 @@ class VM extends EventEmitter
 	running: false
 	options: null
 	context: null
-	
+
 	###
 	Create VM instance.
-	
+
 	@param {Object} [options] VM options.
 	@return {VM}
 	###
-	
+
 	constructor: (options = {}) ->
 		# defaults
 		@options =
 			timeout: options.timeout ? undefined
 			sandbox: options.sandbox ? null
 			language: options.language ? 'javascript'
-	
+
 	###
 	Run the code in VM.
-	
+
 	@param {String} code Code to run.
 	@return {*} Result of executed code.
 	###
-	
+
 	run: (code) ->
 		'use strict'
 
 		if @options.language isnt 'javascript'
 			code = _compileToJS code, @options.language
-		
+
 		if @running
 			script = new vm.Script code,
 				filename: "vm"
 				displayErrors: false
-				
+
 			return script.runInContext @context,
 				filename: "vm"
 				displayErrors: false
 				timeout: @options.timeout
-		
+
 		@context = vm.createContext()
 		contextify = vm.runInContext("(function(require) { #{cf} \n})", @context, {filename: "contextify.js", displayErrors: false}).call @context, require
-		
+
 		# prepare global sandbox
 		if @options.sandbox
 			unless typeof @options.sandbox is 'object'
 				throw new VMError "Sandbox must be object"
-			
+
 			for name, value of @options.sandbox
 				contextify _prepareContextify(value), name
-		
+
 		script = new vm.Script code,
 			filename: "vm"
 			displayErrors: false
-		
+
 		# run script
 		@running = true
 		script.runInContext @context,
 			filename: "vm"
 			displayErrors: false
 			timeout: @options.timeout
-		
+
 ###
 Class NodeVM.
 
@@ -155,20 +156,20 @@ class NodeVM extends VM
 	natives: null # cache of native modules
 	module: null
 	proxy: null
-	
+
 	###
 	Create NodeVM instance.
-	
+
 	Unlike VM, NodeVM lets you use require same way like in regular node.
-	
+
 	@param {Object} [options] VM options.
 	@return {NodeVM}
 	###
-	
+
 	constructor: (options = {}) ->
 		#@cache is initialized inside vm's context (security reasons)
 		@natives = {}
-		
+
 		# defaults
 		@options =
 			sandbox: options.sandbox ? null
@@ -177,63 +178,65 @@ class NodeVM extends VM
 			language: options.language ? 'javascript'
 			requireExternal: options.requireExternal ? false
 			requireNative: {}
+			fakeNative: options.fakeNative ? []
+			useStrict: options.useStrict ? true
 
 		# convert array of modules to collection to speed things up
 		if options.requireNative
 			if Array.isArray options.requireNative
 				@options.requireNative[mod] = true for mod in options.requireNative when mod in AVAILABLE_NATIVE_MODULES
-			
+
 		else
 			# by default, add all available native modules
 			@options.requireNative[mod] = true for mod in AVAILABLE_NATIVE_MODULES
-	
+
 	###
-	Securely call method in VM. All arguments except functions are cloned during the process to prevent context leak. Functions are wrapped to secure closures. 
-	
+	Securely call method in VM. All arguments except functions are cloned during the process to prevent context leak. Functions are wrapped to secure closures.
+
 	Buffers are copied!
-	
+
 	IMPORTANT: Method doesn't check for circular objects! If you send circular structure as an argument, you process will stuck in infinite loop.
-	
+
 	@param {Function} method Method to execute.
 	@param {...*} argument Arguments.
 	@return {*} Return value of executed method.
 	###
-	
+
 	call: (method) ->
 		'use strict'
-		
+
 		unless @running
 			throw new VMError "VM is not running"
-		
+
 		if typeof method is 'function'
 			return @proxy arguments...
 
 		else
 			throw new VMError "Unrecognized method type"
-	
+
 	###
-	Run the code in NodeVM. 
-	
+	Run the code in NodeVM.
+
 	First time you run this method, code is executed same way like in node's regular `require` - it's executed with `module`, `require`, `exports`, `__dirname`, `__filename` variables and expect result in `module.exports'.
-	
+
 	@param {String} code Code to run.
 	@param {String} [filename] Filename that shows up in any stack traces produced from this script.
 	@return {*} Result of executed code.
 	###
-	
+
 	run: (code, filename) ->
 		'use strict'
-		
+
 		if global.isVM
 			throw new VMError "You can't nest VMs"
-		
+
 		if @options.language isnt 'javascript'
 			code = _compileToJS code, @options.language
 
 		if filename
 			filename = pa.resolve filename
 			dirname = pa.dirname filename
-		
+
 		else
 			filename = null
 			dirname = null
@@ -242,7 +245,7 @@ class NodeVM extends VM
 			script = new vm.Script code,
 				filename: filename ? "vm"
 				displayErrors: false
-				
+
 			return script.runInContext @context,
 				filename: filename ? "vm"
 				displayErrors: false
@@ -258,7 +261,7 @@ class NodeVM extends VM
 			clearTimeout: clearTimeout
 			clearInterval: clearInterval
 			clearImmediate: clearImmediate
-		
+
 		if global.DTRACE_HTTP_SERVER_RESPONSE
 			parent.DTRACE_HTTP_SERVER_RESPONSE = global.DTRACE_HTTP_SERVER_RESPONSE
 			parent.DTRACE_HTTP_SERVER_REQUEST = global.DTRACE_HTTP_SERVER_REQUEST
@@ -268,7 +271,7 @@ class NodeVM extends VM
 			parent.DTRACE_NET_SERVER_CONNECTION = global.DTRACE_NET_SERVER_CONNECTION
 			parent.DTRACE_NET_SOCKET_READ = global.DTRACE_NET_SOCKET_READ
 			parent.DTRACE_NET_SOCKET_WRITE = global.DTRACE_NET_SOCKET_WRITE
-		
+
 		if global.COUNTER_NET_SERVER_CONNECTION
 			parent.COUNTER_NET_SERVER_CONNECTION = global.COUNTER_NET_SERVER_CONNECTION
 			parent.COUNTER_NET_SERVER_CONNECTION_CLOSE = global.COUNTER_NET_SERVER_CONNECTION_CLOSE
@@ -276,22 +279,27 @@ class NodeVM extends VM
 			parent.COUNTER_HTTP_SERVER_RESPONSE = global.COUNTER_HTTP_SERVER_RESPONSE
 			parent.COUNTER_HTTP_CLIENT_REQUEST = global.COUNTER_HTTP_CLIENT_REQUEST
 			parent.COUNTER_HTTP_CLIENT_RESPONSE = global.COUNTER_HTTP_CLIENT_RESPONSE
-		
+
 		@context = vm.createContext()
-		contextify = vm.runInContext("(function(require) { #{cf} \n})", @context, {filename: "contextify.js", displayErrors: false}).call @context, require
-		
+		opts =
+			filename: "contextify.js"
+			displayErrors: false
+		if @options.timeout
+			opts.timeout = timeout
+		contextify = vm.runInContext("(function(require) { #{cf} \n})", @context, opts).call @context, require
+
 		closure = vm.runInContext "(function (vm, parent, contextify, __dirname, __filename) { #{sb} \n})", @context,
 			filename: "sandbox.js"
 			displayErrors: false
-		
+
 		{@cache, @module, @proxy} = closure.call @context, @, parent, contextify, dirname, filename
 		@cache[filename] = @module
-		
+
 		# prepare global sandbox
 		if @options.sandbox
 			unless typeof @options.sandbox is 'object'
 				throw new VMError "Sandbox must be object"
-			
+
 			for name, value of @options.sandbox
 				contextify _prepareContextify(value), name
 
@@ -300,7 +308,7 @@ class NodeVM extends VM
 		script = new vm.Script "(function (exports, require, module, __filename, __dirname) { #{code} \n})",
 			filename: filename ? "vm"
 			displayErrors: false
-			
+
 		closure = script.runInContext @context,
 			filename: filename ? "vm"
 			displayErrors: false
@@ -311,48 +319,48 @@ class NodeVM extends VM
 
 	###
 	Create NodeVM and run code inside it.
-	
+
 	@param {String} script Javascript code.
 	@param {String} [filename] File name (used in stack traces only).
 	@param {Object} [options] VM options.
 	@return {NodeVM} VM.
 	###
-	
+
 	@code: (script, filename, options) ->
 		if filename?
 			if typeof filename is 'object'
 				options = filename
 				filename = null
-			
+
 			else if typeof filename is 'string'
 				filename = pa.resolve filename
-			
+
 			else
 				console.log arguments
 				throw new VMError "Invalid arguments"
-		
+
 		if arguments.length > 3
 			throw new VMError "Invalid number of arguments"
-		
+
 		_vm = new NodeVM options
 		_vm.run script, filename
 		_vm
-	
+
 	###
 	Create NodeVM and run script from file inside it.
-	
+
 	@param {String} [filename] File name (used in stack traces only).
 	@param {Object} [options] VM options.
 	@return {NodeVM} VM.
 	###
-	
+
 	@file: (filename, options) ->
 		_vm = new NodeVM options
 		filename = pa.resolve filename
-		
+
 		unless fs.existsSync filename
 			throw new VMError "Script '#{filename}' not found"
-		
+
 		if fs.statSync(filename).isDirectory()
 			throw new VMError "Script must be file, got directory"
 
@@ -374,7 +382,7 @@ class VMError extends Error
 	constructor: (message) ->
 		@name = @constructor.name
 		@message = message
-		
+
 		super()
 		Error.captureStackTrace @, @constructor
 

@@ -1,44 +1,47 @@
 {
-	"author": {
-		"name": "Patrik Simek",
-		"url": "https://patriksimek.cz"
-	},
-	"name": "vm2",
-	"description": "vm2 is a sandbox that can run untrusted code with whitelisted built-in node objects. Securely!.",
-	"keywords": [
-		"sandbox",
-		"prison",
-		"jail",
-		"vm",
-		"alcatraz",
-		"contextify"
-	],
-	"version": "0.2.2",
-	"main": "index.js",
-	"repository": {
-		"type": "git",
-		"url": "https://github.com/patriksimek/vm2"
-	},
-	"licenses": [
-		{
-			"type": "MIT",
-			"url": "http://opensource.org/licenses/mit-license.php"
-		}
-	],
-	"dependencies": {
-		
-	},
-	"devDependencies": {
-		"coffee-script": "^1.8.0",
-		"mocha": "^1.12.0"
-	},
-	"engines": {
-		"node": ">=0.11"
-	},
-	"scripts": {
-		"test": "mocha"
-	},
-	"bin": {
-		"vm2": "./bin/vm2"
-	}
+  "author": {
+    "name": "Patrik Simek",
+    "url": "https://patriksimek.cz"
+  },
+  "name": "vm2",
+  "description": "vm2 is a sandbox that can run untrusted code with whitelisted built-in node objects. Securely!.",
+  "keywords": [
+    "sandbox",
+    "prison",
+    "jail",
+    "vm",
+    "alcatraz",
+    "contextify"
+  ],
+  "version": "0.2.2",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/patriksimek/vm2"
+  },
+  "licenses": [
+    {
+      "type": "MIT",
+      "url": "http://opensource.org/licenses/mit-license.php"
+    }
+  ],
+  "dependencies": {
+    "buffer": "^3.0.3",
+    "coffee-script": "1.9.0"
+  },
+  "devDependencies": {
+    "mocha": "^1.12.0"
+  },
+  "engines": {
+    "node": ">=0.11"
+  },
+  "scripts": {
+    "test": "mocha",
+    "postinstall": "npm run build",
+    "build": "coffee -b -o lib -c src",
+    "watch": "coffee -w -b -o lib -c src"
+  },
+  "bin": {
+    "vm2": "./bin/vm2"
+  }
 }

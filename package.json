@@ -19,12 +19,7 @@
 		"type": "git",
 		"url": "https://github.com/patriksimek/vm2"
 	},
-	"licenses": [
-		{
-			"type": "MIT",
-			"url": "http://opensource.org/licenses/mit-license.php"
-		}
-	],
+	"license": "MIT",
 	"dependencies": {
 		
 	},

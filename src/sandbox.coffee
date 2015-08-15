@@ -130,7 +130,7 @@ return do (vm, parent) =>
 					if filename then break
 	
 					paths.pop()
-				
+
 			unless filename
 				throw new VMError "Module '#{modulename}' not found", "ENOTFOUND"
 			
@@ -140,6 +140,11 @@ return do (vm, parent) =>
 			
 			dirname = pa.dirname filename
 			extname = pa.extname filename
+
+			if vm.options.requireOnlyInPath
+				requiredPath = pa.resolve(vm.options.requireOnlyInPath);
+				if dirname.indexOf(requiredPath) != 0
+					throw new VMError "Module '#{modulename}' is not allowed to be required. The path is outside the border!", "EDENIED"
 			
 			vm.cache[filename] = module =
 				filename: filename

@@ -216,7 +216,19 @@ describe 'modules', ->
 				done: done
 		
 		vm.run "var fs = require('fs'); fs.exists(parentfilename, function() {try {arguments.callee.caller.toString()} catch (err) {return done();}; done(new Error('Missing expected exception'))});"
-	
+
+	it 'path attack', (done) ->
+		vm = new NodeVM
+			require: true
+			requireOnlyInPath : "./"
+		assert.throws ->
+			vm.run "var test = require('../../test.json')";
+
+			# proxied call, good practice
+			vm.call vm.module.exports.fce
+		, "Access denied to require '../../test.json'"
+		done();
+
 	after (done) ->
 		vm = null
 		done()

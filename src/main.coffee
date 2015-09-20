@@ -15,6 +15,7 @@ AVAILABLE_NATIVE_MODULES = [
 	'assert',
 	'buffer',
 	'child_process',
+	'constants',
 	'crypto', 'tls', 
 	'dgram', 'dns', 'http', 'https', 'net', 'querystring', 'url',
 	'domain',
@@ -52,7 +53,11 @@ _prepareContextify = (value) ->
 		if value instanceof Buffer then return value
 		
 		o = {}
-		o[k] = _prepareContextify v for k, v of value
+		for key in Object.getOwnPropertyNames value
+			desc = Object.getOwnPropertyDescriptor value, key
+			desc.value = _prepareContextify desc.value if desc.value?
+			Object.defineProperty o, key, desc
+		
 		return o
 
 	else

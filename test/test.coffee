@@ -70,10 +70,20 @@ describe 'contextify', ->
 
 describe 'VM', ->
 	before (done) ->
+		sandbox =
+			round: (number) ->
+				Math.round number
+			
+			sub: {}
+		
+		Object.defineProperty sandbox.sub, 'getter',
+			get: ->
+				while true
+					1
+
 		vm = new VM
-			sandbox:
-				round: (number) ->
-					Math.round number
+			timeout: 10
+			sandbox: sandbox
 					
 		done()
 
@@ -93,7 +103,18 @@ describe 'VM', ->
 		assert.throws ->
 			new VM(timeout: 10).run "while (true) {}"
 		, /Script execution timed out\./
+		
+		assert.throws ->
+			vm.run "sub.getter"
+		, /Script execution timed out\./
 
+		done()
+
+	it 'timers', (done) ->
+		assert.equal vm.run("global.setTimeout"), undefined
+		assert.equal vm.run("global.setInterval"), undefined
+		assert.equal vm.run("global.setImmediate"), undefined
+		
 		done()
 	
 	after (done) ->
@@ -122,7 +143,7 @@ describe 'NodeVM', ->
 	it 'prevent global access', (done) ->
 		assert.throws ->
 			vm.run "process.exit()"
-		, /undefined is not a function/
+		, /(undefined is not a function|process\.exit is not a function)/
 		
 		done()
 	
@@ -136,6 +157,13 @@ describe 'NodeVM', ->
 	it 'global attack', (done) ->
 		assert.equal vm.run("console.log.constructor('return (function(){return this})().SANDBOX')()"), true
 		
+		done()
+
+	it.skip 'timeout (not supported by Node\'s VM)', (done) ->
+		assert.throws ->
+			new NodeVM(timeout: 10).run "while (true) {}"
+		, /Script execution timed out\./
+
 		done()
 	
 	after (done) ->

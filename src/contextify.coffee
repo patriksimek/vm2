@@ -32,8 +32,12 @@ contextify = (value, addtoglobal) =>
 					o = null
 			else
 				o = {}
-				for k, v of value
-					o[k] = contextify v
+				for key in Object.getOwnPropertyNames value
+					desc = Object.getOwnPropertyDescriptor value, key
+					desc.value = contextify desc.value if desc.value?
+					desc.get = contextify desc.get if desc.get?
+					desc.set = contextify desc.set if desc.set?
+					Object.defineProperty o, key, desc
 
 		when 'function'
 			o = -> value arguments...

@@ -20,8 +20,9 @@ AVAILABLE_NATIVE_MODULES = [
 	'dgram', 'dns', 'http', 'https', 'net', 'querystring', 'url',
 	'domain',
 	'events', 
-	'fs', 'path',
+	'fs', 'path', 
 	'os',
+	'punycode',
 	'stream',
 	'string_decoder',
 	'timers',
@@ -182,6 +183,7 @@ class NodeVM extends VM
 			language: options.language ? 'javascript'
 			requireExternal: options.requireExternal ? false
 			requireNative: {}
+			useStrict: options.useStrict ? true
 
 		# convert array of modules to collection to speed things up
 		if options.requireNative

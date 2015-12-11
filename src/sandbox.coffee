@@ -1,12 +1,7 @@
-fs = parent.require 'fs'
-pa = parent.require 'path'
 {Script} = parent.require 'vm'
 noop = ->
 
 NATIVE_MODULES = parent.process.binding 'natives'
-EXTENSIONS =
-	".json": (module, filename) ->
-		module.exports = JSON.parse fs.readFileSync(filename, "utf8")
 
 ###
 @param {Object} parent Parent's global object.
@@ -14,6 +9,10 @@ EXTENSIONS =
 
 return do (vm, parent) =>
 	'use strict'
+
+	EXTENSIONS =
+		".json": (module, filename) ->
+			module.exports = JSON.parse fs.readFileSync(filename, "utf8")
 
 	# setup sandbox global
 	global = @
@@ -324,6 +323,9 @@ return do (vm, parent) =>
 		global.COUNTER_HTTP_CLIENT_RESPONSE = -> parent.COUNTER_HTTP_CLIENT_RESPONSE arguments...
 
 	global.Buffer = _requireNative('buffer').Buffer
+
+	fs = _requireNative 'fs'
+	pa = _requireNative 'path'
 
 	###
 	VMError definition.

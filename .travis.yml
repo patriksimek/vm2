@@ -3,7 +3,7 @@ sudo: false
 node_js:
   - "0.12"
   - "1.0"
-  - "2.0"
+  - "4"
 
 before_script:
   coffee --compile --bare --output ./lib ./src

@@ -78,6 +78,7 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `require` - `true` to enable `require` method (default: `false`)
 * `requireExternal` - `true` to enable `require` of external modules (default: `false`)
 * `requireNative` - Array of allowed native modules. (default: all available)
+* `useStrict` - Whether to add `use strict` directive to required modules (default: `true`)
 
 **Available modules:** `assert`, `buffer`, `child_process`, `crypto`, `tls`, `dgram`, `dns`, `http`, `https`, `net`, `querystring`, `url`, `domain`, `events`,  `fs`, `path`, `os`, `stream`, `string_decoder`, `timers`, `tty`,  `util`, `sys`, `vm`, `zlib`
 

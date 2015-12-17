@@ -183,6 +183,7 @@ class NodeVM extends VM
 			language: options.language ? 'javascript'
 			requireExternal: options.requireExternal ? false
 			requireNative: {}
+			requireRoot : options.requireRoot ? false
 			useStrict: options.useStrict ? true
 
 		# convert array of modules to collection to speed things up

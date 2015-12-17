@@ -244,7 +244,20 @@ describe 'modules', ->
 				done: done
 		
 		vm.run "var fs = require('fs'); fs.exists(parentfilename, function() {try {arguments.callee.caller.toString()} catch (err) {return done();}; done(new Error('Missing expected exception'))});"
-	
+
+	it 'path attack', (done) ->
+		vm = new NodeVM
+			require: true
+			requireExternal: true
+			requireRoot: __dirname
+		
+		assert.throws ->
+			vm.run "var test = require('../package.json')"
+
+		, /Module '\.\.\/package.json' is not allowed to be required\. The path is outside the border!/
+		
+		done()
+
 	after (done) ->
 		vm = null
 		done()

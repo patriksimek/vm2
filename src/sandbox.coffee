@@ -107,6 +107,9 @@ return do (vm, parent) =>
 	
 			if /^(\.\/|\.\.\/)/.exec modulename
 				# Module is relative file, e.g. ./script.js or ../script.js
+				
+				if not current_dirname
+					throw new VMError "You must specify script path to load relative modules.", "ENOPATH"
 	
 				filename = _resolveFilename "#{current_dirname}/#{modulename}"
 			
@@ -117,6 +120,9 @@ return do (vm, parent) =>
 	
 			else
 				# Check node_modules in path
+				
+				if not current_dirname
+					throw new VMError "You must specify script path to load relative modules.", "ENOPATH"
 
 				paths = current_dirname.split pa.sep
 				

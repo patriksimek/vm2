@@ -79,9 +79,10 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `requireRoot` - Restricted path where local modules can be required (default: every path)
 * `useStrict` - Whether to add `use strict` directive to required modules (default: `true`)
 
-**Available modules:** `assert`, `buffer`, `child_process`, `crypto`, `tls`, `dgram`, `dns`, `http`, `https`, `net`, `querystring`, `url`, `domain`, `events`,  `fs`, `path`, `os`, `stream`, `string_decoder`, `timers`, `tty`,  `util`, `sys`, `vm`, `zlib`
+**Available modules:** `assert`, `buffer`, `child_process`, `constants`, `crypto`, `tls`, `dgram`, `dns`, `http`, `https`, `net`, `punycode`, `querystring`, `url`, `domain`, `events`,  `fs`, `path`, `os`, `stream`, `string_decoder`, `timers`, `tty`,  `util`, `sys`, `vm`, `zlib`
 
 **REMEMBER**: The more modules you allow, the more fragile your sandbox becomes.
+
 **IMPORTANT**: Timeout is not effective for NodeVM so it is not immune to `while (true) {}` or similar evil.
 
 ```javascript
@@ -110,6 +111,14 @@ Securely call method in sandbox. All arguments except functions are cloned durin
 
 ```javascript
 vm.call(functionInSandbox, 'world');
+```
+
+### Loading modules by relative path
+
+To load modules by relative path, you must pass full path of the script you're running as a second argument of vm's `run` method. Filename then also shows up in any stack traces produced from the script.
+
+```javascript
+vm.run("require('foobar')", "/data/myvmscript.js");
 ```
 
 ## CLI

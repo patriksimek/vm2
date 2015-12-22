@@ -208,6 +208,26 @@ describe 'modules', ->
 			vm.run "require('fs')"
 		
 		done()
+		
+	it 'require relative without path', (done) ->
+		vm = new NodeVM
+			require: true
+			requireExternal: true
+		
+		assert.throws ->
+			vm.run "require('foobar')"
+		, /You must specify script path to load relative modules/
+		
+		done()
+		
+	it 'require relative without path', (done) ->
+		vm = new NodeVM
+			require: true
+			requireExternal: true
+		
+		vm.run "require('foobar')", __filename
+
+		done()
 
 	it 'arguments attack', (done) ->
 		vm = new NodeVM
@@ -252,7 +272,7 @@ describe 'modules', ->
 			requireRoot: __dirname
 		
 		assert.throws ->
-			vm.run "var test = require('../package.json')"
+			vm.run "var test = require('../package.json')", __filename
 
 		, /Module '\.\.\/package.json' is not allowed to be required\. The path is outside the border!/
 		

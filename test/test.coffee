@@ -220,7 +220,7 @@ describe 'modules', ->
 		
 		done()
 		
-	it 'require relative without path', (done) ->
+	it 'require relative', (done) ->
 		vm = new NodeVM
 			require: true
 			requireExternal: true

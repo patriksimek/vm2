@@ -333,11 +333,12 @@ return do (vm, parent) =>
 		global.COUNTER_HTTP_SERVER_RESPONSE = -> parent.COUNTER_HTTP_SERVER_RESPONSE arguments...
 		global.COUNTER_HTTP_CLIENT_REQUEST = -> parent.COUNTER_HTTP_CLIENT_REQUEST arguments...
 		global.COUNTER_HTTP_CLIENT_RESPONSE = -> parent.COUNTER_HTTP_CLIENT_RESPONSE arguments...
+	
+	if vm.options.require and vm.options.requireNative?['buffer'] is true
+		global.Buffer = _requireNative('buffer').Buffer
 
-	global.Buffer = _requireNative('buffer').Buffer
-
-	fs = _requireNative 'fs'
-	pa = _requireNative 'path'
+	fs = parent.require 'fs'
+	pa = parent.require 'path'
 
 	###
 	VMError definition.

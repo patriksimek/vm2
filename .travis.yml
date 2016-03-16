@@ -4,6 +4,7 @@ node_js:
   - "0.12"
   - "1.0"
   - "4"
+  - "5"
 
 before_script:
   coffee --compile --bare --output ./lib ./src

@@ -34,6 +34,19 @@ var vm = new VM();
 vm.run("process.exit()");
 ```
 
+## Documentation
+
+* [1.x to 2.x changes](#1-x-to-2-x-changes)
+* [VM](#vm)
+* [NodeVM](#nodevm)
+* [Calling VM's methods](#calling-vms-methods)
+* [CLI](#cli)
+* [Known Issues](#known-issues)
+
+## 1.x to 2.x changes
+
+`Buffer` class is no longer globally available by default in NodeVM. To make `Buffer` accessible globaly, enable `require` option and make sure `buffer` module is whitelisted. More info in [Known Issues](#known-issues).
+
 ## VM
 
 VM is a simple sandbox, without `require` feature, to synchronously run an untrusted code. Only JavaScript built-in objects are available.
@@ -128,6 +141,10 @@ Before you can use vm2 in command line, install it globally with `npm install vm
 ```
 $ vm2 ./script.js
 ```
+
+## Known Issues
+
+Allowing `buffer` to be required inside NodeVM may crash your app with `TypeError: Invalid non-string/buffer chunk` errors (reported [here](https://github.com/patriksimek/vm2/issues/22) and [here](https://github.com/patriksimek/vm2/issues/7)). To prevent `buffer` from loading, disable `require` option or remove `buffer` from list of whitelisted native modules. Keep in mind that modules like `fs` or `stream` do require `buffer` internally.
 
 <a name="license" />
 ## License

@@ -36,7 +36,7 @@ vm.run("process.exit()");
 
 ## Documentation
 
-* [1.x to 2.x changes](#1-x-to-2-x-changes)
+* [1.x to 2.x changes](#1x-to-2x-changes)
 * [VM](#vm)
 * [NodeVM](#nodevm)
 * [Calling VM's methods](#calling-vms-methods)

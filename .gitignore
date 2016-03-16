@@ -3,3 +3,4 @@
 .svn
 /lib/*
 /node-*
+/test.js

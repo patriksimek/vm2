@@ -101,6 +101,7 @@ class VM extends EventEmitter
 			timeout: options.timeout ? undefined
 			sandbox: options.sandbox ? null
 			language: options.language ? 'javascript'
+			transform: options.transform ? null
 	
 	###
 	Run the code in VM.
@@ -114,6 +115,9 @@ class VM extends EventEmitter
 
 		if @options.language isnt 'javascript'
 			code = _compileToJS code, @options.language
+
+		if @options.transform isnt null
+			code = @options.transform code
 		
 		if @running
 			script = new vm.Script code,
@@ -181,6 +185,7 @@ class NodeVM extends VM
 			console: options.console ? 'inherit'
 			require: options.require ? false
 			language: options.language ? 'javascript'
+			transform: options.transform ? null
 			requireExternal: options.requireExternal ? false
 			requireNative: {}
 			requireRoot : options.requireRoot ? false
@@ -237,6 +242,9 @@ class NodeVM extends VM
 		
 		if @options.language isnt 'javascript'
 			code = _compileToJS code, @options.language
+
+		if @options.transform isnt null
+			code = @options.transform code
 
 		if filename
 			filename = pa.resolve filename

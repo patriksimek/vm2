@@ -27,7 +27,7 @@ contextify = (value, addtoglobal) =>
 			else if ut.isBuffer value
 				if @Buffer
 					o = new @Buffer value.length
-					value.copy object
+					value.copy o
 				else
 					o = null
 			else

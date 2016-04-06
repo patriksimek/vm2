@@ -4,7 +4,7 @@
 		"url": "https://patriksimek.cz"
 	},
 	"name": "vm2",
-	"description": "vm2 is a sandbox that can run untrusted code with whitelisted built-in node objects. Securely!.",
+	"description": "vm2 is a sandbox that can run untrusted code with whitelisted built-in node objects. Securely!",
 	"keywords": [
 		"sandbox",
 		"prison",
@@ -13,7 +13,7 @@
 		"alcatraz",
 		"contextify"
 	],
-	"version": "2.0.0",
+	"version": "2.0.1",
 	"main": "index.js",
 	"repository": {
 		"type": "git",

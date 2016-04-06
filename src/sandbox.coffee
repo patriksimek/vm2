@@ -284,7 +284,12 @@ return do (vm, parent) =>
 			@
 		
 		listeners: (name) ->
-			Array.from fakeHandlers[name]?.keys() ? []
+			if not fakeHandlers[name] then return []
+			array = []
+			fakeHandlers[name].forEach (value, key) ->
+				array.push key
+			
+			array
 		
 		removeListener: (name, handler) ->
 			fake = fakeHandlers[name]?.get handler

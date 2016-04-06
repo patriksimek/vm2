@@ -1,5 +1,6 @@
 {Script} = parent.require 'vm'
 noop = ->
+fakeHandlers = {}
 
 NATIVE_MODULES = parent.process.binding 'natives'
 
@@ -242,6 +243,7 @@ return do (vm, parent) =>
 		null
 		
 	global.process =
+		argv: []
 		title: parent.process.title
 		version: parent.process.version
 		versions: contextify parent.process.versions
@@ -253,6 +255,50 @@ return do (vm, parent) =>
 		nextTick: (callback) -> parent.process.nextTick -> callback.call null
 		hrtime: -> parent.process.hrtime()
 		cwd: -> parent.process.cwd()
+		on: (name, handler) ->
+			if name not in ['beforeExit', 'exit']
+				throw new Error "Access denied to listen for '#{name}' event."
+			
+			fake = -> handler.call null
+			fakeHandlers[name] ?= new Map()
+			fakeHandlers[name].set handler, fake
+			
+			parent.process.on name, fake
+			@
+		
+		once: (name, handler) ->
+			if name not in ['beforeExit', 'exit']
+				throw new Error "Access denied to listen for '#{name}' event."
+			
+			if fakeHandlers[name]?.has handler
+				return @
+			
+			fake = ->
+				fakeHandlers[name].delete handler
+				handler.call null
+			
+			fakeHandlers[name] ?= new Map()
+			fakeHandlers[name].set handler, fake
+			
+			parent.process.once name, fake
+			@
+		
+		listeners: (name) ->
+			Array.from fakeHandlers[name]?.keys() ? []
+		
+		removeListener: (name, handler) ->
+			fake = fakeHandlers[name]?.get handler
+			if not fake? then return @
+			fakeHandlers[name].delete handler
+			
+			parent.process.removeListener name, fake
+			@
+		
+		umask: ->
+			if arguments.length
+				throw new Error "Access denied to set umask."
+			
+			parent.process.umask()
 	
 	if vm.options.console is 'inherit'
 		global.console =

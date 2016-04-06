@@ -277,6 +277,21 @@ describe 'modules', ->
 		, /Module '\.\.\/package.json' is not allowed to be required\. The path is outside the border!/
 		
 		done()
+	
+	it 'process events', (done) ->
+		vm = new NodeVM
+			sandbox:
+				VM2_COUNTER: 0
+		
+		sandbox = vm.run "global.VM2_HANDLER = function() { VM2_COUNTER++ }; process.on('exit', VM2_HANDLER); module.exports = global;"
+		process.emit 'exit'
+		assert.strictEqual sandbox.VM2_COUNTER, 1
+		assert.strictEqual vm.run("process.listeners('exit')[0] === VM2_HANDLER;"), true
+		vm.run "process.removeListener('exit', VM2_HANDLER);"
+		process.emit 'exit'
+		assert.strictEqual sandbox.VM2_COUNTER, 1
+		
+		done()
 
 	after (done) ->
 		vm = null

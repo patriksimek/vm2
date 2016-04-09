@@ -75,7 +75,7 @@ You can also retrieve values from VM.
 var number = vm.run("1337"); // returns 1337
 ```
 
-**IMPORTANT**: Timeout is only effective on code you run trough `run`. Timeout is NOT effective on any method returned by VM.
+**IMPORTANT**: Timeout is only effective on code you run through `run`. Timeout is NOT effective on any method returned by VM.
 
 ## NodeVM
 
@@ -118,7 +118,7 @@ var functionInSandbox = vm.run("module.exports = function(who) { console.log('he
 
 Securely call method in sandbox. All arguments except functions are cloned during the process to prevent context leak. Functions are wrapped to secure closures. Buffers are copied.
 
-**IMPORTANT**: Method doesn't check for circular objects! If you send circular structure as an argument, your process will stuck in infinite loop.
+**IMPORTANT**: Method doesn't check for circular objects! If you send a circular structure as an argument, your process will get stuck in infinite loop.
 
 **IMPORTANT**: Always use `vm.call` method to call methods or callbacks in sandbox. If you call it directly, you are exposing yourself a risk of main global context leakage!
 

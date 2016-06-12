@@ -40,7 +40,7 @@ contextify = (value, addtoglobal) =>
 					Object.defineProperty o, key, desc
 
 		when 'function'
-			o = -> value arguments...
+			o = -> contextify value arguments...
 		
 		when 'undefined'
 			o = undefined

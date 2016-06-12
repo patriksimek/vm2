@@ -17,8 +17,11 @@ describe 'contextify', ->
 					date: new Date()
 					regexp: /xxx/
 					buffer: new Buffer 0
-					function: ->
-					object: {x: 1}
+					function: -> ->
+					object:
+						x: 1
+						y: -> ->
+						
 					nil: null
 					undef: undefined
 					
@@ -50,10 +53,13 @@ describe 'contextify', ->
 	
 	it 'function', (done) ->
 		assert.equal vm.run("test.function instanceof Function"), true
+		assert.equal vm.run("test.function() instanceof Function"), true
 		done()
 	
 	it 'object', (done) ->
 		assert.equal vm.run("test.object instanceof Object && test.object.x === 1"), true
+		assert.equal vm.run("test.object.y instanceof Function"), true
+		assert.equal vm.run("test.object.y() instanceof Function"), true
 		done()
 	
 	it 'null', (done) ->

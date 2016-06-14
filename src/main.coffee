@@ -65,7 +65,11 @@ _prepareContextify = (value) ->
 	else
 		value
 
-_compileToJS = (code, language) ->
+_compileToJS = (language, compile, code) ->
+
+	if compile isnt null
+		return compile code
+
 	switch language
 		when 'coffeescript', 'coffee-script', 'cs', 'text/coffeescript'
 			return require('coffee-script').compile code, {header: false, bare: true}
@@ -102,6 +106,7 @@ class VM extends EventEmitter
 			timeout: options.timeout ? undefined
 			sandbox: options.sandbox ? null
 			language: options.language ? 'javascript'
+			compile: options.compile ? null
 	
 	###
 	Run the code in VM.
@@ -113,8 +118,7 @@ class VM extends EventEmitter
 	run: (code) ->
 		'use strict'
 
-		if @options.language isnt 'javascript'
-			code = _compileToJS code, @options.language
+		code = _compileToJS @options.language, @options.compile, code
 		
 		if @running
 			script = new vm.Script code,
@@ -182,6 +186,7 @@ class NodeVM extends VM
 			console: options.console ? 'inherit'
 			require: options.require ? false
 			language: options.language ? 'javascript'
+			compile: options.compile ? null
 			requireExternal: options.requireExternal ? false
 			requireNative: {}
 			requireRoot : options.requireRoot ? false
@@ -232,12 +237,13 @@ class NodeVM extends VM
 	
 	run: (code, filename) ->
 		'use strict'
+
+		__compileToJS = _compileToJS.bind null, @options.language, @options.compile
+		
+		code = __compileToJS code
 		
 		if global.isVM
 			throw new VMError "You can't nest VMs"
-		
-		if @options.language isnt 'javascript'
-			code = _compileToJS code, @options.language
 
 		if filename
 			filename = pa.resolve filename
@@ -289,11 +295,11 @@ class NodeVM extends VM
 		@context = vm.createContext()
 		contextify = vm.runInContext("(function(require) { #{cf} \n})", @context, {filename: "contextify.js", displayErrors: false}).call @context, require
 		
-		closure = vm.runInContext "(function (vm, parent, contextify, __dirname, __filename) { #{sb} \n})", @context,
+		closure = vm.runInContext "(function (vm, parent, contextify, __dirname, __filename, __compileToJS) { #{sb} \n})", @context,
 			filename: "sandbox.js"
 			displayErrors: false
 		
-		{@cache, @module, @proxy} = closure.call @context, @, parent, contextify, dirname, filename
+		{@cache, @module, @proxy} = closure.call @context, @, parent, contextify, dirname, filename, __compileToJS
 		@cache[filename] = @module
 		
 		# prepare global sandbox

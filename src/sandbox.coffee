@@ -182,7 +182,7 @@ return do (vm, parent) =>
 			try
 				# Load module
 				strictText = if vm.options.useStrict then "'use strict'; " else ""
-				code = "(function (exports, require, module, __filename, __dirname) { #{strictText}#{fs.readFileSync(filename, "utf8")} \n});"
+				code = "(function (exports, require, module, __filename, __dirname) { #{strictText}#{__compileToJS(fs.readFileSync(filename, "utf8"))} \n});"
 				
 			catch ex
 				throw new VMError "Failed to load '#{filename}': [#{ex.message}]", "ELOADFAIL"

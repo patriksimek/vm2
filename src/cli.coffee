@@ -1,5 +1,6 @@
 fs = require 'fs'
 pa = require 'path'
+
 {NodeVM, VMError} = require '../'
 
 if process.argv[2]
@@ -10,9 +11,9 @@ if process.argv[2]
 	
 	try
 		NodeVM.file path,
-			require: true
-			requireExternal: true
 			verbose: true
+			require:
+				external: true
 			
 		console.log "\x1B[90m[vm] VM created in #{Date.now() - started}ms\x1B[39m"
 

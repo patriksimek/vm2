@@ -1,6 +1,8 @@
+'use strict'
+
 version = process.versions.node.split '.'
-if parseInt(version[0]) is 0 and parseInt(version[1]) < 11
-	throw new Error "vm2 requires Node.js version 0.11+ or io.js 1.0+ (current version: #{process.versions.node})"
+if parseInt(version[0]) < 6
+	throw new Error "vm2 requires Node.js version 6 or newer (current version: #{process.versions.node})"
 
 fs = require 'fs'
 vm = require 'vm'
@@ -11,62 +13,11 @@ ut = require 'util'
 sb = fs.readFileSync "#{__dirname}/sandbox.js", "utf8"
 cf = fs.readFileSync "#{__dirname}/contextify.js", "utf8"
 
-AVAILABLE_NATIVE_MODULES = [
-	'assert',
-	'buffer',
-	'child_process',
-	'constants',
-	'crypto', 'tls', 
-	'dgram', 'dns', 'http', 'https', 'net', 'querystring', 'url',
-	'domain',
-	'events', 
-	'fs', 'path',
-	'module',
-	'os',
-	'punycode',
-	'stream',
-	'string_decoder',
-	'timers',
-	'tty', 
-	'util', 'sys',
-	'vm',
-	'zlib'
-]
-
-###
-Prepare value for contextification.
-
-@property {Object} value Value to prepare.
-@return {Object} Prepared value.
-
-@private
-###
-
-_prepareContextify = (value) ->
-	if typeof value is 'object'
-		if value is null then return value
-		if value instanceof String then return String value
-		if value instanceof Number then return Number value
-		if value instanceof Boolean then return Boolean value
-		if value instanceof Array then return (_prepareContextify i for i in value)
-		if value instanceof Error then return value
-		if value instanceof Date then return value
-		if value instanceof RegExp then return value
-		if value instanceof Buffer then return value
-		
-		o = {}
-		for key in Object.getOwnPropertyNames value
-			desc = Object.getOwnPropertyDescriptor value, key
-			desc.value = _prepareContextify desc.value if desc.value?
-			Object.defineProperty o, key, desc
-		
-		return o
-
-	else
-		value
-
-_compileToJS = (code, language) ->
-	switch language
+_compileToJS = (code, compiler) ->
+	if 'function' is typeof compiler
+		return compiler code
+	
+	switch compiler
 		when 'coffeescript', 'coffee-script', 'cs', 'text/coffeescript'
 			return require('coffee-script').compile code, {header: false, bare: true}
 		
@@ -74,20 +25,17 @@ _compileToJS = (code, language) ->
 			return code
 		
 		else
-			throw new VMError "Unsupported language '#{language}'."
+			throw new VMError "Unsupported compiler '#{compiler}'."
 
 ###
 Class VM.
 
 @property {Boolean} running True if VM was initialized.
 @property {Object} options VM options.
-@property {Object} context VM's context.
 ###
 
 class VM extends EventEmitter
-	running: false
 	options: null
-	context: null
 	
 	###
 	Create VM instance.
@@ -101,7 +49,36 @@ class VM extends EventEmitter
 		@options =
 			timeout: options.timeout ? undefined
 			sandbox: options.sandbox ? null
-			language: options.language ? 'javascript'
+			compiler: options.compiler ? 'javascript'
+
+		host =
+			String: String
+			Number: Number
+			Buffer: Buffer
+			Boolean: Boolean
+			Array: Array
+			Date: Date
+			Error: Error
+			RegExp: RegExp
+			Function: Function
+			Object: Object
+			VMError: VMError
+
+		@_context = vm.createContext vm.runInNewContext "({})"
+
+		Reflect.defineProperty @, '_internal',
+			value: vm.runInContext("(function(console, require, host) { #{cf} \n})", @_context, {
+				filename: "contextify.js"
+				displayErrors: false
+			}).call @_context, console, require, host
+		
+		# prepare global sandbox
+		if @options.sandbox
+			unless typeof @options.sandbox is 'object'
+				throw new VMError "Sandbox must be object"
+			
+			for name, value of @options.sandbox
+				@_internal.contextify value, global: name
 	
 	###
 	Run the code in VM.
@@ -111,57 +88,26 @@ class VM extends EventEmitter
 	###
 	
 	run: (code) ->
-		'use strict'
+		if @options.compiler isnt 'javascript'
+			code = _compileToJS code, @options.compiler
 
-		if @options.language isnt 'javascript'
-			code = _compileToJS code, @options.language
-		
-		if @running
-			script = new vm.Script code,
-				filename: "vm"
-				displayErrors: false
-				
-			return script.runInContext @context,
-				filename: "vm"
-				displayErrors: false
-				timeout: @options.timeout
-		
-		@context = vm.createContext()
-		contextify = vm.runInContext("(function(require) { #{cf} \n})", @context, {filename: "contextify.js", displayErrors: false}).call @context, require
-		
-		# prepare global sandbox
-		if @options.sandbox
-			unless typeof @options.sandbox is 'object'
-				throw new VMError "Sandbox must be object"
-			
-			for name, value of @options.sandbox
-				contextify _prepareContextify(value), name
-		
 		script = new vm.Script code,
-			filename: "vm"
+			filename: "vm.js"
 			displayErrors: false
 		
-		# run script
-		@running = true
-		script.runInContext @context,
-			filename: "vm"
+		@_internal.decontextify script.runInContext @_context,
+			filename: "vm.js"
 			displayErrors: false
 			timeout: @options.timeout
 		
 ###
 Class NodeVM.
 
-@property {Object} cache Cache of loaded modules.
-@property {Object} natives Cache of native modules.
 @property {Object} module Pointer to main module.
-@property {Function} proxy Proxy used by `call` method to securely call methods in VM.
 ###
 
 class NodeVM extends VM
-	cache: null
-	natives: null # cache of native modules
-	module: null
-	proxy: null
+	_require: null # contextified require
 	
 	###
 	Create NodeVM instance.
@@ -173,28 +119,66 @@ class NodeVM extends VM
 	###
 	
 	constructor: (options = {}) ->
-		#@cache is initialized inside vm's context (security reasons)
-		@natives = {}
-		
 		# defaults
 		@options =
 			sandbox: options.sandbox ? null
 			console: options.console ? 'inherit'
 			require: options.require ? false
-			language: options.language ? 'javascript'
-			requireExternal: options.requireExternal ? false
-			requireNative: {}
-			requireRoot : options.requireRoot ? false
-			useStrict: options.useStrict ? true
+			compiler: options.compiler ? 'javascript'
+			require: options.require ? false
 
-		# convert array of modules to collection to speed things up
-		if options.requireNative
-			if Array.isArray options.requireNative
-				@options.requireNative[mod] = true for mod in options.requireNative when mod in AVAILABLE_NATIVE_MODULES
+		host =
+			require: require
+			process: process
+			console: console
+			setTimeout: setTimeout
+			setInterval: setInterval
+			setImmediate: setImmediate
+			clearTimeout: clearTimeout
+			clearInterval: clearInterval
+			clearImmediate: clearImmediate
+			String: String
+			Number: Number
+			Buffer: Buffer
+			Boolean: Boolean
+			Array: Array
+			Date: Date
+			Error: Error
+			RegExp: RegExp
+			Function: Function
+			Object: Object
+			VMError: VMError
+
+		@_context = vm.createContext vm.runInNewContext "({})"
+
+		Object.defineProperty @, '_internal',
+			value: vm.runInContext("(function(require, host) { #{cf} \n})", @_context, {
+				filename: "contextify.js"
+				displayErrors: false
+			}).call @_context, require, host
+		
+		closure = vm.runInContext "(function (vm, host, contextify, decontextify) { #{sb} \n})", @_context,
+			filename: "sandbox.js"
+			displayErrors: false
+
+		Object.defineProperty @, '_prepareRequire',
+			value: closure.call @_context, @, host, @_internal.contextify, @_internal.decontextify
+
+		# prepare global sandbox
+		if @options.sandbox
+			unless typeof @options.sandbox is 'object'
+				throw new VMError "Sandbox must be object"
 			
-		else
-			# by default, add all available native modules
-			@options.requireNative[mod] = true for mod in AVAILABLE_NATIVE_MODULES
+			for name, value of @options.sandbox
+				@_internal.contextify value, global: name
+		
+		if @options.require?.import
+			if not Array.isArray @options.require.import
+				@options.require.import = [@options.require?.import]
+			
+			@require mdl for mdl in @options.require?.import
+		
+		@
 	
 	###
 	Securely call method in VM. All arguments except functions are cloned during the process to prevent context leak. Functions are wrapped to secure closures. 
@@ -204,21 +188,24 @@ class NodeVM extends VM
 	IMPORTANT: Method doesn't check for circular objects! If you send circular structure as an argument, you process will stuck in infinite loop.
 	
 	@param {Function} method Method to execute.
-	@param {...*} argument Arguments.
+	@param {...*} args Arguments.
 	@return {*} Return value of executed method.
+	@deprecated
 	###
 	
-	call: (method) ->
-		'use strict'
-		
-		unless @running
-			throw new VMError "VM is not running"
-		
+	call: (method, args...) ->
 		if typeof method is 'function'
-			return @proxy arguments...
+			return method.apply args
 
 		else
 			throw new VMError "Unrecognized method type"
+	
+	###
+	Require a module in VM and return it's exports.
+	###
+	
+	require: (module) ->
+		@run "module.exports = require('#{module}');", 'vm.js'
 	
 	###
 	Run the code in NodeVM. 
@@ -231,13 +218,8 @@ class NodeVM extends VM
 	###
 	
 	run: (code, filename) ->
-		'use strict'
-		
-		if global.isVM
-			throw new VMError "You can't nest VMs"
-		
-		if @options.language isnt 'javascript'
-			code = _compileToJS code, @options.language
+		if @options.compiler isnt 'javascript'
+			code = _compileToJS code, @options.compiler
 
 		if filename
 			filename = pa.resolve filename
@@ -247,76 +229,20 @@ class NodeVM extends VM
 			filename = null
 			dirname = null
 
-		if @running
-			script = new vm.Script code,
-				filename: filename ? "vm"
-				displayErrors: false
-				
-			return script.runInContext @context,
-				filename: filename ? "vm"
-				displayErrors: false
-
-		# objects to be transfered to vm
-		parent =
-			require: require
-			process: process
-			console: console
-			setTimeout: setTimeout
-			setInterval: setInterval
-			setImmediate: setImmediate
-			clearTimeout: clearTimeout
-			clearInterval: clearInterval
-			clearImmediate: clearImmediate
-		
-		if global.DTRACE_HTTP_SERVER_RESPONSE
-			parent.DTRACE_HTTP_SERVER_RESPONSE = global.DTRACE_HTTP_SERVER_RESPONSE
-			parent.DTRACE_HTTP_SERVER_REQUEST = global.DTRACE_HTTP_SERVER_REQUEST
-			parent.DTRACE_HTTP_CLIENT_RESPONSE = global.DTRACE_HTTP_CLIENT_RESPONSE
-			parent.DTRACE_HTTP_CLIENT_REQUEST = global.DTRACE_HTTP_CLIENT_REQUEST
-			parent.DTRACE_NET_STREAM_END = global.DTRACE_NET_STREAM_END
-			parent.DTRACE_NET_SERVER_CONNECTION = global.DTRACE_NET_SERVER_CONNECTION
-			parent.DTRACE_NET_SOCKET_READ = global.DTRACE_NET_SOCKET_READ
-			parent.DTRACE_NET_SOCKET_WRITE = global.DTRACE_NET_SOCKET_WRITE
-		
-		if global.COUNTER_NET_SERVER_CONNECTION
-			parent.COUNTER_NET_SERVER_CONNECTION = global.COUNTER_NET_SERVER_CONNECTION
-			parent.COUNTER_NET_SERVER_CONNECTION_CLOSE = global.COUNTER_NET_SERVER_CONNECTION_CLOSE
-			parent.COUNTER_HTTP_SERVER_REQUEST = global.COUNTER_HTTP_SERVER_REQUEST
-			parent.COUNTER_HTTP_SERVER_RESPONSE = global.COUNTER_HTTP_SERVER_RESPONSE
-			parent.COUNTER_HTTP_CLIENT_REQUEST = global.COUNTER_HTTP_CLIENT_REQUEST
-			parent.COUNTER_HTTP_CLIENT_RESPONSE = global.COUNTER_HTTP_CLIENT_RESPONSE
-		
-		@context = vm.createContext()
-		contextify = vm.runInContext("(function(require) { #{cf} \n})", @context, {filename: "contextify.js", displayErrors: false}).call @context, require
-		
-		closure = vm.runInContext "(function (vm, parent, contextify, __dirname, __filename) { #{sb} \n})", @context,
-			filename: "sandbox.js"
+		module = vm.runInContext "({exports: {}})", @_context,
 			displayErrors: false
 		
-		{@cache, @module, @proxy} = closure.call @context, @, parent, contextify, dirname, filename
-		@cache[filename] = @module
-		
-		# prepare global sandbox
-		if @options.sandbox
-			unless typeof @options.sandbox is 'object'
-				throw new VMError "Sandbox must be object"
-			
-			for name, value of @options.sandbox
-				contextify _prepareContextify(value), name
-
-		# run script
-		@running = true
 		script = new vm.Script "(function (exports, require, module, __filename, __dirname) { #{code} \n})",
-			filename: filename ? "vm"
+			filename: filename ? "vm.js"
 			displayErrors: false
 			
-		closure = script.runInContext @context,
-			filename: filename ? "vm"
+		closure = script.runInContext @_context,
+			filename: filename ? "vm.js"
 			displayErrors: false
 
-		closure.call @context, @module.exports, @module.require, @module, filename, dirname
+		closure.call @_context, module.exports, @_prepareRequire(dirname), module, filename, dirname
 
-		@module.exports
+		@_internal.decontextify module.exports
 
 	###
 	Create NodeVM and run code inside it.

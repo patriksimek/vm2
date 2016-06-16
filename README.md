@@ -9,7 +9,7 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 * Sandbox has limited access to process's methods
 * Sandbox can require modules (native and external)
 * You can limit access to certain (or all) native modules
-* You can securely call methods inside sandbox with callbacks
+* You can securely call methods and exchange data and callback between sandboxes
 * Is immune to `while (true) {}` (VM only, see docs)
 * Is immune to all known methods of attacks
 * Coffee-Script support
@@ -17,35 +17,31 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 ## How does it work
 
 * It uses internal VM module to create secure context
-* It compiles native modules inside a new context
+* It uses Proxies to prevent escaping the sandbox
 * It overrides native require to control access to modules
-* It forces modules (even native ones) to use `use strict`
 
 ## Installation
+
+**IMPORTANT**: Requires Node.js 6 or newer.
 
     npm install vm2
 
 ## Quick Examples
 
 ```javascript
-var VM = require('vm2').VM;
+const {VM} = require('vm2');
 
-var vm = new VM();
+const vm = new VM();
 vm.run("process.exit()");
 ```
 
 ## Documentation
 
-* [1.x to 2.x changes](#1x-to-2x-changes)
+* [1.x and 2.x docs](#todo)
 * [VM](#vm)
 * [NodeVM](#nodevm)
-* [Calling VM's methods](#calling-vms-methods)
 * [CLI](#cli)
 * [Known Issues](#known-issues)
-
-## 1.x to 2.x changes
-
-`Buffer` class is no longer globally available by default in NodeVM. To make `Buffer` accessible globaly, enable `require` option and make sure `buffer` module is whitelisted. More info in [Known Issues](#known-issues).
 
 ## VM
 
@@ -58,21 +54,20 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 * `language` - `javascript` (default) or `coffeescript`
 
 ```javascript
-var VM = require('vm2').VM;
+const {VM} = require('vm2');
 
-var options = {
+const vm = new VM({
     timeout: 1000,
     sandbox: {}
-};
+});
 
-var vm = new VM(options);
 vm.run("process.exit()"); // throws ReferenceError: process is not defined
 ```
 
 You can also retrieve values from VM.
 
 ```javascript
-var number = vm.run("1337"); // returns 1337
+let number = vm.run("1337"); // returns 1337
 ```
 
 **IMPORTANT**: Timeout is only effective on code you run through `run`. Timeout is NOT effective on any method returned by VM.
@@ -85,45 +80,31 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 
 * `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`)
 * `sandbox` - VM's global object
-* `language` - `javascript` (default) or `coffeescript`
-* `require` - `true` to enable `require` method (default: `false`)
-* `requireExternal` - `true` to enable `require` of external modules (default: `false`)
-* `requireNative` - Array of allowed native modules. (default: all available)
-* `requireRoot` - Restricted path where local modules can be required (default: every path)
-* `useStrict` - Whether to add `use strict` directive to required modules (default: `true`)
-
-**Available modules:** `assert`, `buffer`, `child_process`, `constants`, `crypto`, `tls`, `dgram`, `dns`, `http`, `https`, `net`, `punycode`, `querystring`, `url`, `domain`, `events`,  `fs`, `path`, `os`, `stream`, `string_decoder`, `timers`, `tty`,  `util`, `sys`, `vm`, `zlib`
+* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function
+* `require` - `true` or object to enable `require` method (default: `false`)
+* `require.external` - `true` to enable `require` of external modules (default: `false`)
+* `require.native` - Array of allowed native modules. (default: none)
+* `require.root` - Restricted path where local modules can be required (default: every path)
 
 **REMEMBER**: The more modules you allow, the more fragile your sandbox becomes.
 
 **IMPORTANT**: Timeout is not effective for NodeVM so it is not immune to `while (true) {}` or similar evil.
 
 ```javascript
-var NodeVM = require('vm2').NodeVM;
+const {NodeVM} = require('vm2');
 
-var options = {
+const vm = new NodeVM({
 	console: 'inherit',
     sandbox: {},
-    require: true,
-    requireExternal: true,
-    requireNative: ['fs', 'path'],
-    requireRoot : "./"
-};
+    require: {
+        external: true,
+        native: ['fs', 'path'],
+        root: "./"
+    }
+});
 
-var vm = new NodeVM(options);
-var functionInSandbox = vm.run("module.exports = function(who) { console.log('hello '+ who); }");
-```
-
-### Calling VM's methods
-
-Securely call method in sandbox. All arguments except functions are cloned during the process to prevent context leak. Functions are wrapped to secure closures. Buffers are copied.
-
-**IMPORTANT**: Method doesn't check for circular objects! If you send a circular structure as an argument, your process will get stuck in infinite loop.
-
-**IMPORTANT**: Always use `vm.call` method to call methods or callbacks in sandbox. If you call it directly, you are exposing yourself a risk of main global context leakage!
-
-```javascript
-vm.call(functionInSandbox, 'world');
+let functionInSandbox = vm.run("module.exports = function(who) { console.log('hello '+ who); }");
+console.log(functionInSandbox('world'));
 ```
 
 ### Loading modules by relative path
@@ -142,14 +123,10 @@ Before you can use vm2 in command line, install it globally with `npm install vm
 $ vm2 ./script.js
 ```
 
-## Known Issues
-
-Allowing `buffer` to be required inside NodeVM may crash your app with `TypeError: Invalid non-string/buffer chunk` errors (reported [here](https://github.com/patriksimek/vm2/issues/22) and [here](https://github.com/patriksimek/vm2/issues/7)). To prevent `buffer` from loading, disable `require` option or remove `buffer` from list of whitelisted native modules. Keep in mind that modules like `fs` or `stream` do require `buffer` internally.
-
 <a name="license" />
 ## License
 
-Copyright (c) 2014-2015 Patrik Simek
+Copyright (c) 2014-2016 Patrik Simek
 
 The MIT License
 

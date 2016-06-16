@@ -239,10 +239,30 @@ describe('VM', () => {
 	})
 	
 	it('#32 attack', done => {
-		let vm2 = new VM();
+		let vm2 = new VM({sandbox: {log: console.log}});
 		
 		assert.strictEqual(vm2.run("this.constructor.constructor('return Function(\\'return Function\\')')()() === this.constructor.constructor('return Function')()"), true);
-		assert.throws(() => vm2.run("const ForeignFunction = global.constructor.constructor; const process1 = ForeignFunction(\"return process\")(); const require1 = process1.mainModule.require; const console1 = require1(\"console\"); const fs1 = require1(\"fs\"); console1.log(fs1.statSync('.'));"), /process is not defined/);
+		assert.throws(() => vm2.run(`
+			const ForeignFunction = global.constructor.constructor;
+			const process1 = ForeignFunction("return process")();
+			const require1 = process1.mainModule.require;
+			const console1 = require1("console");
+			const fs1 = require1("fs");
+			console1.log(fs1.statSync('.'));
+		`), /process is not defined/);
+
+		assert.throws(() => vm2.run(`
+		    try {
+		        log.__proto__ = null;
+		    }
+		    catch (e) {
+		        const foreignFunction = e.constructor.constructor;
+		        const process = foreignFunction("return process")();
+		        const require = process.mainModule.require;
+		        const fs = require("fs");
+		        log(fs.statSync('.'));
+		    }
+		`), /process is not defined/);;
 		
 		done();
 	})

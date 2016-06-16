@@ -12,7 +12,7 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 * You can securely call methods and exchange data and callback between sandboxes
 * Is immune to `while (true) {}` (VM only, see docs)
 * Is immune to all known methods of attacks
-* Coffee-Script support
+* Supports transpilers
 
 ## How does it work
 
@@ -37,21 +37,21 @@ vm.run("process.exit()");
 
 ## Documentation
 
-* [1.x and 2.x docs](#todo)
 * [VM](#vm)
 * [NodeVM](#nodevm)
 * [CLI](#cli)
-* [Known Issues](#known-issues)
+* [2.x to 3.x changes](https://github.com/patriksimek/vm2/wiki/1.x-and-2.x-changes)
+* [1.x and 2.x docs](https://github.com/patriksimek/vm2/wiki/1.x-and-2.x-docs)
 
 ## VM
 
-VM is a simple sandbox, without `require` feature, to synchronously run an untrusted code. Only JavaScript built-in objects are available.
+VM is a simple sandbox, without `require` feature, to synchronously run an untrusted code. Only JavaScript built-in objects + Buffer are available.
 
 **Options:**
 
 * `timeout` - Script timeout in milliseconds. 
 * `sandbox` - VM's global object.
-* `language` - `javascript` (default) or `coffeescript`
+* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function
 
 ```javascript
 const {VM} = require('vm2');
@@ -104,7 +104,7 @@ const vm = new NodeVM({
 });
 
 let functionInSandbox = vm.run("module.exports = function(who) { console.log('hello '+ who); }");
-console.log(functionInSandbox('world'));
+functionInSandbox('world');
 ```
 
 ### Loading modules by relative path

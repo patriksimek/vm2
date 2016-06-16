@@ -238,10 +238,11 @@ describe('VM', () => {
 		done();
 	})
 	
-	it('#32 attack', done => {
-		let vm2 = new VM({sandbox: {log: console.log}});
+	it('#32 attacks', done => {
+		let vm2 = new VM({sandbox: {log: console.log, boom: function() { throw new Error(); }}});
 		
 		assert.strictEqual(vm2.run("this.constructor.constructor('return Function(\\'return Function\\')')()() === this.constructor.constructor('return Function')()"), true);
+		
 		assert.throws(() => vm2.run(`
 			const ForeignFunction = global.constructor.constructor;
 			const process1 = ForeignFunction("return process")();
@@ -254,6 +255,19 @@ describe('VM', () => {
 		assert.throws(() => vm2.run(`
 		    try {
 		        log.__proto__ = null;
+		    }
+		    catch (e) {
+		        const foreignFunction = e.constructor.constructor;
+		        const process = foreignFunction("return process")();
+		        const require = process.mainModule.require;
+		        const fs = require("fs");
+		        log(fs.statSync('.'));
+		    }
+		`), /process is not defined/);
+
+		assert.throws(() => vm2.run(`
+		    try {
+		        boom();
 		    }
 		    catch (e) {
 		        const foreignFunction = e.constructor.constructor;

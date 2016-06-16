@@ -487,3 +487,22 @@ describe('modules', () => {
 		})
 	})
 })
+
+describe('nesting', () => {
+	it('NodeVM', done => {
+		let vm = new NodeVM({
+			nesting: true
+		})
+		
+		let nestedObject = vm.run(`
+			const {VM} = require('vm2');
+			const vm = new VM();
+			let o = vm.run('({})');
+			module.exports = o;
+		`, 'vm.js');
+		
+		assert.strictEqual(nestedObject.constructor.constructor === Function, true);
+		
+		done();
+	})
+})

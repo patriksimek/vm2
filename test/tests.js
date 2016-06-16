@@ -276,7 +276,40 @@ describe('VM', () => {
 		        const fs = require("fs");
 		        log(fs.statSync('.'));
 		    }
-		`), /process is not defined/);;
+		`), /process is not defined/);
+
+		assert.doesNotThrow(() => vm2.run(`
+			function exploit(o) {
+				throw new Error('Shouldnt be there.');
+			}
+			
+			Reflect.construct = exploit;
+			new Buffer([0]);
+		`));
+
+		assert.doesNotThrow(() => vm2.run(`
+			global.Proxy = function() {
+				throw new Error('Shouldnt be there.');
+			}
+		`));
+		
+		assert.doesNotThrow(() => vm2.run(`
+			global.String = function(text) {
+				throw new Error('Shouldnt be there.');
+			};(function(text) {})
+		`)('asdf'));
+		
+		assert.doesNotThrow(() => vm2.run(`
+			global.String = function(text) {
+				throw new Error('Shouldnt be there.');
+			};(function(text) {})
+		`)(new String('asdf')));
+		
+		assert.doesNotThrow(() => vm2.run(`
+			global.Buffer = function(value) {
+				throw new Error('Shouldnt be there.');
+			};(function(value) {})
+		`)(new Buffer(1)));
 		
 		done();
 	})

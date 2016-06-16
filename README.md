@@ -17,7 +17,7 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 ## How does it work
 
 * It uses internal VM module to create secure context
-* It uses Proxies to prevent escaping the sandbox
+* It uses [Proxies](https://developer.mozilla.org/cs/docs/Web/JavaScript/Reference/Global_Objects/Proxy) to prevent escaping the sandbox
 * It overrides native require to control access to modules
 
 ## Installation

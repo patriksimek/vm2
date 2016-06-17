@@ -1,5 +1,5 @@
 node_modules
 .DS_Store
 .svn
-node-*
+.travis.yml
 test.js

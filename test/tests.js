@@ -17,6 +17,7 @@ describe('contextify', () => {
 	}
 
 	let sandbox = {
+		assert,
 		test: {
 			string: "text",
 			stringO: new String("text"),
@@ -38,7 +39,10 @@ describe('contextify', () => {
 			},
 			nil: null,
 			undef: void 0,
-			klass: TestClass
+			klass: TestClass,
+			symbol1: Symbol('foo'),
+			symbol2: Symbol.for('foo'),
+			symbol3: Symbol.iterator
 		}
 	}
 	
@@ -134,6 +138,41 @@ describe('contextify', () => {
 		assert.strictEqual(vm.run("test.buffer"), sandbox.test.buffer, '#4');
 		assert.strictEqual(vm.run("class Buffer2 extends Buffer {};new Buffer2(5)").fill(1).inspect(), '<Buffer 01 01 01 01 01>');
 		
+		let {a, b, c, d} = vm.run(`
+			let a = new Buffer([0x01, 0x02]);
+			let b = Buffer.alloc(3, 0x03);
+			let c = Buffer.from(a);
+			let d = Buffer.concat([a, b, c]);
+			
+			assert.ok(a instanceof Buffer);
+			assert.ok(b instanceof Buffer);
+			assert.ok(c instanceof Buffer);
+			assert.ok(d instanceof Buffer);
+			assert.ok(a.constructor === Buffer);
+			assert.ok(b.constructor === Buffer);
+			assert.ok(c.constructor === Buffer);
+			assert.ok(d.constructor === Buffer);
+			assert.ok(a.constructor.constructor === Function);
+			assert.ok(b.constructor.constructor === Function);
+			assert.ok(c.constructor.constructor === Function);
+			assert.ok(d.constructor.constructor === Function);
+			
+			({a: a, b: b, c: c, d: d})
+		`);
+		
+		assert.ok(a instanceof Buffer);
+		assert.ok(b instanceof Buffer);
+		assert.ok(c instanceof Buffer);
+		assert.ok(d instanceof Buffer);
+		assert.ok(a.constructor === Buffer);
+		assert.ok(b.constructor === Buffer);
+		assert.ok(c.constructor === Buffer);
+		assert.ok(d.constructor === Buffer);
+		assert.ok(a.constructor.constructor === Function);
+		assert.ok(b.constructor.constructor === Function);
+		assert.ok(c.constructor.constructor === Function);
+		assert.ok(d.constructor.constructor === Function);
+		
 		done();
 	})
 	
@@ -165,6 +204,18 @@ describe('contextify', () => {
 	
 	it('undefined', done => {
 		assert.strictEqual(vm.run("test.undef === undefined"), true);
+		
+		done();
+	})
+	
+	it('symbol', done => {
+		assert.strictEqual(vm.run("Symbol.for('foo') === test.symbol2"), true);
+		assert.strictEqual(vm.run("test.symbol1.constructor.constructor === Function"), true);
+		assert.strictEqual(vm.run("test.symbol2.constructor.constructor === Function"), true);
+		assert.strictEqual(vm.run("test.symbol3.constructor.constructor === Function"), true);
+		assert.strictEqual(vm.run("Symbol('foo').constructor.constructor === Function"), true);
+		assert.strictEqual(vm.run("Symbol('foobar').constructor.constructor === Function"), true);
+		assert.strictEqual(vm.run("Symbol.keyFor(test.symbol2)"), 'foo');
 		
 		done();
 	})
@@ -238,7 +289,7 @@ describe('VM', () => {
 		done();
 	})
 	
-	it('#32 attacks', done => {
+	it('various attacks #1', done => {
 		let vm2 = new VM({sandbox: {log: console.log, boom: function() { throw new Error(); }}});
 		
 		assert.strictEqual(vm2.run("this.constructor.constructor('return Function(\\'return Function\\')')()() === this.constructor.constructor('return Function')()"), true);
@@ -310,6 +361,19 @@ describe('VM', () => {
 				throw new Error('Shouldnt be there.');
 			};(function(value) {})
 		`)(new Buffer(1)));
+
+		done();
+	})
+	
+	it('various attacks #2', done => {
+		let vm2 = new VM();
+		
+		assert.doesNotThrow(() => vm2.run(`
+			Object.assign = function (o) {
+				throw new Error('Shouldnt be there.');
+			};
+			new Buffer([0]);
+		`));
 		
 		done();
 	})

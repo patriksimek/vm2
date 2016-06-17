@@ -42,6 +42,7 @@ vm.run("process.exit()");
 * [CLI](#cli)
 * [2.x to 3.x changes](https://github.com/patriksimek/vm2/wiki/1.x-and-2.x-changes)
 * [1.x and 2.x docs](https://github.com/patriksimek/vm2/wiki/1.x-and-2.x-docs)
+* [Contributing](https://github.com/patriksimek/vm2/wiki/Contributing)
 
 ## VM
 

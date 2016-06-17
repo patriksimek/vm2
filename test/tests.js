@@ -351,7 +351,8 @@ describe('NodeVM', () => {
 	})
 	
 	it('arguments attack', done => {
-		assert.throws(() => console.log(vm.run("module.exports = (function() {return arguments.callee.caller.caller.toString()})()")), /Cannot read property 'toString' of null/);
+		assert.strictEqual(vm.run("module.exports = (function() { return arguments.callee.caller.constructor === Function; })()"), true);
+		assert.throws(() => vm.run("module.exports = (function() { return arguments.callee.caller.caller.toString(); })()"), /Cannot read property 'toString' of null/);
 		
 		done();
 	})
@@ -518,6 +519,23 @@ describe('modules', () => {
 			assert.strictEqual(vm.run('module.exports = global.TICK'), void 0);
 			vm.run('setImmediate(done);');
 		})
+	})
+	
+	it('mock', done => {
+		let vm = new NodeVM({
+			require: {
+				mock: {
+					fs: {
+						readFileSync() { return 'Nice try!'; }
+					}
+				}
+			}
+		})
+		
+		assert.strictEqual(vm.run("module.exports = require('fs').constructor.constructor === Function"), true);
+		assert.strictEqual(vm.run("module.exports = require('fs').readFileSync()"), 'Nice try!');
+		
+		done();
 	})
 })
 

@@ -87,6 +87,7 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `require.external` - `true` to enable `require` of external modules (default: `false`)
 * `require.native` - Array of allowed native modules (default: none)
 * `require.root` - Restricted path where local modules can be required (default: every path)
+* `require.mock` - Collection of mock modules (both external or native).
 * `nesting` - `true` to enable VMs nesting (default: `false`)
 
 **IMPORTANT**: Timeout is not effective for NodeVM so it is not immune to `while (true) {}` or similar evil.
@@ -102,7 +103,12 @@ const vm = new NodeVM({
     require: {
         external: true,
         native: ['fs', 'path'],
-        root: "./"
+        root: "./",
+        mock: {
+	        fs: {
+		        readFileSync() { return 'Nice try!'; }
+	        }
+        }
     }
 });
 

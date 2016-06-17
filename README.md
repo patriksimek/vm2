@@ -1,8 +1,8 @@
-# vm2 [![Dependency Status](https://david-dm.org/patriksimek/vm2.png)](https://david-dm.org/patriksimek/vm2) [![NPM version](https://badge.fury.io/js/vm2.png)](http://badge.fury.io/js/vm2) [![Build Status](https://secure.travis-ci.org/patriksimek/vm2.png)](http://travis-ci.org/patriksimek/vm2)
+# vm2 [![NPM Version][npm-image]][npm-url] [![Package Quality][quality-image]][quality-url] [![Travis CI][travis-image]][travis-url]
 
 vm2 is a sandbox that can run untrusted code with whitelisted built-in node objects. Securely!
 
-## Features
+**Features**
 
 * Runs untrusted code securely in a single process with your code side by side
 * Full control over sandbox's console output
@@ -12,9 +12,9 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 * You can securely call methods and exchange data and callback between sandboxes
 * Is immune to `while (true) {}` (VM only, see docs)
 * Is immune to all known methods of attacks
-* Supports transpilers
+* Transpilers support
 
-## How does it work
+**How does it work**
 
 * It uses internal VM module to create secure context
 * It uses [Proxies](https://developer.mozilla.org/cs/docs/Web/JavaScript/Reference/Global_Objects/Proxy) to prevent escaping the sandbox
@@ -26,7 +26,7 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 
     npm install vm2
 
-## Quick Examples
+## Quick Example
 
 ```javascript
 const {VM} = require('vm2');
@@ -53,6 +53,8 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 * `sandbox` - VM's global object.
 * `compiler` - `javascript` (default) or `coffeescript` or custom compiler function
 
+**IMPORTANT**: Timeout is only effective on code you run through `run`. Timeout is NOT effective on any method returned by VM.
+
 ```javascript
 const {VM} = require('vm2');
 
@@ -70,7 +72,7 @@ You can also retrieve values from VM.
 let number = vm.run("1337"); // returns 1337
 ```
 
-**IMPORTANT**: Timeout is only effective on code you run through `run`. Timeout is NOT effective on any method returned by VM.
+**TIP**: See test for more usage examples.
 
 ## NodeVM
 
@@ -83,12 +85,13 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `compiler` - `javascript` (default) or `coffeescript` or custom compiler function
 * `require` - `true` or object to enable `require` method (default: `false`)
 * `require.external` - `true` to enable `require` of external modules (default: `false`)
-* `require.native` - Array of allowed native modules. (default: none)
+* `require.native` - Array of allowed native modules (default: none)
 * `require.root` - Restricted path where local modules can be required (default: every path)
-
-**REMEMBER**: The more modules you allow, the more fragile your sandbox becomes.
+* `nesting` - `true` to enable VMs nesting (default: `false`)
 
 **IMPORTANT**: Timeout is not effective for NodeVM so it is not immune to `while (true) {}` or similar evil.
+
+**REMEMBER**: The more modules you allow, the more fragile your sandbox becomes.
 
 ```javascript
 const {NodeVM} = require('vm2');
@@ -107,6 +110,8 @@ let functionInSandbox = vm.run("module.exports = function(who) { console.log('he
 functionInSandbox('world');
 ```
 
+**TIP**: See test for more usage examples.
+
 ### Loading modules by relative path
 
 To load modules by relative path, you must pass full path of the script you're running as a second argument of vm's `run` method. Filename then also shows up in any stack traces produced from the script.
@@ -123,7 +128,6 @@ Before you can use vm2 in command line, install it globally with `npm install vm
 $ vm2 ./script.js
 ```
 
-<a name="license" />
 ## License
 
 Copyright (c) 2014-2016 Patrik Simek
@@ -135,3 +139,10 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+[npm-image]: https://img.shields.io/npm/v/vm2.svg?style=flat-square
+[npm-url]: https://www.npmjs.com/package/vm2
+[quality-image]: http://npm.packagequality.com/shield/vm2.svg?style=flat-square
+[quality-url]: http://packagequality.com/#?package=vm2
+[travis-image]: https://img.shields.io/travis/patriksimek/vm2/master.svg?style=flat-square&label=unit
+[travis-url]: https://travis-ci.org/patriksimek/vm2

@@ -42,7 +42,8 @@ describe('contextify', () => {
 			klass: TestClass,
 			symbol1: Symbol('foo'),
 			symbol2: Symbol.for('foo'),
-			symbol3: Symbol.iterator
+			symbol3: Symbol.iterator,
+			error: new Error('test')
 		}
 	}
 	
@@ -220,6 +221,12 @@ describe('contextify', () => {
 		done();
 	})
 	
+	it('error', done => {
+		assert.strictEqual(vm.run("Object.getOwnPropertyDescriptor(test.error, 'stack').get.constructor === Function;"), true);
+
+		done();
+	})
+
 	after(done => {
 		vm = null;
 		
@@ -297,11 +304,7 @@ describe('VM', () => {
 		assert.throws(() => vm2.run(`
 			const ForeignFunction = global.constructor.constructor;
 			const process1 = ForeignFunction("return process")();
-			const require1 = process1.mainModule.require;
-			const console1 = require1("console");
-			const fs1 = require1("fs");
-			console1.log(fs1.statSync('.'));
-		`), /process is not defined/);
+		`), /process is not defined/, '#1');
 
 		assert.throws(() => vm2.run(`
 		    try {
@@ -310,11 +313,8 @@ describe('VM', () => {
 		    catch (e) {
 		        const foreignFunction = e.constructor.constructor;
 		        const process = foreignFunction("return process")();
-		        const require = process.mainModule.require;
-		        const fs = require("fs");
-		        log(fs.statSync('.'));
 		    }
-		`), /process is not defined/);
+		`), /process is not defined/, '#2');
 
 		assert.throws(() => vm2.run(`
 		    try {
@@ -323,11 +323,8 @@ describe('VM', () => {
 		    catch (e) {
 		        const foreignFunction = e.constructor.constructor;
 		        const process = foreignFunction("return process")();
-		        const require = process.mainModule.require;
-		        const fs = require("fs");
-		        log(fs.statSync('.'));
 		    }
-		`), /process is not defined/);
+		`), /process is not defined/, '#3');
 
 		assert.doesNotThrow(() => vm2.run(`
 			function exploit(o) {
@@ -336,44 +333,49 @@ describe('VM', () => {
 			
 			Reflect.construct = exploit;
 			new Buffer([0]);
-		`));
+		`), '#4');
 
 		assert.doesNotThrow(() => vm2.run(`
 			global.Proxy = function() {
 				throw new Error('Shouldnt be there.');
 			}
-		`));
+		`), '#5');
 		
 		assert.doesNotThrow(() => vm2.run(`
 			global.String = function(text) {
 				throw new Error('Shouldnt be there.');
 			};(function(text) {})
-		`)('asdf'));
+		`)('asdf'), '#6');
 		
 		assert.doesNotThrow(() => vm2.run(`
 			global.String = function(text) {
 				throw new Error('Shouldnt be there.');
 			};(function(text) {})
-		`)(new String('asdf')));
+		`)(new String('asdf')), '#7');
 		
 		assert.doesNotThrow(() => vm2.run(`
 			global.Buffer = function(value) {
 				throw new Error('Shouldnt be there.');
 			};(function(value) {})
-		`)(new Buffer(1)));
+		`)(new Buffer(1)), '#8');
 
 		done();
 	})
 	
 	it('various attacks #2', done => {
-		let vm2 = new VM();
+		let vm2 = new VM({
+			sandbox: {
+				boom: function() {},
+				error: new Error('test')
+			}
+		});
 		
 		assert.doesNotThrow(() => vm2.run(`
 			Object.assign = function (o) {
 				throw new Error('Shouldnt be there.');
 			};
 			new Buffer([0]);
-		`));
+		`), '#1');
 		
 		assert.doesNotThrow(() => vm2.run(`
 			try {
@@ -381,7 +383,37 @@ describe('VM', () => {
 			} catch (e) {
 				if (e.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
 			}
-		`));
+		`), '#2');
+		
+		assert.doesNotThrow(() => vm2.run(`
+			let o;
+			Array.prototype.map = function(callback) {
+				o = callback(boom);
+				return [];
+			};
+			boom(boom);
+			if (o && o.constructor !== Function) throw new Error('Shouldnt be there.');
+		`), '#3');
+		
+		assert.doesNotThrow(() => vm2.run(`
+			let method = () => {};
+			let proxy = new Proxy(method, {
+				apply: (target, context, args) => {
+					if (target.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
+					if (args.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
+				}
+			});
+			proxy
+		`)('asdf'), '#4');
+		
+		assert.doesNotThrow(() => vm2.run(`
+			let proxy2 = new Proxy(function() {}, {
+				apply: (target, context, args) => {
+					if (args.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
+				}
+			});
+			proxy2
+		`)('asdf'), '#5');
 		
 		done();
 	})

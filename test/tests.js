@@ -375,6 +375,14 @@ describe('VM', () => {
 			new Buffer([0]);
 		`));
 		
+		assert.doesNotThrow(() => vm2.run(`
+			try {
+				new Buffer();
+			} catch (e) {
+				if (e.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
+			}
+		`));
+		
 		done();
 	})
 	

@@ -1,14 +1,14 @@
 # vm2 [![NPM Version][npm-image]][npm-url] [![Package Quality][quality-image]][quality-url] [![Travis CI][travis-image]][travis-url]
 
-vm2 is a sandbox that can run untrusted code with whitelisted built-in node objects. Securely!
+vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules. Securely!
 
 **Features**
 
 * Runs untrusted code securely in a single process with your code side by side
 * Full control over sandbox's console output
 * Sandbox has limited access to process's methods
-* Sandbox can require modules (native and external)
-* You can limit access to certain (or all) native modules
+* Sandbox can require modules (builtin and external)
+* You can limit access to certain (or all) builtin modules
 * You can securely call methods and exchange data and callback between sandboxes
 * Is immune to `while (true) {}` (VM only, see docs)
 * Is immune to all known methods of attacks
@@ -18,7 +18,7 @@ vm2 is a sandbox that can run untrusted code with whitelisted built-in node obje
 
 * It uses internal VM module to create secure context
 * It uses [Proxies](https://developer.mozilla.org/cs/docs/Web/JavaScript/Reference/Global_Objects/Proxy) to prevent escaping the sandbox
-* It overrides native require to control access to modules
+* It overrides builtin require to control access to modules
 
 ## Installation
 
@@ -52,7 +52,7 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 
 * `timeout` - Script timeout in milliseconds. 
 * `sandbox` - VM's global object.
-* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function
+* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function.
 
 **IMPORTANT**: Timeout is only effective on code you run through `run`. Timeout is NOT effective on any method returned by VM.
 
@@ -81,15 +81,16 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 
 **Options:**
 
-* `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`)
-* `sandbox` - VM's global object
-* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function
-* `require` - `true` or object to enable `require` method (default: `false`)
-* `require.external` - `true` to enable `require` of external modules (default: `false`)
-* `require.native` - Array of allowed native modules (default: none)
-* `require.root` - Restricted path where local modules can be required (default: every path)
-* `require.mock` - Collection of mock modules (both external or native).
-* `nesting` - `true` to enable VMs nesting (default: `false`)
+* `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`).
+* `sandbox` - VM's global object.
+* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function.
+* `require` - `true` or object to enable `require` method (default: `false`).
+* `require.external` - `true` to enable `require` of external modules (default: `false`).
+* `require.builtin` - Array of allowed builtin modules (default: none).
+* `require.root` - Restricted path where local modules can be required (default: every path).
+* `require.mock` - Collection of mock modules (both external or builtin).
+* `require.context` - `sandbox` (default) to load, compile and require modules in sandbox. `host` to require modules in host and proxy them to sandbox. Builtin modules except `events` and `buffer` are always required in host and proxied to sandbox.
+* `nesting` - `true` to enable VMs nesting (default: `false`).
 
 **IMPORTANT**: Timeout is not effective for NodeVM so it is not immune to `while (true) {}` or similar evil.
 
@@ -103,7 +104,7 @@ const vm = new NodeVM({
     sandbox: {},
     require: {
         external: true,
-        native: ['fs', 'path'],
+        builtin: ['fs', 'path'],
         root: "./",
         mock: {
 	        fs: {

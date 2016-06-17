@@ -415,6 +415,11 @@ describe('VM', () => {
 			proxy2
 		`)('asdf'), '#5');
 		
+		assert.strictEqual(vm2.run(`
+			global.DEBUG = true;
+			boom.vmProxyTarget
+		`), undefined, '#6');
+		
 		done();
 	})
 	
@@ -516,10 +521,10 @@ describe('modules', () => {
 		done();
 	})
 	
-	it('disable setters on native modules', done => {
+	it('disable setters on builtin modules', done => {
 		let vm = new NodeVM({
 			require: {
-				"native": ['fs']
+				builtin: ['fs']
 			}
 		})
 		
@@ -532,7 +537,7 @@ describe('modules', () => {
 	it('enabled require for certain modules', done => {
 		let vm = new NodeVM({
 			require: {
-				"native": ['fs']
+				builtin: ['fs']
 			}
 		})
 		
@@ -565,10 +570,10 @@ describe('modules', () => {
 		done();
 	})
 	
-	it('native module arguments attack', done => {
+	it('builtin module arguments attack', done => {
 		let vm = new NodeVM({
 			require: {
-				"native": ['fs']
+				builtin: ['fs']
 			},
 			sandbox: {
 				parentfilename: __filename,

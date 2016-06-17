@@ -4,7 +4,7 @@
     "url": "https://patriksimek.cz"
   },
   "name": "vm2",
-  "description": "vm2 is a sandbox that can run untrusted code with whitelisted built-in node objects. Securely!",
+  "description": "vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules. Securely!",
   "keywords": [
     "sandbox",
     "prison",

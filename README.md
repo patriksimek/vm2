@@ -90,6 +90,7 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `require.root` - Restricted path where local modules can be required (default: every path).
 * `require.mock` - Collection of mock modules (both external or builtin).
 * `require.context` - `sandbox` (default) to load, compile and require modules in sandbox. `host` to require modules in host and proxy them to sandbox. Builtin modules except `events` and `buffer` are always required in host and proxied to sandbox.
+* `require.import` - Array of modules to be loaded into NodeVM on start.
 * `nesting` - `true` to enable VMs nesting (default: `false`).
 
 **IMPORTANT**: Timeout is not effective for NodeVM so it is not immune to `while (true) {}` or similar evil.

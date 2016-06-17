@@ -72,7 +72,7 @@ You can also retrieve values from VM.
 let number = vm.run("1337"); // returns 1337
 ```
 
-**TIP**: See test for more usage examples.
+**TIP**: See tests for more usage examples.
 
 ## NodeVM
 
@@ -110,7 +110,7 @@ let functionInSandbox = vm.run("module.exports = function(who) { console.log('he
 functionInSandbox('world');
 ```
 
-**TIP**: See test for more usage examples.
+**TIP**: See tests for more usage examples.
 
 ### Loading modules by relative path
 

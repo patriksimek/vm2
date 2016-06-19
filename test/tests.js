@@ -284,7 +284,7 @@ describe('VM', () => {
 	
 	it('errors', done => {
 		assert.throws(() => vm.run("notdefined"), /notdefined is not defined/);
-		assert.throws(() => vm.run("Object.defineProperty(sub, 'test', {})"), err => {
+		assert.throws(() => vm.run("Object.setPrototypeOf(sub, {})"), err => {
 			assert.equal(err.name, 'VMError');
 			assert.equal(err.message, 'Operation not allowed on contextified object.');
 			return true;
@@ -426,15 +426,20 @@ describe('VM', () => {
 		
 		assert.throws(() => vm2.run(`
 			global.constructor.constructor('return this')().constructor.constructor('return process')()
-		`), /process is not defined/, '#1');
+		`), /process is not defined/, '#7');
 		
 		assert.throws(() => vm2.run(`
 			global.__proto__.constructor.constructor('return this')().constructor.constructor('return process')()
-		`), /process is not defined/, '#1');
+		`), /process is not defined/, '#8');
 		
+		assert.doesNotThrow(() => vm2.run(`
+			if (!(Object.keys(boom) instanceof Array)) throw new Error('Shouldnt be there.');
+			if (!(Reflect.ownKeys(boom) instanceof Array)) throw new Error('Shouldnt be there.');
+		`));
+
 		done();
 	})
-	
+
 	after(done => {
 		vm = null;
 		
@@ -542,6 +547,23 @@ describe('modules', () => {
 		
 		vm.run("require('fs').readFileSync = undefined");
 		assert.strictEqual(require('fs').readFileSync instanceof Function, true);
+		
+		vm.run("require('fs').readFileSync.thisPropertyShouldntBeThere = true");
+		assert.strictEqual(require('fs').readFileSync.thisPropertyShouldntBeThere, undefined);
+		
+		assert.throws(() => vm.run("Object.defineProperty(require('fs'), 'test', {})"), err => {
+			assert.ok(err instanceof TypeError);
+			assert.equal(err.name, 'TypeError');
+			assert.equal(err.message, '\'defineProperty\' on proxy: trap returned falsish for property \'test\'');
+			return true;
+		})
+		
+		assert.throws(() => vm.run("'use strict'; delete require('fs').readFileSync"), err => {
+			assert.ok(err instanceof TypeError);
+			assert.equal(err.name, 'TypeError');
+			assert.equal(err.message, '\'deleteProperty\' on proxy: trap returned falsish for property \'readFileSync\'');
+			return true;
+		})
 		
 		done();
 	})

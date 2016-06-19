@@ -412,6 +412,10 @@ describe('VM', () => {
 			boom.vmProxyTarget
 		`), undefined, '#6');
 		
+		assert.throws(() => vm2.run(`
+			global.constructor.constructor('return this')().constructor.constructor('return process')()
+		`), /process is not defined/, '#1');
+		
 		done();
 	})
 	

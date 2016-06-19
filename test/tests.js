@@ -53,6 +53,18 @@ describe('contextify', () => {
 	})
 	
 	it('common', done => {
+		assert.ok(vm.run(`global.__proto__ === Object.prototype`));
+		assert.ok(vm.run(`global.__proto__.constructor === Object`));
+		assert.ok(vm.run(`Object.__proto__ === Function.prototype`));
+		assert.ok(vm.run(`Object.__proto__.constructor === Function`));
+		assert.ok(vm.run(`Object.prototype.__proto__ === null`));
+		assert.ok(vm.run(`Function.__proto__ === Function.prototype`));
+		assert.ok(vm.run(`Function.__proto__.constructor === Function`));
+		assert.ok(vm.run(`Function.prototype.__proto__ === Object.prototype`));
+		assert.ok(vm.run(`Array.__proto__ === Function.prototype`));
+		assert.ok(vm.run(`Array.__proto__.constructor === Function`));
+		assert.ok(vm.run(`Array.prototype.__proto__ === Object.prototype`));
+		
 		assert.strictEqual(sandbox.test.object.y === sandbox.test.object.y.valueOf(), true);
 		assert.strictEqual(vm.run("test.object.y instanceof Function"), true);
 		assert.strictEqual(vm.run("test.object.y.valueOf() instanceof Function"), true);

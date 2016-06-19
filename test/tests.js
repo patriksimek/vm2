@@ -96,6 +96,8 @@ describe('contextify', () => {
 		assert.strictEqual(vm.run("new test.klass()").greet('friend'), 'hello friend');
 		assert.strictEqual(vm.run("new test.klass()") instanceof TestClass, true);
 		
+		//vm.run("class LocalClass extends test.klass {}");
+		
 		done();
 	})
 	
@@ -144,19 +146,19 @@ describe('contextify', () => {
 			let b = Buffer.alloc(3, 0x03);
 			let c = Buffer.from(a);
 			let d = Buffer.concat([a, b, c]);
-			
-			assert.ok(a instanceof Buffer);
-			assert.ok(b instanceof Buffer);
-			assert.ok(c instanceof Buffer);
-			assert.ok(d instanceof Buffer);
-			assert.ok(a.constructor === Buffer);
-			assert.ok(b.constructor === Buffer);
-			assert.ok(c.constructor === Buffer);
-			assert.ok(d.constructor === Buffer);
-			assert.ok(a.constructor.constructor === Function);
-			assert.ok(b.constructor.constructor === Function);
-			assert.ok(c.constructor.constructor === Function);
-			assert.ok(d.constructor.constructor === Function);
+
+			assert.ok(a instanceof Buffer, '#1');
+			assert.ok(b instanceof Buffer, '#2');
+			assert.ok(c instanceof Buffer, '#3');
+			assert.ok(d instanceof Buffer, '#4');
+			assert.ok(a.constructor === Buffer, '#5');
+			assert.ok(b.constructor === Buffer, '#6');
+			assert.ok(c.constructor === Buffer, '#7');
+			assert.ok(d.constructor === Buffer, '#8');
+			assert.ok(a.constructor.constructor === Function, '#9');
+			assert.ok(b.constructor.constructor === Function, '#10');
+			assert.ok(c.constructor.constructor === Function, '#11');
+			assert.ok(d.constructor.constructor === Function, '#12');
 			
 			({a: a, b: b, c: c, d: d})
 		`);
@@ -308,23 +310,13 @@ describe('VM', () => {
 
 		assert.throws(() => vm2.run(`
 		    try {
-		        log.__proto__ = null;
-		    }
-		    catch (e) {
-		        const foreignFunction = e.constructor.constructor;
-		        const process = foreignFunction("return process")();
-		    }
-		`), /process is not defined/, '#2');
-
-		assert.throws(() => vm2.run(`
-		    try {
 		        boom();
 		    }
 		    catch (e) {
 		        const foreignFunction = e.constructor.constructor;
 		        const process = foreignFunction("return process")();
 		    }
-		`), /process is not defined/, '#3');
+		`), /process is not defined/, '#2');
 
 		assert.doesNotThrow(() => vm2.run(`
 			function exploit(o) {
@@ -333,31 +325,31 @@ describe('VM', () => {
 			
 			Reflect.construct = exploit;
 			new Buffer([0]);
-		`), '#4');
+		`), '#3');
 
 		assert.doesNotThrow(() => vm2.run(`
 			global.Proxy = function() {
 				throw new Error('Shouldnt be there.');
 			}
-		`), '#5');
+		`), '#4');
 		
 		assert.doesNotThrow(() => vm2.run(`
 			global.String = function(text) {
 				throw new Error('Shouldnt be there.');
 			};(function(text) {})
-		`)('asdf'), '#6');
+		`)('asdf'), '#5');
 		
 		assert.doesNotThrow(() => vm2.run(`
 			global.String = function(text) {
 				throw new Error('Shouldnt be there.');
 			};(function(text) {})
-		`)(new String('asdf')), '#7');
+		`)(new String('asdf')), '#6');
 		
 		assert.doesNotThrow(() => vm2.run(`
 			global.Buffer = function(value) {
 				throw new Error('Shouldnt be there.');
 			};(function(value) {})
-		`)(new Buffer(1)), '#8');
+		`)(new Buffer(1)), '#7');
 
 		done();
 	})

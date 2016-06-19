@@ -89,7 +89,7 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `require.builtin` - Array of allowed builtin modules (default: none).
 * `require.root` - Restricted path where local modules can be required (default: every path).
 * `require.mock` - Collection of mock modules (both external or builtin).
-* `require.context` - `sandbox` (default) to load, compile and require modules in sandbox. `host` to require modules in host and proxy them to sandbox. Builtin modules except `events` and `buffer` are always required in host and proxied to sandbox.
+* `require.context` - `host` (default) to require modules in host and proxy them to sandbox. `sandbox` to load, compile and require modules in sandbox. Builtin modules except `events` always required in host and proxied to sandbox.
 * `require.import` - Array of modules to be loaded into NodeVM on start.
 * `nesting` - `true` to enable VMs nesting (default: `false`).
 
@@ -136,6 +136,10 @@ Before you can use vm2 in command line, install it globally with `npm install vm
 ```
 $ vm2 ./script.js
 ```
+
+## Known Issues
+
+* It is not possible to define class that extends proxied class.
 
 ## License
 

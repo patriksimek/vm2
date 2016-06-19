@@ -416,6 +416,10 @@ describe('VM', () => {
 			global.constructor.constructor('return this')().constructor.constructor('return process')()
 		`), /process is not defined/, '#1');
 		
+		assert.throws(() => vm2.run(`
+			global.__proto__.constructor.constructor('return this')().constructor.constructor('return process')()
+		`), /process is not defined/, '#1');
+		
 		done();
 	})
 	

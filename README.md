@@ -39,6 +39,7 @@ vm.run("process.exit()");
 
 * [VM](#vm)
 * [NodeVM](#nodevm)
+* [Cross-sandbox relationships](#cross-sandbox-relationships)
 * [CLI](#cli)
 * [2.x to 3.x changes](https://github.com/patriksimek/vm2/wiki/1.x-and-2.x-changes)
 * [1.x and 2.x docs](https://github.com/patriksimek/vm2/wiki/1.x-and-2.x-docs)
@@ -127,6 +128,46 @@ To load modules by relative path, you must pass full path of the script you're r
 
 ```javascript
 vm.run("require('foobar')", "/data/myvmscript.js");
+```
+
+## Cross-sandbox relationships
+
+```javascript
+const assert = require('assert');
+const {VM} = require('vm2');
+
+let sandbox = {
+	object: new Object(),
+	func: new Function(),
+	buffer: new Buffer([0x01, 0x05])
+}
+
+let vm = new VM({sandbox});
+
+assert.ok(vm.run(`object`) === sandbox.object);
+assert.ok(vm.run(`object instanceof Object`));
+assert.ok(vm.run(`object`) instanceof Object);
+assert.ok(vm.run(`object.__proto__ === Object.prototype`));
+assert.ok(vm.run(`object`).__proto__ === Object.prototype);
+
+assert.ok(vm.run(`func`) === sandbox.func);
+assert.ok(vm.run(`func instanceof Function`));
+assert.ok(vm.run(`func`) instanceof Function);
+assert.ok(vm.run(`func.__proto__ === Function.prototype`));
+assert.ok(vm.run(`func`).__proto__ === Function.prototype);
+
+assert.ok(vm.run(`new func() instanceof func`));
+assert.ok(vm.run(`new func()`) instanceof sandbox.func);
+assert.ok(vm.run(`new func().__proto__ === func.prototype`));
+assert.ok(vm.run(`new func()`).__proto__ === sandbox.func.prototype);
+
+assert.ok(vm.run(`buffer`) === sandbox.buffer);
+assert.ok(vm.run(`buffer instanceof Buffer`));
+assert.ok(vm.run(`buffer`) instanceof Buffer);
+assert.ok(vm.run(`buffer.__proto__ === Buffer.prototype`));
+assert.ok(vm.run(`buffer`).__proto__ === Buffer.prototype);
+assert.ok(vm.run(`buffer.slice(0, 1) instanceof Buffer`));
+assert.ok(vm.run(`buffer.slice(0, 1)`) instanceof Buffer);
 ```
 
 ## CLI

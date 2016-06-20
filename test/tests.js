@@ -104,7 +104,7 @@ describe('contextify', () => {
 	})
 	
 	it('class', done => {
-		assert.strictEqual(vm.run("new test.klass()").isVMProxy, void 0);
+		assert.strictEqual(vm.run("new test.klass()").isVMProxy, undefined);
 		assert.strictEqual(vm.run("new test.klass()").greet('friend'), 'hello friend');
 		assert.strictEqual(vm.run("new test.klass()") instanceof TestClass, true);
 		

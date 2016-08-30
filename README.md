@@ -70,7 +70,7 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 
 **Options:**
 
-* `timeout` - Script timeout in milliseconds. 
+* `timeout` - Script timeout in milliseconds.
 * `sandbox` - VM's global object.
 * `compiler` - `javascript` (default) or `coffeescript` or custom compiler function.
 

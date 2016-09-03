@@ -701,10 +701,10 @@ describe('nesting', () => {
 	})
 })
 
-describe('captureReturn', () => {
-	it('NodeVM', done => {
+describe('wrappers', () => {
+	it('none', done => {
 		let vm = new NodeVM({
-			captureReturn: true
+			wrapper: 'none'
 		})
 		
 		assert.strictEqual(vm.run('return 2 + 2'), 4)

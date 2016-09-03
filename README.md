@@ -112,7 +112,7 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `require.context` - `host` (default) to require modules in host and proxy them to sandbox. `sandbox` to load, compile and require modules in sandbox. Builtin modules except `events` always required in host and proxied to sandbox.
 * `require.import` - Array of modules to be loaded into NodeVM on start.
 * `nesting` - `true` to enable VMs nesting (default: `false`).
-* `captureReturn` - `true` or `false` (default) to capture and retreive the returned value (see below)
+* `wrapper` - `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script.
 
 **IMPORTANT**: Timeout is not effective for NodeVM so it is not immune to `while (true) {}` or similar evil.
 
@@ -140,9 +140,10 @@ let functionInSandbox = vm.run("module.exports = function(who) { console.log('he
 functionInSandbox('world');
 ```
 
-When `captureReturn` is set to `true`, `NodeVM` behaves more like `VM` for synchronous code.
+When `wrapper` is set to `none`, `NodeVM` behaves more like `VM` for synchronous code.
+
 ```javascript
-vm.run('return true') === true;
+assert.ok(vm.run('return true') === true);
 ```
 
 **TIP**: See tests for more usage examples.

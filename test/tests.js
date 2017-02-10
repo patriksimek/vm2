@@ -1,5 +1,5 @@
 const assert = require("assert");
-const {NodeVM, VM} = require('..');
+const {NodeVM, VM, VMScript} = require('..');
 
 global.isVM = false;
 
@@ -708,6 +708,30 @@ describe('wrappers', () => {
 		})
 		
 		assert.strictEqual(vm.run('return 2 + 2'), 4)
+
+		done()
+	})
+})
+
+describe('precompiled scripts', () => {
+	it('VM', done => {
+		let vm = new VM();
+		let script = new VMScript("Math.random()");
+		let val1 = vm.run(script);
+		let val2 = vm.run(script);
+		assert.ok('number' === typeof val1 && 'number' === typeof val2);
+		assert.ok( val1 != val2);
+
+		done()
+	})
+	
+	it('NodeVM', done => {
+		let vm = new NodeVM();
+		let script = new VMScript("module.exports = Math.random()");
+		let val1 = vm.run(script);
+		let val2 = vm.run(script);
+		assert.ok('number' === typeof val1 && 'number' === typeof val2);
+		assert.ok( val1 != val2);
 
 		done()
 	})

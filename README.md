@@ -1,4 +1,4 @@
-# vm2 [![NPM Version][npm-image]][npm-url] [![Package Quality][quality-image]][quality-url] [![Travis CI][travis-image]][travis-url]
+# vm2 [![NPM Version][npm-image]][npm-url] [![NPM Downloads][downloads-image]][downloads-url] [![Package Quality][quality-image]][quality-url] [![Travis CI][travis-image]][travis-url]
 
 vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules. Securely!
 
@@ -9,8 +9,8 @@ vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in mo
 * Sandbox has limited access to process's methods
 * Sandbox can require modules (builtin and external)
 * You can limit access to certain (or all) builtin modules
-* You can securely call methods and exchange data and callback between sandboxes
-* Is immune to `while (true) {}` (VM only, see docs)
+* You can securely call methods and exchange data and callbacks between sandboxes
+* Is immune to `while (true) {}` (see docs)
 * Is immune to all known methods of attacks
 * Transpilers support
 
@@ -58,6 +58,7 @@ vm.run(`
 
 * [VM](#vm)
 * [NodeVM](#nodevm)
+* [VMScript](#vmscript)
 * [Cross-sandbox relationships](#cross-sandbox-relationships)
 * [CLI](#cli)
 * [2.x to 3.x changes](https://github.com/patriksimek/vm2/wiki/2.x-to-3.x-changes)
@@ -165,6 +166,54 @@ To load modules by relative path, you must pass full path of the script you're r
 vm.run("require('foobar')", "/data/myvmscript.js");
 ```
 
+## VMScript
+
+You can increase performance by using pre-compiled scripts. The pre-compiled VMScript can be run later multiple times. It is important to note that the code is not bound to any VM (context); rather, it is bound before each run, just for that run.
+
+```javascript
+const {VM, VMScript} = require('vm2');
+
+const vm = new VM();
+const script = new VMScript("Math.random()");
+console.log(vm.run(script));
+console.log(vm.run(script));
+```
+
+Works for both `VM` and `NodeVM`.
+
+```javascript
+const {NodeVM, VMScript} = require('vm2');
+
+const vm = new NodeVM();
+const script = new VMScript("module.exports = Math.random()");
+console.log(vm.run(script));
+console.log(vm.run(script));
+```
+
+Code is compiled automatically first time you run it. You can compile the code anytime with `script.compile()`. Once the code is compiled, the method has no effect.
+
+## Error handling
+
+Errors in code compilation and synchronous code execution can be handled by `try`/`catch`. Errors in asynchronous code execution can be handled by attaching `uncaughtException` event handler to Node's `process`.
+
+```javascript
+try {
+	var script = new VMScript("Math.random()").compile();
+} catch (err) {
+	console.error('Failed to compile script.', err);
+}
+
+try {
+	vm.run(script);
+} catch (err) {
+	console.error('Failed to execute script.', err);
+}
+
+process.on('uncaughtException', (err) => {
+	console.error('Asynchronous error caught.', err);
+})
+```
+
 ## Cross-sandbox relationships
 
 ```javascript
@@ -223,7 +272,7 @@ Development is sponsored by [Integromat](https://www.integromat.com).
 
 ## License
 
-Copyright (c) 2014-2016 Patrik Simek
+Copyright (c) 2014-2017 Patrik Simek
 
 The MIT License
 
@@ -235,6 +284,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 [npm-image]: https://img.shields.io/npm/v/vm2.svg?style=flat-square
 [npm-url]: https://www.npmjs.com/package/vm2
+[downloads-image]: https://img.shields.io/npm/dm/vm2.svg?style=flat-square
+[downloads-url]: https://www.npmjs.com/package/vm2
 [quality-image]: http://npm.packagequality.com/shield/vm2.svg?style=flat-square
 [quality-url]: http://packagequality.com/#?package=vm2
 [travis-image]: https://img.shields.io/travis/patriksimek/vm2/master.svg?style=flat-square&label=unit

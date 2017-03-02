@@ -20,6 +20,21 @@ vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in mo
 * It uses [Proxies](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Proxy) to prevent escaping the sandbox
 * It overrides builtin require to control access to modules
 
+**What is the difference between Node's vm and vm2?**
+
+Try it yourself:
+
+```javascript
+const vm = require('vm');
+vm.runInNewContext('this.constructor.constructor("return process")().exit()');
+console.log('Never gets executed.');
+```
+
+```javascript
+const {VM} = require('vm2');
+new VM().run('this.constructor.constructor("return process")().exit()');
+```
+
 ## Installation
 
 **IMPORTANT**: Requires Node.js 6 or newer.

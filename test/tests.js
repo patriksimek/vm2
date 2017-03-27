@@ -740,34 +740,31 @@ describe('precompiled scripts', () => {
 describe('read-only contextified items', () => {
 	it('without read-only', done => {
 		let x = {
-			a() {
-				return 'a';
-			},
-
-			b() {
-				return 'b'
+			a: () => 'a',
+			b: () => 'b',
+			c: {
+				d: () => 'd'
 			}
 		}
 
 		let vm = new VM({
 			sandbox: {x}
 		});
-		vm.run('x.a = () => { return `-` }; (y) => { y.b = () => { return `--` } }')(x);
+		vm.run('x.a = () => { return `-` }; x.c.d = () => { return `---` }; (y) => { y.b = () => { return `--` } }')(x);
 		
 		assert.strictEqual(x.a(), '-');
 		assert.strictEqual(x.b(), '--');
+		assert.strictEqual(x.c.d(), '---');
 
 		done()
 	})
 
 	it('with read-only', done => {
 		let x = VM.freeze({
-			a() {
-				return 'a';
-			},
-
-			b() {
-				return 'b'
+			a: () => 'a',
+			b: () => 'b',
+			c: {
+				d: () => 'd'
 			}
 		});
 
@@ -781,6 +778,10 @@ describe('read-only contextified items', () => {
 
 		assert.throws(() => {
 			vm.run('(y) => { y.b = () => { return `--` } }')(x);
+		}, /Object is read-only\./);
+
+		assert.throws(() => {
+			vm.run('x.c.d = () => { return `---` };');
 		}, /Object is read-only\./);
 
 		done()

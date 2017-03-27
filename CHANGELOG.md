@@ -1,3 +1,7 @@
+v3.3.1 (2017-03-27)
+-------------------
+[new] Added support for freezing objects
+
 v3.2.0 (2017-02-10)
 -------------------
 [new] Added support for pre-compiled scripts (VMScript)

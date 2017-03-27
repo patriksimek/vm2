@@ -74,6 +74,8 @@ vm.run(`
 * [VM](#vm)
 * [NodeVM](#nodevm)
 * [VMScript](#vmscript)
+* [Error handling](#error-handling)
+* [Read-only objects](#read-only-objects)
 * [Cross-sandbox relationships](#cross-sandbox-relationships)
 * [CLI](#cli)
 * [2.x to 3.x changes](https://github.com/patriksimek/vm2/wiki/2.x-to-3.x-changes)
@@ -229,19 +231,48 @@ process.on('uncaughtException', (err) => {
 })
 ```
 
+## Read-only objects
+
+To prevent sandboxed script to add/change/delete properties to/from the proxied objects, you can use `VM.freeze`/`NodeVM.freeze` methods to make the object read-only. Rather than freezing the object itself (like builtin `Object.freeze` method does) it creates a new proxy so the original object remains untouched.
+
+**Example without using `VM.freeze`:**
+
+```javascript
+const util = {
+	add: (a, b) => a + b
+}
+
+const vm = new VM({
+	sandbox: {util}
+});
+
+vm.run('util.add = (a, b) => a - b');
+console.log(util.add(1, 1)); // returns 0
+```
+
+**Example with using `VM.freeze`:**
+
+```javascript
+const vm = new VM({
+	sandbox: {util: VM.freeze(util)}
+});
+
+vm.run('util.add = (a, b) => a - b'); // throws Object is read-only.
+```
+
 ## Cross-sandbox relationships
 
 ```javascript
 const assert = require('assert');
 const {VM} = require('vm2');
 
-let sandbox = {
+const sandbox = {
 	object: new Object(),
 	func: new Function(),
 	buffer: new Buffer([0x01, 0x05])
 }
 
-let vm = new VM({sandbox});
+const vm = new VM({sandbox});
 
 assert.ok(vm.run(`object`) === sandbox.object);
 assert.ok(vm.run(`object instanceof Object`));

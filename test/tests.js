@@ -736,3 +736,53 @@ describe('precompiled scripts', () => {
 		done()
 	})
 })
+
+describe('read-only contextified items', () => {
+	it('without read-only', done => {
+		let x = {
+			a() {
+				return 'a';
+			},
+
+			b() {
+				return 'b'
+			}
+		}
+
+		let vm = new VM({
+			sandbox: {x}
+		});
+		vm.run('x.a = () => { return `-` }; (y) => { y.b = () => { return `--` } }')(x);
+		
+		assert.strictEqual(x.a(), '-');
+		assert.strictEqual(x.b(), '--');
+
+		done()
+	})
+
+	it('with read-only', done => {
+		let x = VM.freeze({
+			a() {
+				return 'a';
+			},
+
+			b() {
+				return 'b'
+			}
+		});
+
+		let vm = new VM({
+			sandbox: {x}
+		});
+
+		assert.throws(() => {
+			vm.run('x.a = () => { return `-` };');
+		}, /Object is read-only\./);
+
+		assert.throws(() => {
+			vm.run('(y) => { y.b = () => { return `--` } }')(x);
+		}, /Object is read-only\./);
+
+		done()
+	})
+})

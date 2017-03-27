@@ -3,3 +3,4 @@
 .svn
 /node-*
 /test.js
+.vscode

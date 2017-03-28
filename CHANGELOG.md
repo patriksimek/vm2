@@ -1,6 +1,10 @@
+v3.4.0 (2017-03-28)
+-------------------
+[new] Added experimental VM.protect method
+
 v3.3.1 (2017-03-27)
 -------------------
-[new] Added support for freezing objects
+[new] Added VM.freeze method
 
 v3.2.0 (2017-02-10)
 -------------------

@@ -47,12 +47,11 @@ describe('contextify', () => {
 		}
 	}
 
-	before(done => {
+	before(() => {
 		vm = new VM({sandbox});
-		done();
 	})
 
-	it('common', done => {
+	it('common', () => {
 		assert.ok(vm.run(`global.__proto__ === Object.prototype`));
 		assert.ok(vm.run(`global.__proto__.constructor === Object`));
 		assert.ok(vm.run(`Object.__proto__ === Function.prototype`));
@@ -99,54 +98,40 @@ describe('contextify', () => {
 		assert.strictEqual(o.a instanceof Date, true);
 		assert.strictEqual(o.b instanceof Date, true);
 		assert.strictEqual(o.a === o.b, true);
-
-		done();
 	})
 
-	it('class', done => {
+	it('class', () => {
 		assert.strictEqual(vm.run("new test.klass()").isVMProxy, undefined);
 		assert.strictEqual(vm.run("new test.klass()").greet('friend'), 'hello friend');
 		assert.strictEqual(vm.run("new test.klass()") instanceof TestClass, true);
 
 		//vm.run("class LocalClass extends test.klass {}");
-
-		done();
 	})
 
-	it('string', done => {
+	it('string', () => {
 		assert.strictEqual(vm.run("(test.string).constructor === String"), true);
 		assert.strictEqual(vm.run("typeof(test.stringO) === 'string' && test.string.valueOf instanceof Object"), true);
-
-		done();
 	})
 
-	it('number', done => {
+	it('number', () => {
 		assert.strictEqual(vm.run("typeof(test.numberO) === 'number' && test.number.valueOf instanceof Object"), true);
-
-		done();
 	})
 
-	it('boolean', done => {
+	it('boolean', () => {
 		assert.strictEqual(vm.run("typeof(test.booleanO) === 'boolean' && test.boolean.valueOf instanceof Object"), true);
-
-		done();
 	})
 
-	it('date', done => {
+	it('date', () => {
 		assert.strictEqual(vm.run("test.date instanceof Date"), true);
 		assert.strictEqual(vm.run("test.date") instanceof Date, true);
 		assert.strictEqual(vm.run("test.date"), sandbox.test.date);
-
-		done();
 	})
 
-	it('regexp', done => {
+	it('regexp', () => {
 		assert.strictEqual(vm.run("test.regexp instanceof RegExp"), true);
-
-		done();
 	})
 
-	it('buffer', done => {
+	it('buffer', () => {
 		assert.strictEqual(vm.run("test.buffer.inspect()"), '<Buffer 00 01>', '#1');
 		assert.strictEqual(vm.run("test.buffer instanceof Buffer"), true, '#2');
 		assert.strictEqual(vm.run("test.buffer") instanceof Buffer, true, '#3');
@@ -187,19 +172,15 @@ describe('contextify', () => {
 		assert.ok(b.constructor.constructor === Function);
 		assert.ok(c.constructor.constructor === Function);
 		assert.ok(d.constructor.constructor === Function);
-
-		done();
 	})
 
-	it('function', done => {
+	it('function', () => {
 		assert.strictEqual(vm.run("test.function instanceof Function"), true, '#1');
 		assert.strictEqual(vm.run("test.function() instanceof Function"), true, '#2');
 		assert.strictEqual(vm.run("test.function()() instanceof Object"), true, '#3');
-
-		done();
 	})
 
-	it('object', done => {
+	it('object', () => {
 		assert.strictEqual(vm.run("test.object instanceof Object && test.object.x === 1"), true, '#1');
 		assert.strictEqual(vm.run("test.object.y instanceof Function"), true, '#2');
 		assert.strictEqual(vm.run("test.object.y() instanceof Function"), true, '#3');
@@ -207,23 +188,17 @@ describe('contextify', () => {
 		assert.strictEqual(vm.run("test.object.z({}) instanceof Object"), true, '#5');
 		assert.strictEqual(vm.run("Object.getOwnPropertyDescriptor(test.object, 'y').hasOwnProperty instanceof Function"), true, '#6');
 		assert.strictEqual(vm.run("Object.getOwnPropertyDescriptor(test.object, 'y').hasOwnProperty.constructor('return (function(){return this})().isVM')()"), true, '#7');
-
-		done();
 	})
 
-	it('null', done => {
+	it('null', () => {
 		assert.strictEqual(vm.run("test.nil === null"), true);
-
-		done();
 	})
 
-	it('undefined', done => {
+	it('undefined', () => {
 		assert.strictEqual(vm.run("test.undef === undefined"), true);
-
-		done();
 	})
 
-	it('symbol', done => {
+	it('symbol', () => {
 		assert.strictEqual(vm.run("Symbol.for('foo') === test.symbol2"), true);
 		assert.strictEqual(vm.run("test.symbol1.constructor.constructor === Function"), true);
 		assert.strictEqual(vm.run("test.symbol2.constructor.constructor === Function"), true);
@@ -231,27 +206,21 @@ describe('contextify', () => {
 		assert.strictEqual(vm.run("Symbol('foo').constructor.constructor === Function"), true);
 		assert.strictEqual(vm.run("Symbol('foobar').constructor.constructor === Function"), true);
 		assert.strictEqual(vm.run("Symbol.keyFor(test.symbol2)"), 'foo');
-
-		done();
 	})
 
-	it('error', done => {
+	it('error', () => {
 		assert.strictEqual(vm.run("Object.getOwnPropertyDescriptor(test.error, 'stack').get.constructor === Function;"), true);
-
-		done();
 	})
 
-	after(done => {
+	after(() => {
 		vm = null;
-
-		done();
 	})
 })
 
 describe('VM', () => {
 	let vm;
 
-	before(done => {
+	before(() => {
 		let sandbox = {
 			round(number) { return Math.round(number); },
 			sub: {}
@@ -272,45 +241,35 @@ describe('VM', () => {
 			timeout: 10,
 			sandbox
 		})
-
-		done();
 	})
 
-	it('globals', done => {
+	it('globals', () => {
 		assert.equal(vm.run("round(1.5)"), 2);
-
-		done();
 	})
 
-	it('errors', done => {
+	it('errors', () => {
 		assert.throws(() => vm.run("notdefined"), /notdefined is not defined/);
 		assert.throws(() => vm.run("Object.setPrototypeOf(sub, {})"), err => {
 			assert.equal(err.name, 'VMError');
 			assert.equal(err.message, 'Operation not allowed on contextified object.');
 			return true;
 		})
-
-		done();
 	})
 
-	it('timeout', done => {
+	it('timeout', () => {
 		assert.throws(() => new VM({
 			timeout: 10
 		}).run("while (true) {}"), /Script execution timed out\./);
 		assert.throws(() => vm.run("sub.getter"), /Script execution timed out\./);
-
-		done();
 	})
 
-	it('timers', done => {
+	it('timers', () => {
 		assert.equal(vm.run("global.setTimeout"), void 0);
 		assert.equal(vm.run("global.setInterval"), void 0);
 		assert.equal(vm.run("global.setImmediate"), void 0);
-
-		done();
 	})
 
-	it('various attacks #1', done => {
+	it('various attacks #1', () => {
 		let vm2 = new VM({sandbox: {log: console.log, boom: function() { throw new Error(); }}});
 
 		assert.strictEqual(vm2.run("this.constructor.constructor('return Function(\\'return Function\\')')()() === this.constructor.constructor('return Function')()"), true);
@@ -362,11 +321,9 @@ describe('VM', () => {
 				throw new Error('Shouldnt be there.');
 			};(function(value) {})
 		`)(new Buffer(1)), '#7');
-
-		done();
 	})
 
-	it('various attacks #2', done => {
+	it('various attacks #2', () => {
 		let vm2 = new VM({
 			sandbox: {
 				boom: function() {},
@@ -436,76 +393,56 @@ describe('VM', () => {
 			if (!(Object.keys(boom) instanceof Array)) throw new Error('Shouldnt be there.');
 			if (!(Reflect.ownKeys(boom) instanceof Array)) throw new Error('Shouldnt be there.');
 		`));
-
-		done();
 	})
 
-	after(done => {
+	after(() => {
 		vm = null;
-
-		done();
 	})
 })
 
 describe('NodeVM', () => {
 	let vm;
 
-	before(done => {
+	before(() => {
 		vm = new NodeVM;
-
-		done();
 	})
 
-	it('globals', done => {
+	it('globals', () => {
 		let ex;
 		ex = vm.run("module.exports = global");
 		assert.equal(ex.isVM, true);
-
-		done();
 	})
 
-	it('errors', done => {
+	it('errors', () => {
 		assert.throws(() => vm.run("notdefined"), /notdefined is not defined/);
-
-		done();
 	})
 
-	it('prevent global access', done => {
+	it('prevent global access', () => {
 		assert.throws(() => vm.run("process.exit()"), /(undefined is not a function|process\.exit is not a function)/);
-
-		done();
 	})
 
-	it('arguments attack', done => {
+	it('arguments attack', () => {
 		assert.strictEqual(vm.run("module.exports = (function() { return arguments.callee.caller.constructor === Function; })()"), true);
 		assert.throws(() => vm.run("module.exports = (function() { return arguments.callee.caller.caller.toString(); })()"), /Cannot read property 'toString' of null/);
-
-		done();
 	})
 
-	it('global attack', done => {
+	it('global attack', () => {
 		assert.equal(vm.run("module.exports = console.log.constructor('return (function(){return this})().isVM')()"), true);
-
-		done();
 	})
 
-	it.skip('timeout (not supported by Node\'s VM)', done => {
+	it.skip('timeout (not supported by Node\'s VM)', () => {
 		assert.throws(() => new NodeVM({
 			timeout: 10
 		}).run("while (true) {}"), /Script execution timed out\./);
-
-		done();
 	})
 
-	after(done => {
+	after(() => {
 		vm = null;
-
-		done();
 	})
 })
 
 describe('modules', () => {
-	it('require json', done => {
+	it('require json', () => {
 		let vm = new NodeVM({
 			require: {
 				external: true
@@ -513,11 +450,9 @@ describe('modules', () => {
 		})
 
 		assert.equal(vm.run(`module.exports = require('${__dirname}/data/json.json')`).working, true);
-
-		done();
 	})
 
-	it.skip('run coffee-script', done => {
+	it.skip('run coffee-script', () => {
 		let vm = new NodeVM({
 			require: {
 				external: true
@@ -526,19 +461,15 @@ describe('modules', () => {
 		})
 
 		assert.equal(vm.run("module.exports = working: true").working, true);
-
-		done();
 	})
 
-	it('disabled require', done => {
+	it('disabled require', () => {
 		let vm = new NodeVM;
 
 		assert.throws(() => vm.run("require('fs')"), /Access denied to require 'fs'/);
-
-		done();
 	})
 
-	it('disable setters on builtin modules', done => {
+	it('disable setters on builtin modules', () => {
 		let vm = new NodeVM({
 			require: {
 				builtin: ['fs']
@@ -564,11 +495,9 @@ describe('modules', () => {
 			assert.equal(err.message, '\'deleteProperty\' on proxy: trap returned falsish for property \'readFileSync\'');
 			return true;
 		})
-
-		done();
 	})
 
-	it('enabled require for certain modules', done => {
+	it('enabled require for certain modules', () => {
 		let vm = new NodeVM({
 			require: {
 				builtin: ['fs']
@@ -576,11 +505,9 @@ describe('modules', () => {
 		})
 
 		assert.doesNotThrow(() => vm.run("require('fs')"));
-
-		done();
 	})
 
-	it('require relative', done => {
+	it('require relative', () => {
 		let vm = new NodeVM({
 			require: {
 				external: true
@@ -588,11 +515,9 @@ describe('modules', () => {
 		})
 
 		vm.run("require('foobar')", __filename);
-
-		done();
 	})
 
-	it('arguments attack', done => {
+	it('arguments attack', () => {
 		let vm = new NodeVM;
 
 		assert.throws(() => vm.run("module.exports = function fce(msg) { return arguments.callee.caller.toString(); }")(), /Cannot read property 'toString' of null/);
@@ -600,8 +525,6 @@ describe('modules', () => {
 		vm = new NodeVM;
 
 		assert.throws(() => vm.run("module.exports = function fce(msg) { return fce.caller.toString(); }")(), /Cannot read property 'toString' of null/);
-
-		done();
 	})
 
 	it('builtin module arguments attack', done => {
@@ -618,7 +541,7 @@ describe('modules', () => {
 		vm.run("var fs = require('fs'); fs.exists(parentfilename, function() {try {arguments.callee.caller.toString()} catch (err) {return done();}; done(new Error('Missing expected exception'))})");
 	})
 
-	it('path attack', done => {
+	it('path attack', () => {
 		let vm = new NodeVM({
 			require: {
 				external: true,
@@ -627,11 +550,9 @@ describe('modules', () => {
 		})
 
 		assert.throws(() => vm.run("var test = require('../package.json')", __filename), /Module '\.\.\/package.json' is not allowed to be required\. The path is outside the border!/);
-
-		done();
 	})
 
-	it('process events', done => {
+	it('process events', () => {
 		let vm = new NodeVM({
 			sandbox: {
 				VM2_COUNTER: 0
@@ -645,8 +566,6 @@ describe('modules', () => {
 		vm.run("process.removeListener('exit', VM2_HANDLER);");
 		process.emit('exit');
 		assert.strictEqual(sandbox.VM2_COUNTER, 1);
-
-		done();
 	})
 
 	it('timers', done => {
@@ -664,7 +583,7 @@ describe('modules', () => {
 		})
 	})
 
-	it('mock', done => {
+	it('mock', () => {
 		let vm = new NodeVM({
 			require: {
 				mock: {
@@ -677,13 +596,11 @@ describe('modules', () => {
 
 		assert.strictEqual(vm.run("module.exports = require('fs').constructor.constructor === Function"), true);
 		assert.strictEqual(vm.run("module.exports = require('fs').readFileSync()"), 'Nice try!');
-
-		done();
 	})
 })
 
 describe('nesting', () => {
-	it('NodeVM', done => {
+	it('NodeVM', () => {
 		let vm = new NodeVM({
 			nesting: true
 		})
@@ -696,49 +613,41 @@ describe('nesting', () => {
 		`, 'vm.js');
 
 		assert.strictEqual(nestedObject.constructor.constructor === Function, true);
-
-		done();
 	})
 })
 
 describe('wrappers', () => {
-	it('none', done => {
+	it('none', () => {
 		let vm = new NodeVM({
 			wrapper: 'none'
 		})
 		
 		assert.strictEqual(vm.run('return 2 + 2'), 4)
-
-		done()
 	})
 })
 
 describe('precompiled scripts', () => {
-	it('VM', done => {
+	it('VM', () => {
 		let vm = new VM();
 		let script = new VMScript("Math.random()");
 		let val1 = vm.run(script);
 		let val2 = vm.run(script);
 		assert.ok('number' === typeof val1 && 'number' === typeof val2);
 		assert.ok( val1 != val2);
-
-		done()
 	})
 	
-	it('NodeVM', done => {
+	it('NodeVM', () => {
 		let vm = new NodeVM();
 		let script = new VMScript("module.exports = Math.random()");
 		let val1 = vm.run(script);
 		let val2 = vm.run(script);
 		assert.ok('number' === typeof val1 && 'number' === typeof val2);
 		assert.ok( val1 != val2);
-
-		done()
 	})
 })
 
-describe('read-only contextified items', () => {
-	it('without read-only', done => {
+describe('freeze, protect', () => {
+	it('without freeze', () => {
 		let x = {
 			a: () => 'a',
 			b: () => 'b',
@@ -755,11 +664,9 @@ describe('read-only contextified items', () => {
 		assert.strictEqual(x.a(), '-');
 		assert.strictEqual(x.b(), '--');
 		assert.strictEqual(x.c.d(), '---');
-
-		done()
 	})
 
-	it('with read-only', done => {
+	it('with freeze', () => {
 		let x = VM.freeze({
 			a: () => 'a',
 			b: () => 'b',
@@ -783,7 +690,24 @@ describe('read-only contextified items', () => {
 		assert.throws(() => {
 			vm.run('x.c.d = () => { return `---` };');
 		}, /Object is read-only\./);
+	})
 
-		done()
+	it('without protect', () => {
+		let vm = new VM(), obj = {};
+		vm.run('(i) => { i.text = "test" }')(obj);
+		vm.run('(i) => { i.func = () => {} }')(obj);
+		vm.run('(i) => { delete i.func }')(obj);
+	})
+
+	it('with protect', () => {
+		let vm = new VM(), obj = {};
+		
+		vm.run('(i) => { i.text = "test" }')(obj);
+
+		assert.throws(() => {
+			vm.run('(i) => { i.func = () => {} }')(VM.protect(obj));
+		}, /Assigning a function to protected object is prohibited\./);
+
+		vm.run('(i) => { delete i.func }')(VM.protect(obj));
 	})
 })

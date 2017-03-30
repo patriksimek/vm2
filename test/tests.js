@@ -667,17 +667,16 @@ describe('freeze, protect', () => {
 	})
 
 	it('with freeze', () => {
-		let x = VM.freeze({
+		let x = {
 			a: () => 'a',
 			b: () => 'b',
 			c: {
 				d: () => 'd'
 			}
-		});
+		};
 
-		let vm = new VM({
-			sandbox: {x}
-		});
+		let vm = new VM();
+		vm.freeze(x, 'x');
 
 		assert.throws(() => {
 			vm.run('"use strict"; x.a = () => { return `-` };');
@@ -713,14 +712,29 @@ describe('freeze, protect', () => {
 			date: new Date(),
 			array: [{},{}]
 		};
-		
-		vm.run('(i) => { i.text = "test" }')(obj);
 
-		VM.protect(obj);
+		vm.protect(obj);
+
+		vm.run('(i) => { i.func = () => {} }')(obj);
+		assert.strictEqual(typeof obj.func, 'undefined');
 
 		assert.throws(() => {
-			vm.run('(i) => { i.func = () => {} }')(obj);
-		}, /Assigning a function to protected object is prohibited\./);
+			vm.run('"use strict"; (i) => { i.func = () => {} }')(obj);
+		});
+
+		vm.run('(i) => { i.array.func = () => {} }')(obj);
+		assert.strictEqual(typeof obj.array.func, 'undefined');
+
+		assert.throws(() => {
+			vm.run('"use strict"; (i) => { i.array.func = () => {} }')(obj);
+		});
+
+		vm.run('(i) => { i.array[0].func = () => {} }')(obj);
+		assert.strictEqual(typeof obj.array[0].func, 'undefined');
+
+		assert.throws(() => {
+			vm.run('"use strict"; (i) => { i.array[0].func = () => {} }')(obj);
+		});
 
 		assert.strictEqual(vm.run('(i) => i.array.map(item => 1).join(",")')(obj), '1,1');
 		assert.strictEqual(vm.run('(i) => /x/.test(i.date)')(obj), false);

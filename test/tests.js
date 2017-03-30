@@ -680,16 +680,25 @@ describe('freeze, protect', () => {
 		});
 
 		assert.throws(() => {
-			vm.run('x.a = () => { return `-` };');
-		}, /Object is read-only\./);
+			vm.run('"use strict"; x.a = () => { return `-` };');
+		}, /'set' on proxy: trap returned falsish for property 'a'/);
 
 		assert.throws(() => {
-			vm.run('(y) => { y.b = () => { return `--` } }')(x);
-		}, /Object is read-only\./);
+			vm.run('"use strict"; (y) => { y.b = () => { return `--` } }')(x);
+		}, /'set' on proxy: trap returned falsish for property 'b'/);
 
 		assert.throws(() => {
-			vm.run('x.c.d = () => { return `---` };');
-		}, /Object is read-only\./);
+			vm.run('"use strict"; x.c.d = () => { return `---` };');
+		}, /'set' on proxy: trap returned falsish for property 'd'/);
+
+		vm.run('x.a = () => { return `-` };');
+		assert.strictEqual(x.a(), 'a');
+
+		vm.run('(y) => { y.b = () => { return `--` } }')(x);
+		assert.strictEqual(x.b(), 'b');
+
+		vm.run('x.c.d = () => { return `---` };');
+		assert.strictEqual(x.c.d(), 'd');
 	})
 
 	it('without protect', () => {
@@ -700,14 +709,20 @@ describe('freeze, protect', () => {
 	})
 
 	it('with protect', () => {
-		let vm = new VM(), obj = {};
+		let vm = new VM(), obj = {
+			date: new Date(),
+			array: [{},{}]
+		};
 		
 		vm.run('(i) => { i.text = "test" }')(obj);
 
+		VM.protect(obj);
+
 		assert.throws(() => {
-			vm.run('(i) => { i.func = () => {} }')(VM.protect(obj));
+			vm.run('(i) => { i.func = () => {} }')(obj);
 		}, /Assigning a function to protected object is prohibited\./);
 
-		vm.run('(i) => { delete i.func }')(VM.protect(obj));
+		assert.strictEqual(vm.run('(i) => i.array.map(item => 1).join(",")')(obj), '1,1');
+		assert.strictEqual(vm.run('(i) => /x/.test(i.date)')(obj), false);
 	})
 })

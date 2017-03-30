@@ -231,9 +231,9 @@ process.on('uncaughtException', (err) => {
 })
 ```
 
-## Read-only objects
+## Read-only objects (experimental)
 
-To prevent sandboxed script to add/change/delete properties to/from the proxied objects, you can use `VM.freeze`/`NodeVM.freeze` methods to make the object read-only. Rather than freezing the object itself (like builtin `Object.freeze` method does) it creates a new proxy so the original object remains untouched.
+To prevent sandboxed script to add/change/delete properties to/from the proxied objects, you can use `VM.freeze`/`NodeVM.freeze` methods to make the object read-only. This is only effective inside VM. Frozen objects are affected deeply.
 
 **Example without using `VM.freeze`:**
 
@@ -253,12 +253,18 @@ console.log(util.add(1, 1)); // returns 0
 **Example with using `VM.freeze`:**
 
 ```javascript
+VM.freeze(util);
+
 const vm = new VM({
-	sandbox: {util: VM.freeze(util)}
+	sandbox: {util}
 });
 
 vm.run('util.add = (a, b) => a - b'); // throws Object is read-only.
 ```
+
+## Protected objects (experimental)
+
+Unlike `freeze`, this method allows sandboxed script to add/modify/delete properties on object with one exception - it is not possible to attach functions. Sandboxed script is therefore not able to modify methods like `toJSON`, `toString` or `inspect`.
 
 ## Cross-sandbox relationships
 

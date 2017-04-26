@@ -91,7 +91,7 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 
 * `timeout` - Script timeout in milliseconds.
 * `sandbox` - VM's global object.
-* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function.
+* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function. The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
 
 **IMPORTANT**: Timeout is only effective on code you run through `run`. Timeout is NOT effective on any method returned by VM.
 
@@ -122,7 +122,7 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 
 * `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`).
 * `sandbox` - VM's global object.
-* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function.
+* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function. The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
 * `require` - `true` or object to enable `require` method (default: `false`).
 * `require.external` - `true` to enable `require` of external modules (default: `false`).
 * `require.builtin` - Array of allowed builtin modules (default: none).

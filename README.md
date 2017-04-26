@@ -53,19 +53,19 @@ vm.run(`process.exit()`); // TypeError: process.exit is not a function
 ```javascript
 const {NodeVM} = require('vm2');
 const vm = new NodeVM({
-	require: {
-		external: true
-	}
+    require: {
+        external: true
+    }
 });
 
 vm.run(`
-	var request = require('request');
-	request('http://www.google.com', function (error, response, body) {
-		console.error(error);
-		if (!error && response.statusCode == 200) {
-			console.log(body) // Show the HTML for the Google homepage.
-		}
-	})
+    var request = require('request');
+    request('http://www.google.com', function (error, response, body) {
+        console.error(error);
+        if (!error && response.statusCode == 200) {
+            console.log(body) // Show the HTML for the Google homepage.
+        }
+    })
 `, 'vm.js');
 ```
 
@@ -141,16 +141,16 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 const {NodeVM} = require('vm2');
 
 const vm = new NodeVM({
-	console: 'inherit',
+    console: 'inherit',
     sandbox: {},
     require: {
         external: true,
         builtin: ['fs', 'path'],
         root: "./",
         mock: {
-	        fs: {
-		        readFileSync() { return 'Nice try!'; }
-	        }
+            fs: {
+                readFileSync() { return 'Nice try!'; }
+            }
         }
     }
 });
@@ -164,7 +164,7 @@ functionInSandbox('world');
 
 let functionWithCallbackInSandbox = vm.run("module.exports = function(who, callback) { callback('hello '+ who); }");
 functionWithCallbackInSandbox('world', (greeting) => {
-	console.log(greeting);
+    console.log(greeting);
 });
 ```
 
@@ -216,19 +216,19 @@ Errors in code compilation and synchronous code execution can be handled by `try
 
 ```javascript
 try {
-	var script = new VMScript("Math.random()").compile();
+    var script = new VMScript("Math.random()").compile();
 } catch (err) {
-	console.error('Failed to compile script.', err);
+    console.error('Failed to compile script.', err);
 }
 
 try {
-	vm.run(script);
+    vm.run(script);
 } catch (err) {
-	console.error('Failed to execute script.', err);
+    console.error('Failed to execute script.', err);
 }
 
 process.on('uncaughtException', (err) => {
-	console.error('Asynchronous error caught.', err);
+    console.error('Asynchronous error caught.', err);
 })
 ```
 
@@ -240,11 +240,11 @@ To prevent sandboxed script to add/change/delete properties to/from the proxied 
 
 ```javascript
 const util = {
-	add: (a, b) => a + b
+    add: (a, b) => a + b
 }
 
 const vm = new VM({
-	sandbox: {util}
+    sandbox: {util}
 });
 
 vm.run('util.add = (a, b) => a - b');
@@ -276,9 +276,9 @@ const assert = require('assert');
 const {VM} = require('vm2');
 
 const sandbox = {
-	object: new Object(),
-	func: new Function(),
-	buffer: new Buffer([0x01, 0x05])
+    object: new Object(),
+    func: new Function(),
+    buffer: new Buffer([0x01, 0x05])
 }
 
 const vm = new VM({sandbox});

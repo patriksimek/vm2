@@ -85,7 +85,7 @@ vm.run(`
 
 ## VM
 
-VM is a simple sandbox, without `require` feature, to synchronously run an untrusted code. Only JavaScript built-in objects + Buffer are available.
+VM is a simple sandbox, without `require` feature, to run an untrusted code. Only JavaScript built-in objects + Buffer are available.
 
 **Options:**
 

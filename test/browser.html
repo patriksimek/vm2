@@ -1,0 +1,84 @@
+<html>
+<head>
+	<meta charset="utf-8">
+	<title>Mocha Tests</title>
+	<meta http-equiv="x-ua-compatible" content="IE=Edge">
+	<link rel="stylesheet" href="../node_modules/mocha/mocha.css" />
+</head>
+<body>
+	<div id="mocha"></div>
+	<script type="text/javascript">
+		window.require = (pkg) => {
+			if (pkg === '..') return vm2;
+			if (pkg === 'assert') {
+				return {
+					equal(a, b) {
+						if (a != b) {
+						var err = new Error("Assertion:\nGot: '"+ a +"'\nExp: '"+ b +"'\n");
+						err.actial = a;
+						err.expected = b;
+						err.operator = '=='
+						throw err;
+						}
+					},
+					strictEqual(a, b) {
+						if (a !== b) {
+						var err = new Error("Assertion:\nGot: '"+ a +"'\nExp: '"+ b +"'\n");
+						err.actial = a;
+						err.expected = b;
+						err.operator = '==='
+						throw err;
+						}
+					},
+					ok(a) {
+						return a !== false && a !== null && a !== undefined;
+					},
+					throws(block, expected, message) {
+						if (typeof expected === 'string') {
+							message = expected;
+							expected = undefined;
+						}
+
+						try {
+							block();
+						} catch (err) {
+							if (typeof expected === 'function') {
+								if (expected(err) !== true) throw new Error(`Missing expected exception${message ? (': '+ message) : '.'}`);
+							} else if (expected && !expected.test(err.message)) {
+								throw new Error(`Missing expected exception${message ? (': '+ message) : '.'}`);
+							}
+							return;
+						}
+						throw new Error(`Missing expected exception${message ? (': '+ message) : '.'}`);
+					},
+					doesNotThrow(block, expected, message) {
+						if (typeof expected === 'string') {
+							message = expected;
+							expected = undefined;
+						}
+
+						try {
+							block();
+						} catch (err) {
+							if (typeof expected === 'function') {
+								if (expected(err) === true) throw new Error(`Got unwanted exception${message ? (': '+ message) : '.'}`);
+							} else if (!expected || expected.test(err.message)) {
+								throw new Error(`Got unwanted exception${message ? (': '+ message) : '.'}`);
+							}
+						}
+					}
+				}
+			}
+		}
+	</script>
+	<script src="../node_modules/mocha/mocha.js"></script>
+	<script src="../dist/vm2.js"></script>
+	<script>mocha.setup('bdd')</script>
+	<script src="tests.js"></script>
+	<script>
+		mocha.checkLeaks();
+		mocha.globals(['vm2']);
+		mocha.run();
+	</script>
+</body>
+</html>

@@ -13,7 +13,7 @@
     "alcatraz",
     "contextify"
   ],
-  "version": "3.4.6",
+  "version": "3.5.0",
   "main": "index.js",
   "repository": {
     "type": "git",
@@ -22,13 +22,15 @@
   "license": "MIT",
   "dependencies": {},
   "devDependencies": {
-    "mocha": "^2.0.0"
+    "mocha": "^3.0.0",
+    "uglify-es": "^3.0.27"
   },
   "engines": {
     "node": ">=6.0"
   },
   "scripts": {
-    "test": "mocha test"
+    "test": "mocha test",
+    "prepublish": "node build/dist.js && uglifyjs --output dist/vm2.min.js --comments /^!/ -- dist/vm2.js"
   },
   "bin": {
     "vm2": "./bin/vm2"

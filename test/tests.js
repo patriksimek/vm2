@@ -1,5 +1,7 @@
+const global = this;
 const assert = require("assert");
 const {NodeVM, VM, VMScript} = require('..');
+const NODEJS = Object.prototype.toString.call(global) !== '[object Window]'
 
 global.isVM = false;
 
@@ -27,7 +29,7 @@ describe('contextify', () => {
 			booleanO: new Boolean(true),
 			date: new Date(),
 			regexp: /xxx/,
-			buffer: new Buffer([0x00, 0x01]),
+			buffer: NODEJS ? new Buffer([0x00, 0x01]) : undefined,
 			"function"() { return () => ({}) },
 			object: {
 				x: 1,
@@ -84,7 +86,7 @@ describe('contextify', () => {
 		assert.strictEqual(vm.run("test.object.valueOf().y.constructor instanceof Function"), true);
 		assert.strictEqual(vm.run("test.object.valueOf().y.constructor('return (function(){return this})().isVM')()"), true);
 
-		let o = vm.run("let x = {a: test.date, b: test.date};x");
+		let o = vm.run("var x = {a: test.date, b: test.date};x");
 		assert.strictEqual(vm.run("x.valueOf().a instanceof Date"), true);
 		assert.strictEqual(o instanceof Object, true);
 		assert.strictEqual(o.a instanceof Date, true);
@@ -131,7 +133,9 @@ describe('contextify', () => {
 		assert.strictEqual(vm.run("test.regexp instanceof RegExp"), true);
 	})
 
-	it('buffer', () => {
+	it('buffer', function() {
+		if (!NODEJS) return this.skip();
+		
 		assert.strictEqual(vm.run("test.buffer.inspect()"), '<Buffer 00 01>', '#1');
 		assert.strictEqual(vm.run("test.buffer instanceof Buffer"), true, '#2');
 		assert.strictEqual(vm.run("test.buffer") instanceof Buffer, true, '#3');
@@ -208,7 +212,9 @@ describe('contextify', () => {
 		assert.strictEqual(vm.run("Symbol.keyFor(test.symbol2)"), 'foo');
 	})
 
-	it('error', () => {
+	it('error', function() {
+		if (!NODEJS) return this.skip();
+
 		assert.strictEqual(vm.run("Object.getOwnPropertyDescriptor(test.error, 'stack').get.constructor === Function;"), true);
 	})
 
@@ -256,7 +262,9 @@ describe('VM', () => {
 		})
 	})
 
-	it('timeout', () => {
+	it('timeout', function() {
+		if (!NODEJS) return this.skip();
+
 		assert.throws(() => new VM({
 			timeout: 10
 		}).run("while (true) {}"), /Script execution timed out\./);
@@ -315,12 +323,14 @@ describe('VM', () => {
 				throw new Error('Shouldnt be there.');
 			};(function(text) {})
 		`)(new String('asdf')), '#6');
-
-		assert.doesNotThrow(() => vm2.run(`
-			global.Buffer = function(value) {
-				throw new Error('Shouldnt be there.');
-			};(function(value) {})
-		`)(new Buffer(1)), '#7');
+		
+		if (NODEJS) {
+			assert.doesNotThrow(() => vm2.run(`
+				global.Buffer = function(value) {
+					throw new Error('Shouldnt be there.');
+				};(function(value) {})
+			`)(new Buffer(1)), '#7');
+		}
 	})
 
 	it('various attacks #2', () => {
@@ -403,7 +413,9 @@ describe('VM', () => {
 describe('NodeVM', () => {
 	let vm;
 
-	before(() => {
+	before(function() {
+		if (!NODEJS) return this.skip();
+
 		vm = new NodeVM;
 	})
 
@@ -441,7 +453,11 @@ describe('NodeVM', () => {
 	})
 })
 
-describe('modules', () => {
+describe('NodeVM modules', () => {
+	before(function() {
+		if (!NODEJS) return this.skip();
+	})
+
 	it('require json', () => {
 		let vm = new NodeVM({
 			require: {
@@ -599,8 +615,24 @@ describe('modules', () => {
 	})
 })
 
+describe('wrappers', () => {
+	before(function() {
+		if (!NODEJS) return this.skip();
+	})
+
+	it('none', () => {
+		let vm = new NodeVM({
+			wrapper: 'none'
+		})
+		
+		assert.strictEqual(vm.run('return 2 + 2'), 4)
+	})
+})
+
 describe('nesting', () => {
-	it('NodeVM', () => {
+	it('NodeVM', function() {
+		if (!NODEJS) return this.skip();
+
 		let vm = new NodeVM({
 			nesting: true
 		})
@@ -616,16 +648,6 @@ describe('nesting', () => {
 	})
 })
 
-describe('wrappers', () => {
-	it('none', () => {
-		let vm = new NodeVM({
-			wrapper: 'none'
-		})
-		
-		assert.strictEqual(vm.run('return 2 + 2'), 4)
-	})
-})
-
 describe('precompiled scripts', () => {
 	it('VM', () => {
 		let vm = new VM();
@@ -636,7 +658,9 @@ describe('precompiled scripts', () => {
 		assert.ok( val1 != val2);
 	})
 	
-	it('NodeVM', () => {
+	it('NodeVM', function() {
+		if (!NODEJS) return this.skip();
+
 		let vm = new NodeVM();
 		let script = new VMScript("module.exports = Math.random()");
 		let val1 = vm.run(script);

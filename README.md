@@ -122,7 +122,7 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 
 * `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`).
 * `sandbox` - VM's global object.
-* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function. The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
+* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's filepath). The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
 * `require` - `true` or object to enable `require` method (default: `false`).
 * `require.external` - `true` to enable `require` of external modules (default: `false`).
 * `require.builtin` - Array of allowed builtin modules (default: none).

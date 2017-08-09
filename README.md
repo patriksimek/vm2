@@ -122,10 +122,10 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 
 * `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`).
 * `sandbox` - VM's global object.
-* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function. The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
+* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's filepath). The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
 * `require` - `true` or object to enable `require` method (default: `false`).
 * `require.external` - `true` to enable `require` of external modules (default: `false`).
-* `require.builtin` - Array of allowed builtin modules (default: none).
+* `require.builtin` - Array of allowed builtin modules, accepts ["*"] for all (default: none).
 * `require.root` - Restricted path where local modules can be required (default: every path).
 * `require.mock` - Collection of mock modules (both external or builtin).
 * `require.context` - `host` (default) to require modules in host and proxy them to sandbox. `sandbox` to load, compile and require modules in sandbox. Builtin modules except `events` always required in host and proxied to sandbox.

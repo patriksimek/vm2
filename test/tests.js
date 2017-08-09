@@ -463,6 +463,31 @@ describe('modules', () => {
 		assert.equal(vm.run("module.exports = working: true").working, true);
 	})
 
+	it('optionally can run a custom compiler function', () => {
+		var ranCustomCompiler = false
+		const scriptCode = 'var a = 1;'
+		let vm = new NodeVM({
+			compiler: (code) => {
+				ranCustomCompiler = true
+				assert.equal(code, scriptCode)
+			}
+		})
+		vm.run(scriptCode)
+		assert.equal(ranCustomCompiler, true);
+	})
+
+	it('optionally passes a filename to a custom compiler function', () => {
+		var ranCustomCompiler = false
+		let vm = new NodeVM({
+			compiler: (code, filename) => {
+				ranCustomCompiler = true
+				assert.equal(filename, '/a/b/c.js')
+			}
+		})
+		vm.run("module.exports = working: true", '/a/b/c.js')
+		assert.equal(ranCustomCompiler, true);
+	})
+
 	it('disabled require', () => {
 		let vm = new NodeVM;
 

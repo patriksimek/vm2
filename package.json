@@ -32,5 +32,6 @@
   },
   "bin": {
     "vm2": "./bin/vm2"
-  }
+  },
+  "types": "index.d.ts"
 }

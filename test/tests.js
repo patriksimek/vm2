@@ -536,7 +536,7 @@ describe('modules', () => {
 		let vm = new NodeVM({
 			require: {
 				external: true
-			}
+			},
 		})
 
 		vm.run("require('foobar')", __filename);
@@ -556,7 +556,7 @@ describe('modules', () => {
 		let vm = new NodeVM({
 			require: {
 				external: false
-			}
+			},
 		})
 
 		assert.throws(() => vm.run("require('mocha')", __filename), err => {
@@ -803,5 +803,29 @@ describe('freeze, protect', () => {
 
 		assert.strictEqual(vm.run('(i) => i.array.map(item => 1).join(",")')(obj), '1,1');
 		assert.strictEqual(vm.run('(i) => /x/.test(i.date)')(obj), false);
+	})
+})
+
+describe('source extensions', () => {
+	it('does not find a TS module with the default settings', () => {
+		let vm = new NodeVM({
+			require: {
+				external: true
+			}
+		})
+		assert.throws(() => {
+			vm.run("require('./data/custom_extension')", __filename);
+		})
+	})
+
+it('finds a TS module with source extensions set', () => {
+		let vm = new NodeVM({
+			require: {
+				external: true
+			},
+			sourceExtensions: ["ts", "js"]
+		})
+
+		vm.run("require('./data/custom_extension')", __filename);
 	})
 })

@@ -542,6 +542,46 @@ describe('modules', () => {
 		vm.run("require('foobar')", __filename);
 	})
 
+	it('can require a module inside the vm', () => {
+		let vm = new NodeVM({
+			require: {
+				external: true
+			}
+		})
+
+		vm.run("require('mocha')", __filename);
+	})
+
+	it('can deny requiring modules inside the vm', () => {
+		let vm = new NodeVM({
+			require: {
+				external: false
+			}
+		})
+
+		assert.throws(() => vm.run("require('mocha')", __filename), err => {
+			assert.equal(err.name, 'VMError');
+			assert.equal(err.message, 'Access denied to require \'mocha\'');
+			return true;
+		})
+	})
+
+	it('can whitelist modules inside the vm', () => {
+		let vm = new NodeVM({
+			require: {
+				external: ['mocha']
+			}
+		})
+
+		assert.ok(vm.run("require('mocha')", __filename))
+		assert.throws(() => vm.run("require('unknown')", __filename), err => {
+			assert.equal(err.name, 'VMError');
+			assert.equal(err.message, "The module 'unknown' is not whitelisted in VM.");
+			return true;
+		})
+	})
+
+
 	it('arguments attack', () => {
 		let vm = new NodeVM;
 

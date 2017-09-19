@@ -13,7 +13,7 @@
     "alcatraz",
     "contextify"
   ],
-  "version": "3.4.6",
+  "version": "3.5.0",
   "main": "index.js",
   "repository": {
     "type": "git",
@@ -32,5 +32,6 @@
   },
   "bin": {
     "vm2": "./bin/vm2"
-  }
+  },
+  "types": "index.d.ts"
 }

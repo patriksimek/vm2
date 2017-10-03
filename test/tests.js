@@ -209,7 +209,7 @@ describe('contextify', () => {
 	})
 
 	it('error', () => {
-		assert.strictEqual(vm.run("Object.getOwnPropertyDescriptor(test.error, 'stack').get.constructor === Function;"), true);
+		assert.strictEqual(vm.run("test.error.constructor.constructor === Function;"), true);
 	})
 
 	after(() => {
@@ -393,6 +393,26 @@ describe('VM', () => {
 			if (!(Object.keys(boom) instanceof Array)) throw new Error('Shouldnt be there.');
 			if (!(Reflect.ownKeys(boom) instanceof Array)) throw new Error('Shouldnt be there.');
 		`));
+	})
+	
+	it('buffer attack', () => {
+		let vm2 = new VM();
+		
+		assert.strictEqual(vm2.run(`
+			new Buffer(100).toString('hex');
+		`), '00'.repeat(100), '#1');
+		
+		assert.strictEqual(vm2.run(`
+			Buffer.allocUnsafe(100).constructor.constructor === Function;
+		`), true, '#2');
+		
+		assert.strictEqual(vm2.run(`
+			Buffer.allocUnsafe(100).toString('hex');
+		`), '00'.repeat(100), '#3');
+		
+		assert.strictEqual(vm2.run(`
+			class MyBuffer extends Buffer {}; new MyBuffer(100).toString('hex');
+			`), '00'.repeat(100), '#4');
 	})
 
 	after(() => {
@@ -660,6 +680,7 @@ describe('modules', () => {
 		})
 
 		assert.strictEqual(vm.run("module.exports = require('fs').constructor.constructor === Function"), true);
+		assert.strictEqual(vm.run("module.exports = require('fs').readFileSync.constructor.constructor === Function"), true);
 		assert.strictEqual(vm.run("module.exports = require('fs').readFileSync()"), 'Nice try!');
 	})
 })

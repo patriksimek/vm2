@@ -93,7 +93,7 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 * `sandbox` - VM's global object.
 * `compiler` - `javascript` (default) or `coffeescript` or custom compiler function. The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
 
-**IMPORTANT**: Timeout is only effective on code you run through `run`. Timeout is NOT effective on any method returned by VM.
+**IMPORTANT**: Timeout is only effective on synchronous code you run through `run`. Timeout is NOT effective on any method returned by VM.
 
 ```javascript
 const {VM} = require('vm2');

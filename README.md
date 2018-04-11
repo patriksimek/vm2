@@ -263,7 +263,7 @@ console.log(util.add(1, 1)); // returns 2
 
 **IMPORTANT:** It is not possible to freeze objects that has already been proxied to the VM.
 
-## Protected objects (experimental)
+## Protected objects (experimental)
 
 Unlike `freeze`, this method allows sandboxed script to add/modify/delete properties on object with one exception - it is not possible to attach functions. Sandboxed script is therefore not able to modify methods like `toJSON`, `toString` or `inspect`.
 

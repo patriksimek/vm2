@@ -41,6 +41,9 @@ export interface VMOptions {
    * Timeout is NOT effective on any method returned by VM.
    */
   timeout?: number;
+
+  /** File extensions that the internal module resolver should accept. */
+  sourceExtensions?: string[]
 }
 
 /**

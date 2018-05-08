@@ -68,7 +68,7 @@ export class NodeVM {
   /** Runs the code */
   run(js: string, path: string): any;
   /** Runs the VMScript object */
-  run(script: VMScript): any;
+  run(script: VMScript, path?: string): any;
 
   /** Freezes the object inside VM making it read-only. Not available for primitive values. */
   freeze(object: any, name: string): any;
@@ -118,7 +118,7 @@ export class VM {
  * to any VM (context); rather, it is bound before each run, just for that run.
  */
 export class VMScript {
-  constructor(code: string, path: string);
+  constructor(code: string, path?: string);
   /** Wraps the code */
   wrap(prefix: string, postfix: string): VMScript;
   /** Compiles the code. If called multiple times, the code is only compiled once. */

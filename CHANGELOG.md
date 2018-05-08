@@ -1,3 +1,11 @@
+v3.5.2 (2017-10-04)
+-------------------
+[fix] Prevent slow unsafe alloc for Buffers
+
+v3.5.1 (2017-10-04)
+-------------------
+[fix] Prevent unsafe alloc for Buffers
+
 v3.5.0 (2017-08-31)
 -------------------
 [new] Allow a custom compiler to recieve the filetype (Orta Therox)

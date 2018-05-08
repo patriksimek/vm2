@@ -93,7 +93,7 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 * `sandbox` - VM's global object.
 * `compiler` - `javascript` (default) or `coffeescript` or custom compiler function. The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
 
-**IMPORTANT**: Timeout is only effective on code you run through `run`. Timeout is NOT effective on any method returned by VM.
+**IMPORTANT**: Timeout is only effective on synchronous code you run through `run`. Timeout is NOT effective on any method returned by VM.
 
 ```javascript
 const {VM} = require('vm2');
@@ -264,7 +264,7 @@ console.log(util.add(1, 1)); // returns 2
 
 **IMPORTANT:** It is not possible to freeze objects that has already been proxied to the VM.
 
-## Protected objects (experimental)
+## Protected objects (experimental)
 
 Unlike `freeze`, this method allows sandboxed script to add/modify/delete properties on object with one exception - it is not possible to attach functions. Sandboxed script is therefore not able to modify methods like `toJSON`, `toString` or `inspect`.
 

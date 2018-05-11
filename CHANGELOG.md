@@ -1,3 +1,11 @@
+v3.6.0 (2018-05-11)
+-------------------
+[new] Support for custom source extensions
+[new] WIP support for disallowing Promise
+[fix] Prevent slow unsafe alloc for Buffers
+[fix] Refactors around defaults
+[fix] Types definition update
+
 v3.5.2 (2017-10-04)
 -------------------
 [fix] Prevent slow unsafe alloc for Buffers

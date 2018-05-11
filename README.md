@@ -322,13 +322,20 @@ $ vm2 ./script.js
 
 * It is not possible to define class that extends proxied class.
 
+## Deployment
+
+1. Update the CHANGELOG
+2. Update the `package.json` version number
+3. Commit the changes
+4. Run `npm publish`
+
 ## Sponsors
 
 Development is sponsored by [Integromat](https://www.integromat.com).
 
 ## License
 
-Copyright (c) 2014-2017 Patrik Simek
+Copyright (c) 2014-2018 Patrik Simek
 
 The MIT License
 

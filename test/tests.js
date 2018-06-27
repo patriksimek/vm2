@@ -651,6 +651,12 @@ describe('modules', () => {
 		vm.run("process.removeListener('exit', VM2_HANDLER);");
 		process.emit('exit');
 		assert.strictEqual(sandbox.VM2_COUNTER, 1);
+
+		process.on('exit', () => {}); // Attach event in host
+		assert.strictEqual(process.listeners('exit').length, 1); // Sandbox must only see it's own handlers
+
+		let vmm = new NodeVM({});
+		assert.strictEqual(vmm.run("module.exports = process.listeners('exit')").length, 0); // Listeners must not be visible cross-sandbox
 	})
 
 	it('timers', done => {

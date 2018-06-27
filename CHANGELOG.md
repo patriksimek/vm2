@@ -1,3 +1,7 @@
+v3.6.1 (2018-06-27)
+-------------------
+[fix] Security fixes
+
 v3.6.0 (2018-05-11)
 -------------------
 [new] Support for custom source extensions

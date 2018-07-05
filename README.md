@@ -1,4 +1,4 @@
-# vm2 [![NPM Version][npm-image]][npm-url] [![NPM Downloads][downloads-image]][downloads-url] [![Package Quality][quality-image]][quality-url] [![Travis CI][travis-image]][travis-url]
+# vm2 [![NPM Version][npm-image]][npm-url] [![NPM Downloads][downloads-image]][downloads-url] [![Package Quality][quality-image]][quality-url] [![Travis CI][travis-image]][travis-url] [![Known Vulnerabilities][snyk-image]][snyk-url]
 
 vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules. Securely!
 
@@ -353,3 +353,6 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 [quality-url]: http://packagequality.com/#?package=vm2
 [travis-image]: https://img.shields.io/travis/patriksimek/vm2/master.svg?style=flat-square&label=unit
 [travis-url]: https://travis-ci.org/patriksimek/vm2
+
+[snyk-image]: https://snyk.io/test/github/patriksimek/vm2/badge.svg
+[snyk-url]: https://snyk.io/test/github/patriksimek/vm2

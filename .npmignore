@@ -3,4 +3,5 @@
 .svn
 .travis.yml
 /test.js
+/test
 .vscode

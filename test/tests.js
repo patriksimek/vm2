@@ -659,7 +659,7 @@ describe('modules', () => {
 		assert.strictEqual(vmm.run("module.exports = process.listeners('exit')").length, 0); // Listeners must not be visible cross-sandbox
 	})
 
-	it('timers', done => {
+	it('timers #1', done => {
 		let vm = new NodeVM({
 			sandbox: {
 				done
@@ -672,6 +672,21 @@ describe('modules', () => {
 			assert.strictEqual(vm.run('module.exports = global.TICK'), void 0);
 			vm.run('setImmediate(done);');
 		})
+	})
+
+	it('timers #2', done => {
+		const start = Date.now()
+		let vm = new NodeVM({
+			sandbox: {
+				done: (arg) => {
+					assert.strictEqual(arg, 1337);
+					assert.ok(Date.now() - start >= 200);
+					done()
+				}
+			}
+		})
+
+		vm.run('setTimeout((arg) => done(arg), 200, 1337);');
 	})
 
 	it('mock', () => {

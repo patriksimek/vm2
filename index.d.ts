@@ -1,3 +1,5 @@
+import {EventEmitter} from 'events';
+
 /**
  *  Require options for a VM
  */
@@ -63,7 +65,7 @@ export interface NodeVMOptions extends VMOptions {
 /**
  * A VM with behavior more similar to running inside Node.
  */
-export class NodeVM {
+export class NodeVM extends EventEmitter {
   constructor(options?: NodeVMOptions);
   /** Runs the code */
   run(js: string, path: string): any;

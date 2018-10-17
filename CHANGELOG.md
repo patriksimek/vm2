@@ -1,6 +1,11 @@
-v3.6.2 (2018-08-09)
+v3.6.4 (2018-10-17)
 -------------------
-[fix] Added new to vmwerror when trying to load coffeescipt but can't
+[fix] Added new to vmwerror when trying to load coffeescipt but can't (dotconnor)
+[fix] Add arguments to process.nextTick proxy (Patrick Engström)
+
+v3.6.3 (2018-08-06)
+-------------------
+[fix] Security fixes
 
 v3.6.2 (2018-07-05)
 -------------------

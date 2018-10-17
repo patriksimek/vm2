@@ -1,3 +1,7 @@
+v3.6.2 (2018-08-09)
+-------------------
+[fix] Added new to vmwerror when trying to load coffeescipt but can't
+
 v3.6.2 (2018-07-05)
 -------------------
 [fix] Security fixes

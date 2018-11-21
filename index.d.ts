@@ -28,7 +28,7 @@ export interface VMRequire {
 type CompilerFunction = (code: string, filename: string) => string;
 
 /**
- *  Options for creating a NodeVM
+ *  Options for creating a VM
  */
 export interface VMOptions {
   /** 
@@ -43,23 +43,22 @@ export interface VMOptions {
    * Timeout is NOT effective on any method returned by VM.
    */
   timeout?: number;
-
-  /** File extensions that the internal module resolver should accept. */
-  sourceExtensions?: string[]
 }
 
 /**
- *  Options specific o 
+ *  Options for creating a NodeVM 
  */
 export interface NodeVMOptions extends VMOptions {
   /** `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`). */
-  console?: "inherit" | "redirect";
+  console?: "inherit" | "redirect" | "off";
   /** `true` or an object to enable `require` optionss (default: `false`). */
   require?: true | VMRequire;
   /** `true` to enable VMs nesting (default: `false`). */
   nesting?: boolean;
   /** `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script. */
-  wrapper?: "commonjs" | "none";
+  wrapper?: "commonjs" | "none";  
+  /** File extensions that the internal module resolver should accept. */
+  sourceExtensions?: string[]
 }
 
 /**

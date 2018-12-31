@@ -414,6 +414,30 @@ describe('VM', () => {
 			class MyBuffer extends Buffer {}; new MyBuffer(100).toString('hex');
 			`), '00'.repeat(100), '#4');
 	})
+	
+	it('instanceof attack', () => {
+		// https://github.com/patriksimek/vm2/issues/174
+		
+		let vm2 = new VM({
+			sandbox: {
+				func: cb => cb()
+			}
+		});
+		
+		assert.throws(() => vm2.run(`
+			try {
+				func(() => {
+					throw new Proxy({}, {
+						getPrototypeOf: () => {
+							throw x => x.constructor.constructor("return process;")();
+						}
+					})
+				});
+			} catch(e) {
+				e({});
+			}
+		`), /process is not defined/, '#8');
+	})
 
 	after(() => {
 		vm = null;

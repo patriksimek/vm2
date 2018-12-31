@@ -1,3 +1,7 @@
+v3.6.5 (2018-12-31)
+-------------------
+[fix] Security fixes
+
 v3.6.4 (2018-10-17)
 -------------------
 [fix] Added new to vmwerror when trying to load coffeescipt but can't (dotconnor)

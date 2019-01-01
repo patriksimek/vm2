@@ -21,7 +21,7 @@
   "devDependencies": {
     "eslint": "^5.11.1",
     "eslint-config-integromat": "^1.5.0",
-    "mocha": "^2.0.0"
+    "mocha": "^5.2.0"
   },
   "engines": {
     "node": ">=6.0"

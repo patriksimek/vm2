@@ -412,7 +412,7 @@ describe('VM', () => {
 		
 		assert.strictEqual(vm2.run(`
 			class MyBuffer extends Buffer {}; new MyBuffer(100).toString('hex');
-			`), '00'.repeat(100), '#4');
+		`), '00'.repeat(100), '#4');
 	})
 	
 	it('instanceof attack', () => {
@@ -436,7 +436,21 @@ describe('VM', () => {
 			} catch(e) {
 				e({});
 			}
-		`), /process is not defined/, '#8');
+		`), /process is not defined/, '#1');
+	})
+
+	it('__defineGetter__ / __defineSetter__ attack', () => {
+		// https://github.com/patriksimek/vm2/issues/176
+
+		let vm2 = new VM();
+		
+		assert.throws(() => vm2.run(`
+			Buffer.prototype.__defineGetter__("toString", () => {});
+		`), /'defineProperty' on proxy: trap returned falsish for property 'toString'/, '#1');
+		
+		assert.strictEqual(vm2.run(`
+			global.__defineGetter__("test", () => 123); global.test;
+		`), 123, '#2');
 	})
 
 	after(() => {

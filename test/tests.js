@@ -524,6 +524,20 @@ describe('VM', () => {
 		`), /process is not defined/, '#2');
 	});
 
+	it('Object.create attack', () => {
+		// https://github.com/patriksimek/vm2/issues/178
+
+		const vm2 = new VM();
+
+		assert.throws(() => vm2.run(`
+			var oc = Object.create;
+			Object.create = (p,x)=> Object.defineProperty(oc(p,x),"get",{set(){},get:()=>(t,k,r)=>t.constructor("return process")()});
+			var process = Buffer.from.process;
+			Object.create = oc;
+			process.mainModule
+		`), /Cannot read property 'mainModule' of undefined/, '#1');
+	});
+
 	after(() => {
 		vm = null;
 	});

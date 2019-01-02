@@ -507,12 +507,21 @@ describe('VM', () => {
 
 		assert.throws(() => vm2.run(`
 			let process;
-			Object.prototype.has=(t,k)=>{
-				console.log(t.constructor("return process")().version);
+			Object.prototype.has = (t, k) => {
+				process = t.constructor("return process")();
 			}
 			"" in Buffer.from;
-			process.mainModule
+			process.mainModule;
 		`), /Cannot read property 'mainModule' of undefined/, '#1');
+
+		const vm22 = new VM();
+
+		assert.throws(() => vm22.run(`
+			Object.defineProperty(Object.prototype, "apply", {set:function(o,v){
+				delete Object.prototype.apply;
+			}});
+			Buffer.from("").constructor.constructor("return process")().mainModule;
+		`), /process is not defined/, '#2');
 	});
 
 	after(() => {

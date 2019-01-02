@@ -538,6 +538,27 @@ describe('VM', () => {
 		`), /Cannot read property 'mainModule' of undefined/, '#1');
 	});
 
+	it('function returned from construct attack', () => {
+		// https://github.com/patriksimek/vm2/issues/179
+
+		const vm2 = new VM({
+			sandbox: {
+				call: x => x.a(),
+				ctor: X => new X()
+			}
+		});
+
+		assert.throws(() => vm2.run(`
+			call({a:ctor(new Proxy(class A{},{
+				construct(){
+					return function(){
+						return Object.getPrototypeOf(this).constructor.constructor("return process")();
+					}
+				}
+			}))}).mainModule.require("child_process").execSync("id").toString()
+		`), /process is not defined/, '#1');
+	});
+
 	after(() => {
 		vm = null;
 	});

@@ -438,18 +438,14 @@ describe('VM', () => {
 		});
 
 		assert.throws(() => vm2.run(`
-			try {
-				func(() => {
-					throw new Proxy({}, {
-						getPrototypeOf: () => {
-							throw x => x.constructor.constructor("return process;")();
-						}
-					})
-				});
-			} catch(e) {
-				e({});
-			}
-		`), /process is not defined/, '#1');
+			func(() => {
+				throw new Proxy({}, {
+					getPrototypeOf: () => {
+						throw x => x.constructor.constructor("return process;")();
+					}
+				})
+			});
+		`), /Failed to decontextify object\./, '#1');
 	});
 
 	it('__defineGetter__ / __defineSetter__ attack', () => {
@@ -464,6 +460,44 @@ describe('VM', () => {
 		assert.strictEqual(vm2.run(`
 			global.__defineGetter__("test", () => 123); global.test;
 		`), 123, '#2');
+	});
+
+	it('contextifying a contextified value attack', () => {
+		// https://github.com/patriksimek/vm2/issues/175
+		// https://github.com/patriksimek/vm2/issues/177
+
+		const vm2 = new VM({
+			sandbox: {
+				ctor: X => new X(),
+				call: x => x()
+			}
+		});
+
+		// The Buffer.from("") is only used to get instance of object contextified from the host
+		assert.throws(() => vm2.run(`
+			try {
+				Object.defineProperty(Buffer.from(""), "x", {
+					get set() {
+						Object.defineProperty(Object.prototype, "get", {
+							get() {
+								throw x=>x.constructor.constructor("return process")();
+							}
+						});
+						return ()=>{};
+					}
+				});
+			} catch(e) {
+				e({});
+			}
+		`), /process is not defined/, '#1');
+
+		assert.throws(() => vm2.run(`
+			call(ctor(new Proxy(class A {}, {
+				construct(){
+					return () => x => x.constructor("return process")();
+				}
+			})))(()=>{}).mainModule.require("child_process").execSync("id").toString()
+		`), /process is not defined/, '#1');
 	});
 
 	after(() => {

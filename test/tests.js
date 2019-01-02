@@ -500,6 +500,21 @@ describe('VM', () => {
 		`), /process is not defined/, '#1');
 	});
 
+	it('proxy trap via Object.prototype attack', () => {
+		// https://github.com/patriksimek/vm2/issues/178
+
+		const vm2 = new VM();
+
+		assert.throws(() => vm2.run(`
+			let process;
+			Object.prototype.has=(t,k)=>{
+				console.log(t.constructor("return process")().version);
+			}
+			"" in Buffer.from;
+			process.mainModule
+		`), /Cannot read property 'mainModule' of undefined/, '#1');
+	});
+
 	after(() => {
 		vm = null;
 	});

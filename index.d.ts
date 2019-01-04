@@ -77,6 +77,23 @@ export class NodeVM extends EventEmitter {
   protect(object: any, name: string): any;
   /** Require a module in VM and return it's exports. */
   require(module: string): any;
+  
+   /**
+   * Create NodeVM and run code inside it.
+   *
+   * @param {String} script Javascript code.
+   * @param {String} [filename] File name (used in stack traces only).
+   * @param {Object} [options] VM options.
+   */
+  static code(script: string, filename: string, options: NodeVMOptions): NodeVM;
+
+  /**
+   * Create NodeVM and run script from file inside it.
+   *
+   * @param {String} [filename] File name (used in stack traces only).
+   * @param {Object} [options] VM options.
+   */
+  static file(filename: string, options: NodeVMOptions): NodeVM
 }
 
 /**
@@ -94,23 +111,6 @@ export class VM {
   freeze(object: any, name: string): any;
   /** Protects the object inside VM making impossible to set functions as it's properties. Not available for primitive values */
   protect(object: any, name: string): any;
-
-  /**
-   * Create NodeVM and run code inside it.
-   *
-   * @param {String} script Javascript code.
-   * @param {String} [filename] File name (used in stack traces only).
-   * @param {Object} [options] VM options.
-   */
-  static code(script: string, filename: string, options: NodeVMOptions): NodeVM;
-
-  /**
-   * Create NodeVM and run script from file inside it.
-   *
-   * @param {String} [filename] File name (used in stack traces only).
-   * @param {Object} [options] VM options.
-   */
-  static file(filename: string, options: NodeVMOptions): NodeVM
 }
 
 /**

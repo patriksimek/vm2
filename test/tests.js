@@ -476,12 +476,7 @@ describe('VM', () => {
 		// https://github.com/patriksimek/vm2/issues/175
 		// https://github.com/patriksimek/vm2/issues/177
 
-		const vm2 = new VM({
-			sandbox: {
-				ctor: X => new X(),
-				call: x => x()
-			}
-		});
+		let vm2 = new VM();
 
 		// The Buffer.from("") is only used to get instance of object contextified from the host
 		assert.throws(() => vm2.run(`
@@ -501,13 +496,49 @@ describe('VM', () => {
 			}
 		`), /process is not defined/, '#1');
 
+		vm2 = new VM({
+			sandbox: {
+				ctor: X => new X(),
+				call: x => x()
+			}
+		});
+
 		assert.throws(() => vm2.run(`
 			call(ctor(new Proxy(class A {}, {
 				construct(){
 					return () => x => x.constructor("return process")();
 				}
 			})))(()=>{}).mainModule.require("child_process").execSync("id").toString()
-		`), /process is not defined/, '#1');
+		`), /process is not defined/, '#2');
+
+		vm2 = new VM();
+
+		assert.throws(() => vm2.run(`
+			var process;
+			try{
+				Object.defineProperty(Buffer.from(""), "y", {
+					writable: true,
+					value: new Proxy({}, {
+						getPrototypeOf(target){
+							delete this.getPrototypeOf;
+			
+							Object.defineProperty(Object.prototype, "get", {
+								get() {
+									delete Object.prototype.get;
+									Function.prototype.__proto__ = null;
+									throw f=>f.constructor("return process")();
+								}
+							});
+			
+							return Object.getPrototypeOf(target);
+						}
+					})
+				});
+			}catch(e){
+				process = e(()=>{});
+			}
+			process.mainModule.require("child_process").execSync("whoami").toString()
+		`), /Cannot read property 'mainModule' of undefined/, '#3');
 	});
 
 	it('proxy trap via Object.prototype attack', () => {
@@ -572,12 +603,7 @@ describe('VM', () => {
 	it('throw while accessing propertyDescriptor properties', () => {
 		// https://github.com/patriksimek/vm2/issues/178#issuecomment-450904979
 
-		const vm2 = new VM({
-			sandbox: {
-				call: x => x.a(),
-				ctor: X => new X()
-			}
-		});
+		const vm2 = new VM();
 
 		assert.strictEqual(vm2.run(`
 			var process;
@@ -608,17 +634,19 @@ describe('VM', () => {
 	it('Symbol.hasInstance attack', () => {
 		// https://github.com/patriksimek/vm2/issues/178#issuecomment-450978210
 
-		const vm2 = new VM({
-			sandbox: {
-				call: x => x.a(),
-				ctor: X => new X()
-			}
-		});
+		let vm2 = new VM();
 
 		assert.throws(() => vm2.run(`
 			Object.__defineGetter__(Symbol.hasInstance,()=>()=>true);
 			Buffer.from.constructor("return process")().mainModule.require("child_process").execSync("id").toString()
 		`), /process is not defined/, '#1');
+
+		vm2 = new VM();
+
+		assert.throws(() => vm2.run(`
+			Object[Symbol.hasInstance].call = ()=>true;
+			Buffer.from.constructor("return process")().mainModule.require("child_process").execSync("whoami").toString()
+		`), /process is not defined/, '#2');
 	});
 
 	after(() => {

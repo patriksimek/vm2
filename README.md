@@ -76,6 +76,7 @@ vm.run(`
 * [NodeVM](#nodevm)
 * [VMScript](#vmscript)
 * [Error handling](#error-handling)
+* [Debugging a sandboxed code](#debugging-a-sandboxed-code)
 * [Read-only objects](#read-only-objects-experimental)
 * [Protected objects](#protected-objects-experimental)
 * [Cross-sandbox relationships](#cross-sandbox-relationships)

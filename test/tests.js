@@ -475,6 +475,7 @@ describe('VM', () => {
 	it('contextifying a contextified value attack', () => {
 		// https://github.com/patriksimek/vm2/issues/175
 		// https://github.com/patriksimek/vm2/issues/177
+		// https://github.com/patriksimek/vm2/issues/186
 
 		let vm2 = new VM();
 
@@ -539,6 +540,31 @@ describe('VM', () => {
 			}
 			process.mainModule.require("child_process").execSync("whoami").toString()
 		`), /Cannot read property 'mainModule' of undefined/, '#3');
+
+		vm2 = new VM();
+
+		assert.throws(() => vm2.run(`
+			var process;
+			try {
+				Object.defineProperty(Buffer.from(""), "", {
+					value: new Proxy({}, {
+						getPrototypeOf(target) {
+							if(this.t) {
+								debugger;
+								throw Buffer.from;
+							}
+			
+							// debugger;
+							this.t=true;
+							return Object.getPrototypeOf(target);
+						}
+					})
+				});
+			}catch(e){
+				process = e.constructor("return process")();
+			}
+			process.mainModule.require("child_process").execSync("whoami").toString()
+		`), /Cannot read property 'mainModule' of undefined/, '#4');
 	});
 
 	it('proxy trap via Object.prototype attack', () => {

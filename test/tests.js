@@ -605,10 +605,10 @@ describe('VM', () => {
 			}
 		});
 
-		assert.strictEqual(vm2.run(`
+		assert.throws(() => vm2.run(`
 			Object.__defineGetter__(Symbol.hasInstance,()=>()=>true);
 			Buffer.from.constructor("return process")().mainModule.require("child_process").execSync("id").toString()
-		`), undefined, '#1');
+		`), /process is not defined/, '#1');
 	});
 
 	after(() => {
@@ -1038,6 +1038,10 @@ describe('freeze, protect', () => {
 
 		assert.throws(() => {
 			vm.run('"use strict"; (i) => { i.array[0].func = () => {} }')(obj);
+		});
+
+		assert.throws(() => {
+			vm.run('"use strict"; (i) => { Object.defineProperty(i, "toString", { get(){ return () => \'Not protected\'; } }) }')(obj);
 		});
 
 		assert.strictEqual(vm.run('(i) => i.array.map(item => 1).join(",")')(obj), '1,1');

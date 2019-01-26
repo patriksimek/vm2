@@ -462,6 +462,16 @@ describe('VM', () => {
 		`), 123, '#2');
 	});
 
+	it('__lookupGetter__ / __lookupSetter__ attack', () => {
+		// https://github.com/patriksimek/vm2/issues/184
+
+		const vm2 = new VM();
+
+		assert.strictEqual(vm2.run(`
+			Buffer.from.__lookupGetter__("__proto__");
+		`), undefined, '#1');
+	});
+
 	it('contextifying a contextified value attack', () => {
 		// https://github.com/patriksimek/vm2/issues/175
 		// https://github.com/patriksimek/vm2/issues/177

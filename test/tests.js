@@ -559,6 +559,58 @@ describe('VM', () => {
 		`), /process is not defined/, '#1');
 	});
 
+	it('throw while accessing propertyDescriptor properties', () => {
+		// https://github.com/patriksimek/vm2/issues/178#issuecomment-450904979
+
+		const vm2 = new VM({
+			sandbox: {
+				call: x => x.a(),
+				ctor: X => new X()
+			}
+		});
+
+		assert.strictEqual(vm2.run(`
+			var process;
+			Object.defineProperty(Object.prototype, "set", {get(){
+				debugger
+				delete Object.prototype.set;
+				Object.defineProperty(Object.prototype, "get", {get(){
+					delete Object.prototype.get;
+					debugger
+					throw new Proxy(Object.create(null),{
+						set(t,k,v){
+							process = v.constructor("return process")();
+							return true;
+						}
+					});
+				},configurable:true});
+				return ()=>{};
+			},configurable:true});
+			try{
+				Object.defineProperty(Buffer.from(""),"",{});
+			}catch(e){
+				e.x = Buffer.from;
+			}
+			process
+		`), undefined, '#1');
+	});
+
+	it('Symbol.hasInstance attack', () => {
+		// https://github.com/patriksimek/vm2/issues/178#issuecomment-450978210
+
+		const vm2 = new VM({
+			sandbox: {
+				call: x => x.a(),
+				ctor: X => new X()
+			}
+		});
+
+		assert.strictEqual(vm2.run(`
+			Object.__defineGetter__(Symbol.hasInstance,()=>()=>true);
+			Buffer.from.constructor("return process")().mainModule.require("child_process").execSync("id").toString()
+		`), undefined, '#1');
+	});
+
 	after(() => {
 		vm = null;
 	});

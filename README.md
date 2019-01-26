@@ -234,6 +234,37 @@ process.on('uncaughtException', (err) => {
 })
 ```
 
+## Debugging a sandboxed code
+
+You can debug/inspect code running in the sandbox as if it was running in a normal process.
+
+- You can use breakpoints (requires you to specify a script file name)
+- You can use `debugger` keyword.
+- You can use step-in to step inside the code running in the sandbox.
+
+**Example**
+
+/tmp/main.js:
+```javascript
+const {VM, VMScript} = require('.');
+const fs = require('fs');
+const file = `${__dirname}/sandbox.js`;
+
+// By providing a file name as second argument you enable breakpoints
+const script = new VMScript(fs.readFileSync(file), file);
+
+new VM().run(script);
+```
+
+/tmp/sandbox.js
+```javascript
+const foo = 'ahoj';
+
+// Debugger keyword works just fine anywhere.
+// Even without specifying a file name to the VMScript object.
+debugger;
+```
+
 ## Read-only objects (experimental)
 
 To prevent sandboxed script to add/change/delete properties to/from the proxied objects, you can use `freeze` methods to make the object read-only. This is only effective inside VM. Frozen objects are affected deeply. Primitive types can not be frozen.
@@ -336,7 +367,7 @@ Development is sponsored by [Integromat](https://www.integromat.com).
 
 ## License
 
-Copyright (c) 2014-2018 Patrik Simek
+Copyright (c) 2014-2019 Patrik Simek
 
 The MIT License
 

@@ -445,7 +445,7 @@ describe('VM', () => {
 					}
 				})
 			});
-		`), /Failed to decontextify object\./, '#1');
+		`), '#1');
 	});
 
 	it('__defineGetter__ / __defineSetter__ attack', () => {
@@ -562,7 +562,7 @@ describe('VM', () => {
 				process = e.constructor("return process")();
 			}
 			process.mainModule.require("child_process").execSync("whoami").toString()
-		`), /Cannot read property 'mainModule' of undefined/, '#4');
+		`), /e\.constructor\(\.\.\.\) is not a function/, '#4');
 
 		vm2 = new VM();
 
@@ -583,7 +583,33 @@ describe('VM', () => {
 				process = e(() => {});
 			}
 			process.mainModule.require("child_process").execSync("whoami").toString()
-		`), /Cannot read property 'mainModule' of undefined/, '#5');
+		`), /e is not a function/, '#5');
+
+		assert.throws(() => vm2.run(`
+			Function.prototype.__proto__ = null;
+			var map = {
+				valueOf(){
+					debugger;
+					throw new Proxy({},{
+						getPrototypeOf(){
+							if(this.t) {
+								debugger;
+								throw x=>x.constructor("return process")();
+							}
+							this.t = true;
+							return null;
+						}
+					});
+				}
+			};
+			var process;
+			try{
+				Buffer.from(map);
+			}catch(e){
+				process = e(x=>x);
+			}
+			process.mainModule.require("child_process").execSync("whoami").toString()
+		`), /e is not a function/, '#6');
 	});
 
 	it('proxy trap via Object.prototype attack', () => {

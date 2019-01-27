@@ -516,11 +516,11 @@ describe('VM', () => {
 
 		assert.throws(() => vm2.run(`
 			var process;
-			try{
+			try {
 				Object.defineProperty(Buffer.from(""), "y", {
 					writable: true,
 					value: new Proxy({}, {
-						getPrototypeOf(target){
+						getPrototypeOf(target) {
 							delete this.getPrototypeOf;
 			
 							Object.defineProperty(Object.prototype, "get", {
@@ -535,8 +535,8 @@ describe('VM', () => {
 						}
 					})
 				});
-			}catch(e){
-				process = e(()=>{});
+			} catch(e) {
+				process = e(() => {});
 			}
 			process.mainModule.require("child_process").execSync("whoami").toString()
 		`), /Cannot read property 'mainModule' of undefined/, '#3');
@@ -550,21 +550,40 @@ describe('VM', () => {
 					value: new Proxy({}, {
 						getPrototypeOf(target) {
 							if(this.t) {
-								debugger;
 								throw Buffer.from;
 							}
-			
-							// debugger;
+
 							this.t=true;
 							return Object.getPrototypeOf(target);
 						}
 					})
 				});
-			}catch(e){
+			} catch (e) {
 				process = e.constructor("return process")();
 			}
 			process.mainModule.require("child_process").execSync("whoami").toString()
 		`), /Cannot read property 'mainModule' of undefined/, '#4');
+
+		vm2 = new VM();
+
+		assert.throws(() => vm2.run(`
+			Function.prototype.__proto__ = null;
+			var process;
+			try {
+				Buffer.from(new Proxy({}, {
+					getPrototypeOf() {
+						if (this.t) {
+							throw x => x.constructor("return process")();
+						}
+						this.t = true;
+						return null;
+					}
+				}));
+			} catch(e) {
+				process = e(() => {});
+			}
+			process.mainModule.require("child_process").execSync("whoami").toString()
+		`), /Cannot read property 'mainModule' of undefined/, '#5');
 	});
 
 	it('proxy trap via Object.prototype attack', () => {

@@ -437,15 +437,19 @@ describe('VM', () => {
 			}
 		});
 
-		assert.throws(() => vm2.run(`
-			func(() => {
-				throw new Proxy({}, {
-					getPrototypeOf: () => {
-						throw x => x.constructor.constructor("return process;")();
-					}
-				})
-			});
-		`), '#1');
+		try {
+			vm2.run(`
+				func(() => {
+					throw new Proxy({}, {
+						getPrototypeOf: () => {
+							throw x => x.constructor.constructor("return process;")();
+						}
+					})
+				});
+			`);
+		} catch (ex) {
+			assert.strictEqual(ex, null);
+		}
 	});
 
 	it('__defineGetter__ / __defineSetter__ attack', () => {

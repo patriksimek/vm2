@@ -589,15 +589,15 @@ describe('VM', () => {
 			process.mainModule.require("child_process").execSync("whoami").toString()
 		`), /e is not a function/, '#5');
 
+		vm2 = new VM();
+
 		assert.throws(() => vm2.run(`
 			Function.prototype.__proto__ = null;
 			var map = {
 				valueOf(){
-					debugger;
 					throw new Proxy({},{
 						getPrototypeOf(){
 							if(this.t) {
-								debugger;
 								throw x=>x.constructor("return process")();
 							}
 							this.t = true;
@@ -614,6 +614,24 @@ describe('VM', () => {
 			}
 			process.mainModule.require("child_process").execSync("whoami").toString()
 		`), /e is not a function/, '#6');
+
+		vm2 = new VM();
+
+		assert.throws(() => vm2.run(`
+			var map = {valueOf(){}};
+			var arrayBackup = Array;
+			Array = function(){
+				Array = arrayBackup;
+				throw x=>x.constructor("return process")();
+			};
+			var process;
+			try{
+				Buffer.from(map);
+			}catch(e){
+				process = e(x=>x);
+			}
+			process
+		`), /e is not a function/, '#7');
 	});
 
 	it('proxy trap via Object.prototype attack', () => {
@@ -683,11 +701,9 @@ describe('VM', () => {
 		assert.strictEqual(vm2.run(`
 			var process;
 			Object.defineProperty(Object.prototype, "set", {get(){
-				debugger
 				delete Object.prototype.set;
 				Object.defineProperty(Object.prototype, "get", {get(){
 					delete Object.prototype.get;
-					debugger
 					throw new Proxy(Object.create(null),{
 						set(t,k,v){
 							process = v.constructor("return process")();

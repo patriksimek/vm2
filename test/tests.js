@@ -589,11 +589,9 @@ describe('VM', () => {
 			Function.prototype.__proto__ = null;
 			var map = {
 				valueOf(){
-					debugger;
 					throw new Proxy({},{
 						getPrototypeOf(){
 							if(this.t) {
-								debugger;
 								throw x=>x.constructor("return process")();
 							}
 							this.t = true;
@@ -679,11 +677,9 @@ describe('VM', () => {
 		assert.strictEqual(vm2.run(`
 			var process;
 			Object.defineProperty(Object.prototype, "set", {get(){
-				debugger
 				delete Object.prototype.set;
 				Object.defineProperty(Object.prototype, "get", {get(){
 					delete Object.prototype.get;
-					debugger
 					throw new Proxy(Object.create(null),{
 						set(t,k,v){
 							process = v.constructor("return process")();
@@ -1009,6 +1005,17 @@ describe('modules', () => {
 		assert.strictEqual(vm.run("module.exports = require('fs').constructor.constructor === Function"), true);
 		assert.strictEqual(vm.run("module.exports = require('fs').readFileSync.constructor.constructor === Function"), true);
 		assert.strictEqual(vm.run("module.exports = require('fs').readFileSync()"), 'Nice try!');
+	});
+});
+
+describe('esm', () => {
+	it('poc', async () => {
+		const vm = new NodeVM();
+		const script = new VMScript(`
+			export const number = 123;
+			number;
+		`, 'test.mjs');
+		assert.strictEqual(await vm.run(script), 123);
 	});
 });
 

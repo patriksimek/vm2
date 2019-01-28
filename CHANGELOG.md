@@ -1,3 +1,8 @@
+v3.6.10 (2019-01-28)
+-------------------
+[fix] Add missing console.debug function in NodeVM
+[fix] Security fixes
+
 v3.6.9 (2019-01-26)
 -------------------
 [fix] Security fixes

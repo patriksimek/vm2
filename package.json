@@ -13,13 +13,13 @@
     "alcatraz",
     "contextify"
   ],
-  "version": "3.6.10",
+  "version": "3.6.11",
   "main": "index.js",
   "repository": "github:patriksimek/vm2",
   "license": "MIT",
   "dependencies": {},
   "devDependencies": {
-    "eslint": "^5.11.1",
+    "eslint": "^5.16.0",
     "eslint-config-integromat": "^1.5.0",
     "mocha": "^5.2.0"
   },

@@ -1,3 +1,8 @@
+v3.6.11 (2019-04-08)
+-------------------
+[fix] Contextification of EvalError and URIError
+[fix] Security fixes
+
 v3.6.10 (2019-01-28)
 -------------------
 [fix] Add missing console.debug function in NodeVM

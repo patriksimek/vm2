@@ -20,7 +20,7 @@ export interface VMRequire {
   /** Collection of mock modules (both external or builtin). */
   mock?: any;
   /* An additional lookup function in case a module wasn't found in one of the traditional node lookup paths. */
-  resolve?: (moduleName: String) => String;
+  resolve?: (moduleName: String, parentDirname: String) => String;
 }
 
 /**

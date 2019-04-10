@@ -7,8 +7,8 @@ export interface VMRequire {
   /** Array of allowed builtin modules, accepts ["*"] for all (default: none) */
   builtin?: string[];
   /*
-   * `host` (default) to require modules in host and proxy them to sandbox. `sandbox` to load, compile and 
-   * require modules in sandbox. Builtin modules except `events` always required in host and proxied to sandbox 
+   * `host` (default) to require modules in host and proxy them to sandbox. `sandbox` to load, compile and
+   * require modules in sandbox. Builtin modules except `events` always required in host and proxied to sandbox
    */
   context?: "host" | "sandbox";
   /** `true` or an array of allowed external modules (default: `false`) */
@@ -19,6 +19,8 @@ export interface VMRequire {
   root?: string;
   /** Collection of mock modules (both external or builtin). */
   mock?: any;
+  /* An additional lookup function in case a module wasn't found in one of the traditional node lookup paths. */
+  resolve?: (moduleName: String) => String;
 }
 
 /**
@@ -31,22 +33,22 @@ type CompilerFunction = (code: string, filename: string) => string;
  *  Options for creating a VM
  */
 export interface VMOptions {
-  /** 
+  /**
    * `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's filepath).
-   *  The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`. 
+   *  The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
    */
   compiler?: "javascript" | "coffeescript" | CompilerFunction;
   /** VM's global object. */
   sandbox?: any;
   /**
-   * Script timeout in milliseconds.  Timeout is only effective on code you run through `run`. 
+   * Script timeout in milliseconds.  Timeout is only effective on code you run through `run`.
    * Timeout is NOT effective on any method returned by VM.
    */
   timeout?: number;
 }
 
 /**
- *  Options for creating a NodeVM 
+ *  Options for creating a NodeVM
  */
 export interface NodeVMOptions extends VMOptions {
   /** `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`). */
@@ -56,7 +58,7 @@ export interface NodeVMOptions extends VMOptions {
   /** `true` to enable VMs nesting (default: `false`). */
   nesting?: boolean;
   /** `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script. */
-  wrapper?: "commonjs" | "none";  
+  wrapper?: "commonjs" | "none";
   /** File extensions that the internal module resolver should accept. */
   sourceExtensions?: string[]
 }
@@ -77,7 +79,7 @@ export class NodeVM extends EventEmitter {
   protect(object: any, name: string): any;
   /** Require a module in VM and return it's exports. */
   require(module: string): any;
-  
+
    /**
    * Create NodeVM and run code inside it.
    *
@@ -97,8 +99,8 @@ export class NodeVM extends EventEmitter {
 }
 
 /**
- * VM is a simple sandbox, without `require` feature, to synchronously run an untrusted code. 
- * Only JavaScript built-in objects + Buffer are available. Scheduling functions 
+ * VM is a simple sandbox, without `require` feature, to synchronously run an untrusted code.
+ * Only JavaScript built-in objects + Buffer are available. Scheduling functions
  * (`setInterval`, `setTimeout` and `setImmediate`) are not available by default.
  */
 export class VM {
@@ -114,7 +116,7 @@ export class VM {
 }
 
 /**
- * You can increase performance by using pre-compiled scripts. 
+ * You can increase performance by using pre-compiled scripts.
  * The pre-compiled VMScript can be run later multiple times. It is important to note that the code is not bound
  * to any VM (context); rather, it is bound before each run, just for that run.
  */

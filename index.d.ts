@@ -15,8 +15,8 @@ export interface VMRequire {
   external?: boolean | string[];
   /** Array of modules to be loaded into NodeVM on start. */
   import?: string[];
-  /** Restricted path where local modules can be required (default: every path). */
-  root?: string;
+  /** Restricted path(s) where local modules can be required (default: every path). */
+  root?: string | string[];
   /** Collection of mock modules (both external or builtin). */
   mock?: any;
   /* An additional lookup function in case a module wasn't found in one of the traditional node lookup paths. */

@@ -201,6 +201,20 @@ describe('modules', () => {
 		assert.ok(vm.run("require('my-module')", __filename));
 	});
 
+	it('allows for multiple root folders', () => {
+		const vm = new NodeVM({
+			require: {
+				external: ['mocha'],
+				root: [
+					path.resolve(__dirname),
+					path.resolve(__dirname, '..', 'node_modules')
+				]
+			}
+		});
+
+		assert.ok(vm.run("require('mocha')", __filename));
+	});
+
 
 	it('arguments attack', () => {
 		let vm = new NodeVM;

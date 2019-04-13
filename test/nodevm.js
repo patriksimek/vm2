@@ -4,6 +4,7 @@
 'use strict';
 
 const fs = require('fs');
+const path = require('path');
 const assert = require('assert');
 const {NodeVM, VMScript} = require('..');
 
@@ -187,6 +188,31 @@ describe('modules', () => {
 			assert.equal(err.message, "The module 'unknown' is not whitelisted in VM.");
 			return true;
 		});
+	});
+
+	it('can resolve paths based on a custom resolver', () => {
+		const vm = new NodeVM({
+			require: {
+				external: ['my-module'],
+				resolve: moduleName => path.resolve(__dirname, 'additional-modules', moduleName)
+			}
+		});
+
+		assert.ok(vm.run("require('my-module')", __filename));
+	});
+
+	it('allows for multiple root folders', () => {
+		const vm = new NodeVM({
+			require: {
+				external: ['mocha'],
+				root: [
+					path.resolve(__dirname),
+					path.resolve(__dirname, '..', 'node_modules')
+				]
+			}
+		});
+
+		assert.ok(vm.run("require('mocha')", __filename));
 	});
 
 

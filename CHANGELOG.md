@@ -1,3 +1,8 @@
+v3.7.0 (2019-04-15)
+-------------------
+[new] Add require.resolve.
+[new] Support multiple root paths.
+
 v3.6.11 (2019-04-08)
 -------------------
 [fix] Contextification of EvalError and URIError

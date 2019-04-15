@@ -215,6 +215,16 @@ describe('modules', () => {
 		assert.ok(vm.run("require('mocha')", __filename));
 	});
 
+	it('falls back to index.js if the file specified in the package.json "main" attribute is missing', () => {
+		const vm = new NodeVM({
+			require: {
+				external: true
+			}
+		});
+
+		assert.equal(vm.run("module.exports = require('module-with-wrong-main').bar()", __filename), 1);
+	});
+
 
 	it('arguments attack', () => {
 		let vm = new NodeVM;

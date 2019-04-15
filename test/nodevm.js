@@ -201,6 +201,17 @@ describe('modules', () => {
 		assert.ok(vm.run("require('my-module')", __filename));
 	});
 
+	it('supports a wildcard in external module names', () => {
+		const vm = new NodeVM({
+			require: {
+				external: ['my-*'],
+				resolve: moduleName => path.resolve(__dirname, 'additional-modules', moduleName)
+			}
+		});
+
+		assert.ok(vm.run("require('my-module')", __filename));
+	});
+
 	it('allows for multiple root folders', () => {
 		const vm = new NodeVM({
 			require: {

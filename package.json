@@ -17,7 +17,9 @@
   "main": "index.js",
   "repository": "github:patriksimek/vm2",
   "license": "MIT",
-  "dependencies": {},
+  "dependencies": {
+    "matcher": "^1.1.1"
+  },
   "devDependencies": {
     "eslint": "^5.16.0",
     "eslint-config-integromat": "^1.5.0",

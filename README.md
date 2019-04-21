@@ -127,7 +127,7 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `compiler` - `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's filepath). The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
 * `sourceExtensions` - Array of file extensions to treat as source code (default: `['js']`).
 * `require` - `true` or object to enable `require` method (default: `false`).
-* `require.external` - `true` or an array of allowed external modules (default: `false`).
+* `require.external` - `true` or an array of allowed external modules (default: `false`). Also supports wildcards, so specifying `['@scope/*-ver-??]`, for instance, will allow using all modules having a name of the form `@scope/something-ver-aa`, `@scope/other-ver-11`, etc.
 * `require.builtin` - Array of allowed builtin modules, accepts ["*"] for all (default: none).
 * `require.root` - Restricted path(s) where local modules can be required (default: every path).
 * `require.mock` - Collection of mock modules (both external or builtin).

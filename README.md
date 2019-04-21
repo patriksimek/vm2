@@ -128,7 +128,7 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `sourceExtensions` - Array of file extensions to treat as source code (default: `['js']`).
 * `require` - `true` or object to enable `require` method (default: `false`).
 * `require.external` - `true`, an array of allowed external modules or an object (default: `false`).
-* `require.external.modules` - Array of allowed external modules.
+* `require.external.modules` - Array of allowed external modules. Also supports wildcards, so specifying `['@scope/*-ver-??]`, for instance, will allow using all modules having a name of the form `@scope/something-ver-aa`, `@scope/other-ver-11`, etc.
 * `require.external.transitive` - Boolean which indicates if transitive dependencies of external modules are allowed. (default: `false`).
 * `require.builtin` - Array of allowed builtin modules, accepts ["*"] for all (default: none).
 * `require.root` - Restricted path(s) where local modules can be required (default: every path).

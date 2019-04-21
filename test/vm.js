@@ -5,6 +5,7 @@
 
 const assert = require('assert');
 const {VM, VMScript} = require('..');
+const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
 
 global.isVM = false;
 
@@ -267,10 +268,12 @@ describe('VM', () => {
 	});
 
 	it('timeout', () => {
+		const message = NODE_VERSION >= 11 ? /Script execution timed out after 10ms/ : /Script execution timed out\./;
+
 		assert.throws(() => new VM({
 			timeout: 10
-		}).run('while (true) {}'), /Script execution timed out\./);
-		assert.throws(() => vm.run('sub.getter'), /Script execution timed out\./);
+		}).run('while (true) {}'), message);
+		assert.throws(() => vm.run('sub.getter'), message);
 	});
 
 	it('timers', () => {
@@ -279,7 +282,7 @@ describe('VM', () => {
 		assert.equal(vm.run('global.setImmediate'), void 0);
 	});
 
-	if (parseInt(process.versions.node.split('.')[0]) >= 10) {
+	if (NODE_VERSION >= 10) {
 		it('eval/wasm', () => {
 			assert.equal(vm.run('eval("1")'), 1);
 

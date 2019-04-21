@@ -1,7 +1,15 @@
+v3.8.0 (2019-04-21)
+-------------------
+[new] Allow prohibiting access to eval/wasm in sandbox context
+[new] Allow transitive external dependencies in sandbox context (Idan Attias)
+[new] Allow using wildcards in module-names passed using the external attribute (Harel Moshe)
+[fix] Default to index.js when specified "main" does not exist (Harel Moshe)
+[fix] Security fixes
+
 v3.7.0 (2019-04-15)
 -------------------
-[new] Add require.resolve.
-[new] Support multiple root paths.
+[new] Add require.resolve (Idan Attias)
+[new] Support multiple root paths (Idan Attias)
 
 v3.6.11 (2019-04-08)
 -------------------

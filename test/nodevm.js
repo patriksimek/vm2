@@ -190,10 +190,13 @@ describe('modules', () => {
 		});
 	});
 
-	it('allows transitive external dependencies in sandbox context', () => {
+	it('allows specific transitive external dependencies in sandbox context', () => {
 		const vm = new NodeVM({
 			require: {
-				external: ['module1'],
+				external: {
+					modules: ['module1'],
+					transitive: true
+				},
 				context: 'sandbox'
 			}
 		});

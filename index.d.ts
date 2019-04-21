@@ -11,8 +11,8 @@ export interface VMRequire {
    * require modules in sandbox. Builtin modules except `events` always required in host and proxied to sandbox
    */
   context?: "host" | "sandbox";
-  /** `true` or an array of allowed external modules (default: `false`) */
-  external?: boolean | string[];
+  /** `true`, an array of allowed external modules or an object with external options (default: `false`) */
+  external?: boolean | string[] | { modules: string[], transitive: boolean };
   /** Array of modules to be loaded into NodeVM on start. */
   import?: string[];
   /** Restricted path(s) where local modules can be required (default: every path). */

@@ -190,6 +190,20 @@ describe('modules', () => {
 		});
 	});
 
+	it('allows specific transitive external dependencies in sandbox context', () => {
+		const vm = new NodeVM({
+			require: {
+				external: {
+					modules: ['module1'],
+					transitive: true
+				},
+				context: 'sandbox'
+			}
+		});
+
+		assert.ok(vm.run("require('module1')", __filename));
+	});
+
 	it('can resolve paths based on a custom resolver', () => {
 		const vm = new NodeVM({
 			require: {

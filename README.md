@@ -94,6 +94,8 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 * `timeout` - Script timeout in milliseconds.
 * `sandbox` - VM's global object.
 * `compiler` - `javascript` (default) or `coffeescript` or custom compiler function. The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
+* `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc) will throw an `EvalError` (default: `true`).
+* `wasm` -  If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
 
 **IMPORTANT**: Timeout is only effective on synchronous code you run through `run`. Timeout is NOT effective on any method returned by VM.
 
@@ -125,11 +127,13 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`).
 * `sandbox` - VM's global object.
 * `compiler` - `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's filepath). The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
+* `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc) will throw an `EvalError` (default: `true`).
+* `wasm` -  If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
 * `sourceExtensions` - Array of file extensions to treat as source code (default: `['js']`).
 * `require` - `true` or object to enable `require` method (default: `false`).
 * `require.external` - `true`, an array of allowed external modules or an object (default: `false`).
 * `require.external.modules` - Array of allowed external modules. Also supports wildcards, so specifying `['@scope/*-ver-??]`, for instance, will allow using all modules having a name of the form `@scope/something-ver-aa`, `@scope/other-ver-11`, etc.
-* `require.external.transitive` - Boolean which indicates if transitive dependencies of external modules are allowed. (default: `false`).
+* `require.external.transitive` - Boolean which indicates if transitive dependencies of external modules are allowed (default: `false`).
 * `require.builtin` - Array of allowed builtin modules, accepts ["*"] for all (default: none).
 * `require.root` - Restricted path(s) where local modules can be required (default: every path).
 * `require.mock` - Collection of mock modules (both external or builtin).

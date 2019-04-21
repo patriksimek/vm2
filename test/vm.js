@@ -279,6 +279,13 @@ describe('VM', () => {
 		assert.equal(vm.run('global.setImmediate'), void 0);
 	});
 
+	it('eval/wasm', () => {
+		assert.equal(vm.run('eval("1")'), 1);
+
+		const vm2 = new VM({eval: false});
+		assert.throws(() => vm2.run('eval("1")'), /Code generation from strings disallowed for this context/);
+	});
+
 	it('various attacks #1', () => {
 		const vm2 = new VM({sandbox: {log: console.log, boom: () => {
 			throw new Error();

@@ -239,6 +239,16 @@ describe('modules', () => {
 		assert.equal(vm.run("module.exports = require('module-with-wrong-main').bar()", __filename), 1);
 	});
 
+	it('attempts to add extension if the file specified in the package.json "main" attribute is missing', () => {
+		const vm = new NodeVM({
+			require: {
+				external: true
+			}
+		});
+
+		assert.equal(vm.run("module.exports = require('module-main-without-extension').bar()", __filename), 1);
+	});
+
 	it('arguments attack', () => {
 		let vm = new NodeVM;
 

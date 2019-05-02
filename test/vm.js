@@ -266,12 +266,16 @@ describe('VM', () => {
 			assert.equal(err.message, 'Operation not allowed on contextified object.');
 			return true;
 		});
-		assert.throws(() => vm.run('function test(){ return await Promise.resolve(); };'), err => {
-			assert.ok(err instanceof Error);
-			assert.equal(err.name, 'SyntaxError');
-			assert.equal(err.message, 'await is only valid in async function');
-			return true;
-		});
+
+		if (NODE_VERSION > 6) {
+			// async/await was not there in Node 6
+			assert.throws(() => vm.run('function test(){ return await Promise.resolve(); };'), err => {
+				assert.ok(err instanceof Error);
+				assert.equal(err.name, 'SyntaxError');
+				assert.equal(err.message, 'await is only valid in async function');
+				return true;
+			});
+		}
 	});
 
 	it('timeout', () => {

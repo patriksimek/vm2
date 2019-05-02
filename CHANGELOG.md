@@ -1,3 +1,9 @@
+v3.8.1 (2019-05-02)
+-------------------
+[fix] Module resolver fixes
+[fix] require('events') works correctly in Node 12
+[fix] SyntaxError not being instanceOf Error
+
 v3.8.0 (2019-04-21)
 -------------------
 [new] Allow prohibiting access to eval/wasm in sandbox context

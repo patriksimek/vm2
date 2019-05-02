@@ -261,8 +261,15 @@ describe('VM', () => {
 	it('errors', () => {
 		assert.throws(() => vm.run('notdefined'), /notdefined is not defined/);
 		assert.throws(() => vm.run('Object.setPrototypeOf(sub, {})'), err => {
+			assert.ok(err instanceof Error);
 			assert.equal(err.name, 'VMError');
 			assert.equal(err.message, 'Operation not allowed on contextified object.');
+			return true;
+		});
+		assert.throws(() => vm.run('function test(){ return await Promise.resolve(); };'), err => {
+			assert.ok(err instanceof Error);
+			assert.equal(err.name, 'SyntaxError');
+			assert.equal(err.message, 'await is only valid in async function');
 			return true;
 		});
 	});

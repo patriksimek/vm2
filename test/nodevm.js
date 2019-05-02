@@ -353,6 +353,19 @@ describe('modules', () => {
 		assert.strictEqual(vm.run("module.exports = require('fs').readFileSync.constructor.constructor === Function"), true);
 		assert.strictEqual(vm.run("module.exports = require('fs').readFileSync()"), 'Nice try!');
 	});
+
+	it('native event emitter', done => {
+		const vm = new NodeVM({
+			require: {
+				builtin: ['events']
+			},
+			sandbox: {
+				done
+			}
+		});
+
+		vm.run(`let {EventEmitter} = require('events'); const ee = new EventEmitter(); ee.on('test', done); ee.emit('test');`);
+	});
 });
 
 describe('nesting', () => {

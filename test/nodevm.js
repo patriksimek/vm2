@@ -39,6 +39,14 @@ describe('NodeVM', () => {
 		assert.equal(vm.run("module.exports = console.log.constructor('return (function(){return this})().isVM')()"), true);
 	});
 
+	it('async errors', done => {
+		vm.run('setTimeout(function() { throw new Error("fail"); })');
+		vm.on('uncaughtException', err => {
+			assert.equal(err.message, 'fail');
+			done();
+		});
+	});
+
 	it.skip('timeout (not supported by Node\'s VM)', () => {
 		assert.throws(() => new NodeVM({
 			timeout: 10

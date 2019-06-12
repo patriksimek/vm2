@@ -1,3 +1,7 @@
+v3.8.2 (2019-06-13)
+-------------------
+[fix] toString() on builtin objects
+
 v3.8.1 (2019-05-02)
 -------------------
 [fix] Module resolver fixes

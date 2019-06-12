@@ -94,6 +94,16 @@ describe('contextify', () => {
 		assert.strictEqual(vm.run('test.object.valueOf().y.constructor instanceof Function'), true);
 		assert.strictEqual(vm.run("test.object.valueOf().y.constructor('return (function(){return this})().isVM')()"), true);
 
+		assert.strictEqual(Object.prototype.toString.call(vm.run(`[]`)), '[object Array]');
+		assert.strictEqual(Object.prototype.toString.call(vm.run(`new Date`)), '[object Date]');
+		assert.strictEqual(Object.prototype.toString.call(vm.run(`new RangeError`)), '[object Error]');
+		assert.strictEqual(Object.prototype.toString.call(vm.run(`/a/g`)), '[object RegExp]');
+
+		assert.strictEqual(vm.run(`((obj) => Object.prototype.toString.call(obj))`)([]), '[object Array]');
+		assert.strictEqual(vm.run(`((obj) => Object.prototype.toString.call(obj))`)(new Date), '[object Date]');
+		assert.strictEqual(vm.run(`((obj) => Object.prototype.toString.call(obj))`)(new RangeError), '[object Error]');
+		assert.strictEqual(vm.run(`((obj) => Object.prototype.toString.call(obj))`)(/a/g), '[object RegExp]');
+
 		let o = vm.run('let x = {a: test.date, b: test.date};x');
 		assert.strictEqual(vm.run('x.valueOf().a instanceof Date'), true);
 		assert.strictEqual(o instanceof Object, true);

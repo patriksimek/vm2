@@ -20,7 +20,7 @@ export interface VMRequire {
   /** Collection of mock modules (both external or builtin). */
   mock?: any;
   /* An additional lookup function in case a module wasn't found in one of the traditional node lookup paths. */
-  resolve?: (moduleName: String, parentDirname: String) => String;
+  resolve?: (moduleName: string, parentDirname: string) => string;
 }
 
 /**
@@ -83,8 +83,8 @@ export class NodeVM extends EventEmitter {
    /**
    * Create NodeVM and run code inside it.
    *
-   * @param {String} script Javascript code.
-   * @param {String} [filename] File name (used in stack traces only).
+   * @param {string} script Javascript code.
+   * @param {string} [filename] File name (used in stack traces only).
    * @param {Object} [options] VM options.
    */
   static code(script: string, filename: string, options: NodeVMOptions): NodeVM;
@@ -92,7 +92,7 @@ export class NodeVM extends EventEmitter {
   /**
    * Create NodeVM and run script from file inside it.
    *
-   * @param {String} [filename] File name (used in stack traces only).
+   * @param {string} [filename] File name (used in stack traces only).
    * @param {Object} [options] VM options.
    */
   static file(filename: string, options: NodeVMOptions): NodeVM

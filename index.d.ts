@@ -45,6 +45,15 @@ export interface VMOptions {
    * Timeout is NOT effective on any method returned by VM.
    */
   timeout?: number;
+  /**
+   * If set to `false` any calls to eval or function constructors (`Function`, `GeneratorFunction`, etc) will throw an
+   * `EvalError` (default: `true`).
+   */
+  eval?: boolean;
+  /**
+   * - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
+   */
+  wasm?: boolean;
 }
 
 /**

@@ -772,6 +772,26 @@ describe('VM', () => {
 		`), /process is not defined/, '#2');
 	});
 
+	it('Proxy::getOwnPropertyDescriptor attack', () => {
+		// https://github.com/patriksimek/vm2/issues/178#issuecomment-450978210
+
+		const vm2 = new VM();
+
+		assert.throws(() => vm2.run(`
+			(function(){
+				try{
+					Buffer.from(new Proxy({}, {
+						getOwnPropertyDescriptor(){
+							throw f=>f.constructor("return process")();
+						}
+					}));
+				}catch(e){
+					return e(()=>{}).mainModule.require("child_process").execSync("whoami").toString();
+				}
+			})()
+		`), /e is not a function/);
+	});
+
 	after(() => {
 		vm = null;
 	});

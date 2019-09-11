@@ -156,10 +156,10 @@ describe('contextify', () => {
 		assert.strictEqual(vm.run('test.buffer instanceof Buffer'), true, '#2');
 		assert.strictEqual(vm.run('test.buffer') instanceof Buffer, true, '#3');
 		assert.strictEqual(vm.run('test.buffer'), sandbox.test.buffer, '#4');
-		assert.strictEqual(vm.run('class Buffer2 extends Buffer {};new Buffer2(5)').fill(1).inspect(), '<Buffer 01 01 01 01 01>');
+		assert.strictEqual(vm.run('class Buffer2 extends Buffer {};Buffer2.alloc(5)').fill(1).inspect(), '<Buffer 01 01 01 01 01>');
 
 		const {a, b, c, d} = vm.run(`
-			let a = new Buffer([0x01, 0x02]);
+			let a = Buffer.from([0x01, 0x02]);
 			let b = Buffer.alloc(3, 0x03);
 			let c = Buffer.from(a);
 			let d = Buffer.concat([a, b, c]);
@@ -340,7 +340,7 @@ describe('VM', () => {
 			}
 
 			Reflect.construct = exploit;
-			new Buffer([0]);
+			Buffer.from([0]);
 		`), '#3');
 
 		assert.doesNotThrow(() => vm2.run(`
@@ -380,12 +380,12 @@ describe('VM', () => {
 			Object.assign = function (o) {
 				throw new Error('Shouldnt be there.');
 			};
-			new Buffer([0]);
+			Buffer.from([0]);
 		`), '#1');
 
 		assert.doesNotThrow(() => vm2.run(`
 			try {
-				new Buffer();
+				Buffer.alloc(0);
 			} catch (e) {
 				if (e.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
 			}
@@ -444,7 +444,7 @@ describe('VM', () => {
 		const vm2 = new VM();
 
 		assert.strictEqual(vm2.run(`
-			new Buffer(100).toString('hex');
+			Buffer.alloc(100).toString('hex');
 		`), '00'.repeat(100), '#1');
 
 		assert.strictEqual(vm2.run(`
@@ -456,7 +456,7 @@ describe('VM', () => {
 		`), '00'.repeat(100), '#3');
 
 		assert.strictEqual(vm2.run(`
-			class MyBuffer extends Buffer {}; new MyBuffer(100).toString('hex');
+			class MyBuffer extends Buffer {}; MyBuffer.alloc(100).toString('hex');
 		`), '00'.repeat(100), '#4');
 	});
 

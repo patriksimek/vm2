@@ -505,7 +505,7 @@ describe('VM', () => {
 
 		assert.strictEqual(vm2.run(`
 			Buffer.from.__lookupGetter__("__proto__");
-		`), undefined, '#1');
+		`).isVMProxy, true, '#1');
 	});
 
 	it('contextifying a contextified value attack', () => {

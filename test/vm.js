@@ -156,10 +156,10 @@ describe('contextify', () => {
 		assert.strictEqual(vm.run('test.buffer instanceof Buffer'), true, '#2');
 		assert.strictEqual(vm.run('test.buffer') instanceof Buffer, true, '#3');
 		assert.strictEqual(vm.run('test.buffer'), sandbox.test.buffer, '#4');
-		assert.strictEqual(vm.run('class Buffer2 extends Buffer {};new Buffer2(5)').fill(1).inspect(), '<Buffer 01 01 01 01 01>');
+		assert.strictEqual(vm.run('class Buffer2 extends Buffer {};Buffer2.alloc(5)').fill(1).inspect(), '<Buffer 01 01 01 01 01>');
 
 		const {a, b, c, d} = vm.run(`
-			let a = new Buffer([0x01, 0x02]);
+			let a = Buffer.from([0x01, 0x02]);
 			let b = Buffer.alloc(3, 0x03);
 			let c = Buffer.from(a);
 			let d = Buffer.concat([a, b, c]);
@@ -340,7 +340,7 @@ describe('VM', () => {
 			}
 
 			Reflect.construct = exploit;
-			new Buffer([0]);
+			Buffer.from([0]);
 		`), '#3');
 
 		assert.doesNotThrow(() => vm2.run(`
@@ -380,12 +380,12 @@ describe('VM', () => {
 			Object.assign = function (o) {
 				throw new Error('Shouldnt be there.');
 			};
-			new Buffer([0]);
+			Buffer.from([0]);
 		`), '#1');
 
 		assert.doesNotThrow(() => vm2.run(`
 			try {
-				new Buffer();
+				Buffer.alloc(0);
 			} catch (e) {
 				if (e.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
 			}
@@ -444,7 +444,7 @@ describe('VM', () => {
 		const vm2 = new VM();
 
 		assert.strictEqual(vm2.run(`
-			new Buffer(100).toString('hex');
+			Buffer.alloc(100).toString('hex');
 		`), '00'.repeat(100), '#1');
 
 		assert.strictEqual(vm2.run(`
@@ -456,7 +456,7 @@ describe('VM', () => {
 		`), '00'.repeat(100), '#3');
 
 		assert.strictEqual(vm2.run(`
-			class MyBuffer extends Buffer {}; new MyBuffer(100).toString('hex');
+			class MyBuffer extends Buffer {}; MyBuffer.alloc(100).toString('hex');
 		`), '00'.repeat(100), '#4');
 	});
 
@@ -489,13 +489,24 @@ describe('VM', () => {
 
 		const vm2 = new VM();
 
-		assert.throws(() => vm2.run(`
-			Buffer.prototype.__defineGetter__("toString", () => {});
-		`), /'defineProperty' on proxy: trap returned falsish for property 'toString'/, '#1');
+		assert.strictEqual(vm2.run(`
+			Buffer.prototype.__defineGetter__ === {}.__defineGetter__;
+		`), true, '#1');
+
+		if (NODE_VERSION > 6) {
+			assert.throws(() => vm2.run(`
+				Buffer.prototype.__defineGetter__("toString", () => {});
+			`), /'defineProperty' on proxy: trap returned falsish for property 'toString'/, '#2');
+		} else {
+			assert.strictEqual(vm2.run(`
+				Buffer.prototype.__defineGetter__("xxx", () => 4);
+				Buffer.prototype.xxx;
+			`), undefined, '#2');
+		}
 
 		assert.strictEqual(vm2.run(`
 			global.__defineGetter__("test", () => 123); global.test;
-		`), 123, '#2');
+		`), 123, '#3');
 	});
 
 	it('__lookupGetter__ / __lookupSetter__ attack', () => {
@@ -504,8 +515,8 @@ describe('VM', () => {
 		const vm2 = new VM();
 
 		assert.strictEqual(vm2.run(`
-			Buffer.from.__lookupGetter__("__proto__");
-		`), undefined, '#1');
+			Buffer.from.__lookupGetter__("__proto__") === Object.prototype.__lookupGetter__.call(Buffer.from, "__proto__");
+		`), true, '#1');
 	});
 
 	it('contextifying a contextified value attack', () => {
@@ -770,6 +781,26 @@ describe('VM', () => {
 			Object[Symbol.hasInstance].call = ()=>true;
 			Buffer.from.constructor("return process")().mainModule.require("child_process").execSync("whoami").toString()
 		`), /process is not defined/, '#2');
+	});
+
+	it('Proxy::getOwnPropertyDescriptor attack', () => {
+		// https://github.com/patriksimek/vm2/issues/178#issuecomment-450978210
+
+		const vm2 = new VM();
+
+		assert.throws(() => vm2.run(`
+			(function(){
+				try{
+					Buffer.from(new Proxy({}, {
+						getOwnPropertyDescriptor(){
+							throw f=>f.constructor("return process")();
+						}
+					}));
+				}catch(e){
+					return e(()=>{}).mainModule.require("child_process").execSync("whoami").toString();
+				}
+			})()
+		`), /e is not a function/);
 	});
 
 	after(() => {

@@ -489,13 +489,24 @@ describe('VM', () => {
 
 		const vm2 = new VM();
 
-		assert.throws(() => vm2.run(`
-			Buffer.prototype.__defineGetter__("toString", () => {});
-		`), /'defineProperty' on proxy: trap returned falsish for property 'toString'/, '#1');
+		assert.strictEqual(vm2.run(`
+			Buffer.prototype.__defineGetter__ === {}.__defineGetter__;
+		`), true, '#1');
+
+		if (NODE_VERSION > 6) {
+			assert.throws(() => vm2.run(`
+				Buffer.prototype.__defineGetter__("toString", () => {});
+			`), /'defineProperty' on proxy: trap returned falsish for property 'toString'/, '#2');
+		} else {
+			assert.strictEqual(vm2.run(`
+				Buffer.prototype.__defineGetter__("xxx", () => 4);
+				Buffer.prototype.xxx;
+			`), undefined, '#2');
+		}
 
 		assert.strictEqual(vm2.run(`
 			global.__defineGetter__("test", () => 123); global.test;
-		`), 123, '#2');
+		`), 123, '#3');
 	});
 
 	it('__lookupGetter__ / __lookupSetter__ attack', () => {
@@ -504,8 +515,8 @@ describe('VM', () => {
 		const vm2 = new VM();
 
 		assert.strictEqual(vm2.run(`
-			Buffer.from.__lookupGetter__("__proto__");
-		`), undefined, '#1');
+			Buffer.from.__lookupGetter__("__proto__") === Object.prototype.__lookupGetter__.call(Buffer.from, "__proto__");
+		`), true, '#1');
 	});
 
 	it('contextifying a contextified value attack', () => {

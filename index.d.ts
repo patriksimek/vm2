@@ -130,7 +130,10 @@ export class VM {
  * to any VM (context); rather, it is bound before each run, just for that run.
  */
 export class VMScript {
-  constructor(code: string, path?: string);
+  constructor(code: string, path?: string, options?: {
+    lineOffset: number;
+    columnOffset: number;
+  });
   /** Wraps the code */
   wrap(prefix: string, postfix: string): VMScript;
   /** Compiles the code. If called multiple times, the code is only compiled once. */

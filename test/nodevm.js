@@ -408,6 +408,41 @@ describe('precompiled scripts', () => {
 		assert.ok('number' === typeof val1 && 'number' === typeof val2);
 		assert.ok( val1 != val2);
 	});
+	it('VMScript options', () => {
+		const vm = new NodeVM();
+		// V8 Stack Trace API: https://v8.dev/docs/stack-trace-api
+		const code = `module.exports = getStack(new Error());
+function customPrepareStackTrace(error, structuredStackTrace) {
+  return {
+    fileName: structuredStackTrace[0].getFileName(),
+    lineNumber: structuredStackTrace[0].getLineNumber(),
+    columnNumber: structuredStackTrace[0].getColumnNumber()
+  };
+};
+function getStack(error) {
+  var original = Error.prepareStackTrace;
+  Error.prepareStackTrace = customPrepareStackTrace;
+  Error.captureStackTrace(error, getStack);
+  var stack = error.stack;
+  Error.prepareStackTrace = original;
+  return stack;
+}`;
+		const script = new VMScript(code, 'test.js', {
+			lineOffset: 10,
+			columnOffset: 20
+		});
+		const stack = vm.run(script);
+		assert.strictEqual(stack.fileName, 'test.js');
+		// line number start with 1
+		assert.strictEqual(stack.lineNumber, 10 + 1);
+		// column number start with 0
+		// columnNumber was move just a tad to the right.
+		// because, vmScript wrap the code for commonjs
+		// Note: columnNumber option affect only the first line of the script
+		// https://github.com/nodejs/node/issues/26780
+		assert.ok(stack.columnNumber > (code.indexOf('new Error') + 20));
+
+	});
 });
 
 describe('source extensions', () => {

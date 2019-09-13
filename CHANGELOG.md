@@ -1,3 +1,8 @@
+v3.8.4 (2019-09-13)
+-------------------
+[fix] Do not allow precompiling VMScript (XmiliaH)
+[fix] Security fixes (XmiliaH)
+
 v3.8.3 (2019-07-31)
 -------------------
 [fix] Security fixes

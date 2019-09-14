@@ -10,7 +10,6 @@ vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in mo
 * Sandbox can require modules (builtin and external)
 * You can limit access to certain (or all) builtin modules
 * You can securely call methods and exchange data and callbacks between sandboxes
-* Is immune to `while (true) {}` (see docs)
 * Is immune to all known methods of attacks
 * Transpilers support
 
@@ -97,7 +96,7 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 * `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc) will throw an `EvalError` (default: `true`).
 * `wasm` -  If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
 
-**IMPORTANT**: Timeout is only effective on synchronous code you run through `run`. Timeout is NOT effective on any method returned by VM.
+**IMPORTANT**: Timeout is only effective on synchronous code you run through `run`. Timeout is NOT effective on any method returned by VM. There're some situations when timeout doesn't work - see [#244](https://github.com/patriksimek/vm2/pull/244).
 
 ```javascript
 const {VM} = require('vm2');

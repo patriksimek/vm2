@@ -6,8 +6,38 @@
 const assert = require('assert');
 const {VM, VMScript} = require('..');
 const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
+const {inspect} = require('util');
 
 global.isVM = false;
+
+describe('node', () => {
+	let vm;
+
+	const doubleProxy = new Proxy(new Proxy({x: 1}, {get() {
+		throw new Error('Expected');
+	}}), {});
+
+	before(() => {
+		vm = new VM();
+	});
+	it('inspect', () => {
+		assert.throws(() => inspect(doubleProxy), /Expected/);
+		if (NODE_VERSION !== 10) {
+			// This failes on node 10 since they do not unwrap proxys.
+			// And the hack to fix this is only in the inner proxy.
+			// We could add another hack, but that one would require
+			// to look if the caller is from a special node function and
+			// then remove all the integer keys. To get the caller we
+			// would need to get the stack trace which is slow and
+			// the probability of this call is so low that I don't do
+			// this right now.
+			assert.strictEqual(inspect(vm.run('[1, 2, 3]')), inspect([1, 2, 3]), true);
+		}
+	});
+	after(() => {
+		vm = null;
+	});
+});
 
 describe('contextify', () => {
 	let vm;
@@ -811,11 +841,13 @@ describe('VM', () => {
 describe('precompiled scripts', () => {
 	it('VM', () => {
 		const vm = new VM();
-		const script = new VMScript('Math.random()');
+		const script = new VMScript('global.i=global.i||0;global.i++');
 		const val1 = vm.run(script);
 		const val2 = vm.run(script);
+		const failScript = new VMScript('(');
 		assert.ok('number' === typeof val1 && 'number' === typeof val2);
-		assert.ok( val1 != val2);
+		assert.ok( val1 === 0 && val2 === 1);
+		assert.throws(() => failScript.compile(), /SyntaxError/);
 	});
 });
 

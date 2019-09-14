@@ -316,6 +316,8 @@ describe('VM', () => {
 				return true;
 			});
 		}
+		assert.throws(() => new VM({compiler: 'nonexistant'}), /Unsupported compiler/);
+		assert.throws(() => new VMScript('', '', {compiler: 'nonexistant'}), /Unsupported compiler/);
 	});
 
 	it('timeout', () => {

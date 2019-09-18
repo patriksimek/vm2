@@ -350,8 +350,8 @@ describe('VM', () => {
 		assert.throws(() => vm2.run('new Function("as"+"ync function(){}")'), /Async not available/, '#2');
 		assert.throws(() => vm2.run('new (function*(){}).constructor("as"+"ync function(){}")'), /Async not available/, '#3');
 		assert.throws(() => vm2.run('Promise.resolve().then(function(){})'), /Async not available/, '#4');
-		assert.throws(() => vm2.run('Promise.resolve().finally(function(){})'), /Async not available/, '#5');
-		assert.throws(() => vm2.run('Promise.resolve().catch(function(){})'), /Async not available/, '#6');
+		if (Promise.prototype.finally) assert.throws(() => vm2.run('Promise.resolve().finally(function(){})'), /Async not available/, '#5');
+		if (Promise.prototype.catch) assert.throws(() => vm2.run('Promise.resolve().catch(function(){})'), /Async not available/, '#6');
 		assert.throws(() => vm2.run('eval("as"+"ync function(){}")'), /Async not available/, '#7');
 	});
 

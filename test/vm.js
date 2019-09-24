@@ -353,6 +353,8 @@ describe('VM', () => {
 		if (Promise.prototype.finally) assert.throws(() => vm2.run('Promise.resolve().finally(function(){})'), /Async not available/, '#5');
 		if (Promise.prototype.catch) assert.throws(() => vm2.run('Promise.resolve().catch(function(){})'), /Async not available/, '#6');
 		assert.throws(() => vm2.run('eval("as"+"ync function(){}")'), /Async not available/, '#7');
+		assert.strictEqual(vm2.run('Object.getPrototypeOf((function*(){}).constructor)'), vm2.run('Function'), '#8');
+		assert.throws(() => vm2.run('Function')('async function(){}'), /Async not available/, '#9');
 	});
 
 	it('various attacks #1', () => {

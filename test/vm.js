@@ -128,11 +128,24 @@ describe('contextify', () => {
 		assert.strictEqual(Object.prototype.toString.call(vm.run(`new Date`)), '[object Date]');
 		assert.strictEqual(Object.prototype.toString.call(vm.run(`new RangeError`)), '[object Error]');
 		assert.strictEqual(Object.prototype.toString.call(vm.run(`/a/g`)), '[object RegExp]');
+		assert.strictEqual(Object.prototype.toString.call(vm.run(`new String`)), '[object String]');
+		assert.strictEqual(Object.prototype.toString.call(vm.run(`new Number`)), '[object Number]');
+		assert.strictEqual(Object.prototype.toString.call(vm.run(`new Boolean`)), '[object Boolean]');
 
 		assert.strictEqual(vm.run(`((obj) => Object.prototype.toString.call(obj))`)([]), '[object Array]');
 		assert.strictEqual(vm.run(`((obj) => Object.prototype.toString.call(obj))`)(new Date), '[object Date]');
 		assert.strictEqual(vm.run(`((obj) => Object.prototype.toString.call(obj))`)(new RangeError), '[object Error]');
 		assert.strictEqual(vm.run(`((obj) => Object.prototype.toString.call(obj))`)(/a/g), '[object RegExp]');
+		assert.strictEqual(vm.run(`((obj) => Object.prototype.toString.call(obj))`)(new String), '[object String]');
+		assert.strictEqual(vm.run(`((obj) => Object.prototype.toString.call(obj))`)(new Number), '[object Number]');
+		assert.strictEqual(vm.run(`((obj) => Object.prototype.toString.call(obj))`)(new Boolean), '[object Boolean]');
+
+		assert.strictEqual(typeof vm.run(`new String`), 'object');
+		assert.strictEqual(typeof vm.run(`new Number`), 'object');
+		assert.strictEqual(typeof vm.run(`new Boolean`), 'object');
+		assert.strictEqual(vm.run(`((obj) => typeof obj)`)(new String), 'object');
+		assert.strictEqual(vm.run(`((obj) => typeof obj)`)(new Number), 'object');
+		assert.strictEqual(vm.run(`((obj) => typeof obj)`)(new Boolean), 'object');
 
 		let o = vm.run('let x = {a: test.date, b: test.date};x');
 		assert.strictEqual(vm.run('x.valueOf().a instanceof Date'), true);
@@ -160,15 +173,15 @@ describe('contextify', () => {
 
 	it('string', () => {
 		assert.strictEqual(vm.run('(test.string).constructor === String'), true);
-		assert.strictEqual(vm.run("typeof(test.stringO) === 'string' && test.string.valueOf instanceof Object"), true);
+		assert.strictEqual(vm.run("typeof(test.string) === 'string' && test.string.valueOf instanceof Object"), true);
 	});
 
 	it('number', () => {
-		assert.strictEqual(vm.run("typeof(test.numberO) === 'number' && test.number.valueOf instanceof Object"), true);
+		assert.strictEqual(vm.run("typeof(test.number) === 'number' && test.number.valueOf instanceof Object"), true);
 	});
 
 	it('boolean', () => {
-		assert.strictEqual(vm.run("typeof(test.booleanO) === 'boolean' && test.boolean.valueOf instanceof Object"), true);
+		assert.strictEqual(vm.run("typeof(test.boolean) === 'boolean' && test.boolean.valueOf instanceof Object"), true);
 	});
 
 	it('date', () => {
@@ -295,7 +308,13 @@ describe('VM', () => {
 	});
 
 	it('globals', () => {
+		const dyn = {};
+		vm.setGlobal('dyn', dyn);
+		vm.setGlobals({dyns: dyn});
 		assert.equal(vm.run('round(1.5)'), 2);
+		assert.equal(vm.getGlobal('dyn'), dyn);
+		assert.equal(vm.sandbox.dyn, dyn);
+		assert.equal(vm.sandbox.dyns, dyn);
 	});
 
 	it('errors', () => {
@@ -863,6 +882,10 @@ describe('precompiled scripts', () => {
 		assert.ok('number' === typeof val1 && 'number' === typeof val2);
 		assert.ok( val1 === 0 && val2 === 1);
 		assert.throws(() => failScript.compile(), /SyntaxError/);
+		assert.ok(Object.keys(failScript).includes('code'));
+		assert.ok(Object.keys(failScript).includes('filename'));
+		assert.ok(Object.keys(failScript).includes('compiler'));
+		assert.ok(!Object.keys(failScript).includes('_code'));
 	});
 });
 

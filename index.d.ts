@@ -135,15 +135,18 @@ export interface VMScriptOptions {
  * to any VM (context); rather, it is bound before each run, just for that run.
  */
 export class VMScript {
-  code: string;
-  filename: string;
-  options: VMScriptOptions;
+  readonly code: string;
+  readonly filename: string;
+  readonly options: VMScriptOptions;
   /** Create VMScript instance. */
   constructor(code: string, filename?: string, options?: VMScriptOptions);
-  /** Wraps the code. Will invalidate the code cache. */
-  wrap(prefix: string, suffix: string): VMScript;
+  /**
+   * Wraps the code. Will invalidate the code cache.
+   * @deprecated
+   */
+  wrap(prefix: string, suffix: string): this;
   /** This code will be compiled to VM code. */
-  compile(): VMScript;
+  compile(): this;
 }
 
 /** Custom Error class */

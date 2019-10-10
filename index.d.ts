@@ -20,7 +20,7 @@ export interface VMRequire {
   /** Collection of mock modules (both external or builtin). */
   mock?: any;
   /* An additional lookup function in case a module wasn't found in one of the traditional node lookup paths. */
-  resolve?: (moduleName: string, parentDirname: string) => string;
+  resolve?: (moduleName: string, parentDirname: string) => string | null | undefined;
 }
 
 /**
@@ -69,23 +69,22 @@ export interface NodeVMOptions extends VMOptions {
   /** `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script. */
   wrapper?: "commonjs" | "none";
   /** File extensions that the internal module resolver should accept. */
-  sourceExtensions?: string[]
+  sourceExtensions?: string[];
 }
 
 /**
  * A VM with behavior more similar to running inside Node.
  */
 export class NodeVM extends EventEmitter {
+  options: NodeVMOptions;
   constructor(options?: NodeVMOptions);
-  /** Runs the code */
-  run(js: string, path: string): any;
-  /** Runs the VMScript object */
-  run(script: VMScript, path?: string): any;
+  /** Runs the code in NodeVM. */
+  run(code: string | VMScript, filename?: string): any;
 
   /** Freezes the object inside VM making it read-only. Not available for primitive values. */
-  freeze(object: any, name: string): any;
+  freeze<T>(value: T, globalName?: string): T;
   /** Protects the object inside VM making impossible to set functions as it's properties. Not available for primitive values. */
-  protect(object: any, name: string): any;
+  protect<T>(value: T, globalName?: string): T;
   /** Require a module in VM and return it's exports. */
   require(module: string): any;
 
@@ -104,7 +103,7 @@ export class NodeVM extends EventEmitter {
    * @param {string} [filename] File name (used in stack traces only).
    * @param {Object} [options] VM options.
    */
-  static file(filename: string, options: NodeVMOptions): NodeVM
+  static file(filename: string, options: NodeVMOptions): NodeVM;
 }
 
 /**
@@ -113,15 +112,21 @@ export class NodeVM extends EventEmitter {
  * (`setInterval`, `setTimeout` and `setImmediate`) are not available by default.
  */
 export class VM {
+  options: VMOptions;
   constructor(options?: VMOptions);
-  /** Runs the code */
-  run(js: string): any;
-  /** Runs the VMScript object */
-  run(script: VMScript): any;
+  /** Runs the code in VM*/
+  run(code: string | VMScript, filename?: string): any;
   /** Freezes the object inside VM making it read-only. Not available for primitive values. */
-  freeze(object: any, name: string): any;
+  freeze<T>(value: T, globalName?: string): T;
   /** Protects the object inside VM making impossible to set functions as it's properties. Not available for primitive values */
-  protect(object: any, name: string): any;
+  protect<T>(value: T, globalName?: string): T;
+}
+
+export interface VMScriptOptions {
+  lineOffset?: number;
+  columnOffset?: number;
+  filename?: string;
+  compiler?: "javascript" | "coffeescript" | CompilerFunction;
 }
 
 /**
@@ -130,14 +135,15 @@ export class VM {
  * to any VM (context); rather, it is bound before each run, just for that run.
  */
 export class VMScript {
-  constructor(code: string, path?: string, options?: {
-    lineOffset: number;
-    columnOffset: number;
-  });
-  /** Wraps the code */
-  wrap(prefix: string, postfix: string): VMScript;
-  /** Compiles the code. If called multiple times, the code is only compiled once. */
-  compile(): any;
+  code: string;
+  filename: string;
+  options: VMScriptOptions;
+  /** Create VMScript instance. */
+  constructor(code: string, filename?: string, options?: VMScriptOptions);
+  /** Wraps the code. Will invalidate the code cache. */
+  wrap(prefix: string, suffix: string): VMScript;
+  /** This code will be compiled to VM code. */
+  compile(): VMScript;
 }
 
 /** Custom Error class */

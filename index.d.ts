@@ -95,7 +95,7 @@ export class NodeVM extends EventEmitter {
    * @param {string} [filename] File name (used in stack traces only).
    * @param {Object} [options] VM options.
    */
-  static code(script: string, filename: string, options: NodeVMOptions): NodeVM;
+  static code(script: string, filename: string, options: NodeVMOptions): any;
 
   /**
    * Create NodeVM and run script from file inside it.
@@ -103,7 +103,7 @@ export class NodeVM extends EventEmitter {
    * @param {string} [filename] File name (used in stack traces only).
    * @param {Object} [options] VM options.
    */
-  static file(filename: string, options: NodeVMOptions): NodeVM;
+  static file(filename: string, options: NodeVMOptions): any;
 }
 
 /**

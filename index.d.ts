@@ -69,23 +69,44 @@ export interface NodeVMOptions extends VMOptions {
   /** `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script. */
   wrapper?: "commonjs" | "none";
   /** File extensions that the internal module resolver should accept. */
-  sourceExtensions?: string[]
+  sourceExtensions?: string[];
+}
+
+/**
+ * VM is a simple sandbox, without `require` feature, to synchronously run an untrusted code.
+ * Only JavaScript built-in objects + Buffer are available. Scheduling functions
+ * (`setInterval`, `setTimeout` and `setImmediate`) are not available by default.
+ */
+export class VM {
+  constructor(options?: VMOptions);
+  /** Direct access to the global sandbox object */
+  readonly sandbox: any;
+  /** Timeout to use for the run methods */
+  timeout?: number;
+  /** Runs the code */
+  run(js: string, path?: string): any;
+  /** Runs the VMScript object */
+  run(script: VMScript): any;
+  /** Runs the code in the specific file */
+  runFile(filename: string): any;
+  /** Loads all the values into the global object with the same names */
+  setGlobals(values: any): this;
+  /** Make a object visible as a global with a specific name */
+  setGlobal(name: string, value: any): this;
+  /** Get the global object with the specific name */
+  getGlobal(name: string): any;
+  /** Freezes the object inside VM making it read-only. Not available for primitive values. */
+  freeze(object: any, name?: string): any;
+  /** Protects the object inside VM making impossible to set functions as it's properties. Not available for primitive values */
+  protect(object: any, name?: string): any;
 }
 
 /**
  * A VM with behavior more similar to running inside Node.
  */
-export class NodeVM extends EventEmitter {
+export class NodeVM extends EventEmitter implements VM {
   constructor(options?: NodeVMOptions);
-  /** Runs the code */
-  run(js: string, path: string): any;
-  /** Runs the VMScript object */
-  run(script: VMScript, path?: string): any;
 
-  /** Freezes the object inside VM making it read-only. Not available for primitive values. */
-  freeze(object: any, name: string): any;
-  /** Protects the object inside VM making impossible to set functions as it's properties. Not available for primitive values. */
-  protect(object: any, name: string): any;
   /** Require a module in VM and return it's exports. */
   require(module: string): any;
 
@@ -96,7 +117,7 @@ export class NodeVM extends EventEmitter {
    * @param {string} [filename] File name (used in stack traces only).
    * @param {Object} [options] VM options.
    */
-  static code(script: string, filename: string, options: NodeVMOptions): NodeVM;
+  static code(script: string, filename?: string, options?: NodeVMOptions): any;
 
   /**
    * Create NodeVM and run script from file inside it.
@@ -104,24 +125,28 @@ export class NodeVM extends EventEmitter {
    * @param {string} [filename] File name (used in stack traces only).
    * @param {Object} [options] VM options.
    */
-  static file(filename: string, options: NodeVMOptions): NodeVM
-}
+  static file(filename: string, options?: NodeVMOptions): any;
 
-/**
- * VM is a simple sandbox, without `require` feature, to synchronously run an untrusted code.
- * Only JavaScript built-in objects + Buffer are available. Scheduling functions
- * (`setInterval`, `setTimeout` and `setImmediate`) are not available by default.
- */
-export class VM {
-  constructor(options?: VMOptions);
+   /** Direct access to the global sandbox object */
+  readonly sandbox: any;
+  /** Only here because of implements VM. Does nothing. */
+  timeout?: number;
   /** Runs the code */
-  run(js: string): any;
+  run(js: string, path?: string): any;
   /** Runs the VMScript object */
   run(script: VMScript): any;
+  /** Runs the code in the specific file */
+  runFile(filename: string): any;
+  /** Loads all the values into the global object with the same names */
+  setGlobals(values: any): this;
+  /** Make a object visible as a global with a specific name */
+  setGlobal(name: string, value: any): this;
+  /** Get the global object with the specific name */
+  getGlobal(name: string): any;
   /** Freezes the object inside VM making it read-only. Not available for primitive values. */
-  freeze(object: any, name: string): any;
+  freeze(object: any, name?: string): any;
   /** Protects the object inside VM making impossible to set functions as it's properties. Not available for primitive values */
-  protect(object: any, name: string): any;
+  protect(object: any, name?: string): any;
 }
 
 /**
@@ -130,14 +155,29 @@ export class VM {
  * to any VM (context); rather, it is bound before each run, just for that run.
  */
 export class VMScript {
-  constructor(code: string, path?: string, options?: {
-    lineOffset: number;
-    columnOffset: number;
+  constructor(code: string, path: string, options?: {
+    lineOffset?: number;
+    columnOffset?: number;
+    compiler?: "javascript" | "coffeescript" | CompilerFunction;
   });
-  /** Wraps the code */
-  wrap(prefix: string, postfix: string): VMScript;
+  constructor(code: string, options?: {
+    filename?: string,
+    lineOffset?: number;
+    columnOffset?: number;
+    compiler?: "javascript" | "coffeescript" | CompilerFunction;
+  });
+  readonly code: string;
+  readonly filename: string;
+  readonly lineOffset: number;
+  readonly columnOffset: number;
+  readonly compiler: "javascript" | "coffeescript" | CompilerFunction;
+  /** 
+   * Wraps the code 
+   * @deprecated
+   */
+  wrap(prefix: string, postfix: string): this;
   /** Compiles the code. If called multiple times, the code is only compiled once. */
-  compile(): any;
+  compile(): this;
 }
 
 /** Custom Error class */

@@ -1,3 +1,13 @@
+v3.9.0 (2020-03-21)
+-------------------
+[new] Added vm.Script `lineOffset` and `columnOffset` options (azu)
+[new] Allow to specify a compiler per VMScript (XmiliaH)
+[new] Add option to disable async (XmiliaH)
+[new] Added allot of jsdoc (XmiliaH)
+[fix] Fix access to frozen or unconfigurable properties (XmiliaH)
+[fix] Double wrap Objects to prevent breakout via inspect (XmiliaH)
+[fix] Compile now compiles VM code (XmiliaH)
+
 v3.8.4 (2019-09-13)
 -------------------
 [fix] Do not allow precompiling VMScript (XmiliaH)

@@ -376,6 +376,18 @@ describe('VM', () => {
 		assert.throws(() => vm2.run('Function')('async function(){}'), /Async not available/, '#9');
 	});
 
+	it('frozen unconfigurable access', () => {
+		const vm2 = new VM();
+
+		assert.doesNotThrow(()=>{
+			vm2.run('x => x.prop')(Object.freeze({prop: 'good'}));
+		});
+
+		assert.doesNotThrow(()=>{
+			vm2.run('x => x.prop')(Object.defineProperty({}, 'prop', {value: 'good'}));
+		});
+	});
+
 	it('various attacks #1', () => {
 		const vm2 = new VM({sandbox: {log: console.log, boom: () => {
 			throw new Error();
@@ -654,26 +666,20 @@ describe('VM', () => {
 
 		vm2 = new VM();
 
-		assert.throws(() => vm2.run(`
-			var process;
-			try {
-				Object.defineProperty(Buffer.from(""), "", {
-					value: new Proxy({}, {
-						getPrototypeOf(target) {
-							if(this.t) {
-								throw Buffer.from;
-							}
-
-							this.t=true;
-							return Object.getPrototypeOf(target);
+		assert.doesNotThrow(() => vm2.run(`
+			Object.defineProperty(Buffer.from(""), "", {
+				value: new Proxy({}, {
+					getPrototypeOf(target) {
+						if(this.t) {
+							throw Buffer.from;
 						}
-					})
-				});
-			} catch (e) {
-				process = e.constructor("return process")();
-			}
-			process.mainModule.require("child_process").execSync("whoami").toString()
-		`), /e\.constructor\(\.\.\.\) is not a function/, '#4');
+
+						this.t=true;
+						return Object.getPrototypeOf(target);
+					}
+				})
+			});
+		`), '#4');
 
 		vm2 = new VM();
 

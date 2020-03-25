@@ -355,6 +355,15 @@ describe('modules', () => {
 		assert.strictEqual(vm.run("module.exports = require('fs').readFileSync()"), 'Nice try!');
 	});
 
+	it('missing contextify attack', () => {
+		// https://github.com/patriksimek/vm2/issues/276
+
+		const vm = new NodeVM();
+
+		assert.strictEqual(vm.run('module.exports = setTimeout(()=>{}).ref().constructor.constructor === Function'), true);
+
+	});
+
 	if (NODE_VERSION < 12) {
 		// Doesn't work under Node 12, fix pending
 		it('native event emitter', done => {

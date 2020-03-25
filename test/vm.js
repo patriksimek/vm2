@@ -823,7 +823,7 @@ describe('VM', () => {
 
 		const vm2 = new VM();
 
-		assert.strictEqual(vm2.run(`
+		assert.strictEqual(vm2.run(`(function(){
 			var process;
 			Object.defineProperty(Object.prototype, "set", {get(){
 				delete Object.prototype.set;
@@ -843,7 +843,7 @@ describe('VM', () => {
 			}catch(e){
 				e.x = Buffer.from;
 			}
-			process
+			return process;})()
 		`), undefined, '#1');
 	});
 

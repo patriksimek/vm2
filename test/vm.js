@@ -378,14 +378,30 @@ describe('VM', () => {
 
 	it('frozen unconfigurable access', () => {
 		const vm2 = new VM();
+		const obj = {};
 
 		assert.doesNotThrow(()=>{
-			vm2.run('x => x.prop')(Object.freeze({prop: 'good'}));
+			vm2.run('x => x.prop')(Object.freeze({prop: {}}));
 		});
 
 		assert.doesNotThrow(()=>{
-			vm2.run('x => x.prop')(Object.defineProperty({}, 'prop', {value: 'good'}));
+			vm2.run('x => Object.getOwnPropertyDescriptor(x, "prop")')(Object.freeze({prop: {}}));
 		});
+
+		assert.doesNotThrow(()=>{
+			vm2.run('x => x.prop')(Object.defineProperty({}, 'prop', {value: {}}));
+		});
+
+		assert.doesNotThrow(()=>{
+			vm2.run('x => Object.isExtensible(x)')(Object.freeze({prop: {}}));
+		});
+
+		assert.doesNotThrow(()=>{
+			vm2.run('x => {Object.preventExtensions(x); Object.getOwnPropertyDescriptor(x, "prop")}')({prop: {}});
+		});
+
+		assert.strictEqual(vm2.run('x => {Object.preventExtensions(x); return Object.getOwnPropertyDescriptor(x, "prop").value}')({prop: obj}), obj);
+
 	});
 
 	it('various attacks #1', () => {
@@ -603,22 +619,18 @@ describe('VM', () => {
 		let vm2 = new VM();
 
 		// The Buffer.from("") is only used to get instance of object contextified from the host
-		assert.throws(() => vm2.run(`
-			try {
-				Object.defineProperty(Buffer.from(""), "x", {
-					get set() {
-						Object.defineProperty(Object.prototype, "get", {
-							get() {
-								throw x=>x.constructor.constructor("return process")();
-							}
-						});
-						return ()=>{};
-					}
-				});
-			} catch(e) {
-				e({});
-			}
-		`), /process is not defined/, '#1');
+		assert.doesNotThrow(() => vm2.run(`
+			Object.defineProperty(Buffer.from(""), "x", {
+				get set() {
+					Object.defineProperty(Object.prototype, "get", {
+						get() {
+							throw new Error();
+						}
+					});
+					return ()=>{};
+				}
+			});
+		`), '#1');
 
 		vm2 = new VM({
 			sandbox: {
@@ -811,7 +823,7 @@ describe('VM', () => {
 
 		const vm2 = new VM();
 
-		assert.strictEqual(vm2.run(`
+		assert.strictEqual(vm2.run(`(function(){
 			var process;
 			Object.defineProperty(Object.prototype, "set", {get(){
 				delete Object.prototype.set;
@@ -831,7 +843,7 @@ describe('VM', () => {
 			}catch(e){
 				e.x = Buffer.from;
 			}
-			process
+			return process;})()
 		`), undefined, '#1');
 	});
 

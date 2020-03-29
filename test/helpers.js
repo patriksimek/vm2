@@ -1,6 +1,6 @@
 /* eslint-env mocha */
 
-const {match} = require('../lib/wildcard');
+const {match} = require('../lib/helpers');
 const assert = require('assert');
 
 describe('wildcard matching', () => {

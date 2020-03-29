@@ -1,3 +1,8 @@
+v3.9.1 (2020-03-29)
+-------------------
+[fix] Require helpers statically in main (XmiliaH)
+[fix] Fix for non-configurable property access (XmiliaH)
+
 v3.9.0 (2020-03-21)
 -------------------
 [new] Added vm.Script `lineOffset` and `columnOffset` options (azu)

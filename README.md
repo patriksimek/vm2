@@ -95,6 +95,7 @@ VM is a simple sandbox, without `require` feature, to synchronously run an untru
 * `compiler` - `javascript` (default) or `coffeescript` or custom compiler function. The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
 * `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc) will throw an `EvalError` (default: `true`).
 * `wasm` -  If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
+* `fixAsync` - If set to `true` any attempt to run code using async will throw a `VMError` (default: `false`).
 
 **IMPORTANT**: Timeout is only effective on synchronous code you run through `run`. Timeout is NOT effective on any method returned by VM. There're some situations when timeout doesn't work - see [#244](https://github.com/patriksimek/vm2/pull/244).
 
@@ -141,6 +142,8 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `require.resolve` - An additional lookup function in case a module wasn't found in one of the traditional node lookup paths.
 * `nesting` - `true` to enable VMs nesting (default: `false`).
 * `wrapper` - `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script.
+* `argv` - Array to be passed to `process.argv`.
+* `env` - Object to be passed to `process.env`.
 
 **IMPORTANT**: Timeout is not effective for NodeVM so it is not immune to `while (true) {}` or similar evil.
 

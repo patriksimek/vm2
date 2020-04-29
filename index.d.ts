@@ -51,9 +51,13 @@ export interface VMOptions {
    */
   eval?: boolean;
   /**
-   * - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
+   * If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
    */
   wasm?: boolean;
+  /**
+   * If set to `true` any attempt to run code using async will throw a `VMError` (default: `false`).
+   */
+  fixAsync?: boolean;
 }
 
 /**

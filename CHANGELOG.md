@@ -1,3 +1,9 @@
+v3.9.2 (2020-04-29)
+-------------------
+[new] Added NodeVM options to pass argv & env to process object (XmiliaH)
+[fix] Fixed breakouts in NodeVM (XmiliaH)
+[fix] Made async check more robust (XmiliaH)
+
 v3.9.1 (2020-03-29)
 -------------------
 [fix] Require helpers statically in main (XmiliaH)

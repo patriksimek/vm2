@@ -356,11 +356,18 @@ describe('modules', () => {
 	});
 
 	it('missing contextify attack', () => {
-		// https://github.com/patriksimek/vm2/issues/276
-
 		const vm = new NodeVM();
 
+		// https://github.com/patriksimek/vm2/issues/276
 		assert.strictEqual(vm.run('module.exports = setTimeout(()=>{}).ref().constructor.constructor === Function'), true);
+
+		// https://github.com/patriksimek/vm2/issues/285
+		assert.strictEqual(vm.run(`try {
+			process.listeners({toString(){return {};}});
+			module.exports = true;
+		  } catch(e) {    
+			module.exports = e.constructor.constructor === Function;
+		  }`), true);
 
 	});
 

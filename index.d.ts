@@ -66,7 +66,7 @@ export interface VMOptions {
 export interface NodeVMOptions extends VMOptions {
   /** `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`). */
   console?: "inherit" | "redirect" | "off";
-  /** `true` or an object to enable `require` optionss (default: `false`). */
+  /** `true` or an object to enable `require` options (default: `false`). */
   require?: true | VMRequire;
   /** `true` to enable VMs nesting (default: `false`). */
   nesting?: boolean;

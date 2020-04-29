@@ -70,6 +70,16 @@ export interface NodeVMOptions extends VMOptions {
   wrapper?: "commonjs" | "none";
   /** File extensions that the internal module resolver should accept. */
   sourceExtensions?: string[];
+  /** 
+   * Array of arguments passed to `process.argv`. 
+	 * This object will not be copied and the script can change this object. 
+   */
+  argv?: string[];
+  /** 
+   * Environment map passed to `process.env`. 
+	 * This object will not be copied and the script can change this object.
+   */
+  env?: any;
 }
 
 /**

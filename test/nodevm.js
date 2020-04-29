@@ -14,13 +14,25 @@ global.isVM = false;
 describe('NodeVM', () => {
 	let vm;
 
+	const customArgv = [];
+	const customEnv = {};
+
 	before(() => {
-		vm = new NodeVM;
+		vm = new NodeVM({
+			argv: customArgv,
+			env: customEnv
+		});
 	});
 
 	it('globals', () => {
 		const ex = vm.run('module.exports = global');
 		assert.equal(ex.isVM, true);
+	});
+
+	it('options', ()=>{
+		const vmProcess = vm.run('module.exports = process');
+		assert.equal(vmProcess.argv, customArgv);
+		assert.equal(vmProcess.env, customEnv);
 	});
 
 	it('errors', () => {

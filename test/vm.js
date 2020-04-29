@@ -363,18 +363,21 @@ describe('VM', () => {
 		});
 	}
 
-	it('async', () => {
-		const vm2 = new VM({fixAsync: true});
-		assert.throws(() => vm2.run('(async function(){})'), /Async not available/, '#1');
-		assert.strictEqual(vm2.run('Object.getPrototypeOf((function*(){}).constructor)'), vm2.run('Function'), '#2');
-		assert.throws(() => vm2.run('new Function("(as"+"ync function(){})")'), /Async not available/, '#3');
-		assert.throws(() => vm2.run('new (function*(){}).constructor("(as"+"ync function(){})")'), /Async not available/, '#4');
-		assert.throws(() => vm2.run('Promise.resolve().then(function(){})'), /Async not available/, '#5');
-		if (Promise.prototype.finally) assert.throws(() => vm2.run('Promise.resolve().finally(function(){})'), /Async not available/, '#6');
-		if (Promise.prototype.catch) assert.throws(() => vm2.run('Promise.resolve().catch(function(){})'), /Async not available/, '#7');
-		assert.throws(() => vm2.run('eval("(as"+"ync function(){})")'), /Async not available/, '#8');
-		assert.throws(() => vm2.run('Function')('(async function(){})'), /Async not available/, '#9');
-	});
+	if (NODE_VERSION > 7) {
+		// Node until 7 had no async, see https://node.green/
+		it('async', () => {
+			const vm2 = new VM({fixAsync: true});
+			assert.throws(() => vm2.run('(async function(){})'), /Async not available/, '#1');
+			assert.strictEqual(vm2.run('Object.getPrototypeOf((function*(){}).constructor)'), vm2.run('Function'), '#2');
+			assert.throws(() => vm2.run('new Function("(as"+"ync function(){})")'), /Async not available/, '#3');
+			assert.throws(() => vm2.run('new (function*(){}).constructor("(as"+"ync function(){})")'), /Async not available/, '#4');
+			assert.throws(() => vm2.run('Promise.resolve().then(function(){})'), /Async not available/, '#5');
+			if (Promise.prototype.finally) assert.throws(() => vm2.run('Promise.resolve().finally(function(){})'), /Async not available/, '#6');
+			if (Promise.prototype.catch) assert.throws(() => vm2.run('Promise.resolve().catch(function(){})'), /Async not available/, '#7');
+			assert.throws(() => vm2.run('eval("(as"+"ync function(){})")'), /Async not available/, '#8');
+			assert.throws(() => vm2.run('Function')('(async function(){})'), /Async not available/, '#9');
+		});
+	}
 
 	it('frozen unconfigurable access', () => {
 		const vm2 = new VM();

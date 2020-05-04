@@ -190,10 +190,17 @@ assert.ok(vm.run('return true') === true);
 
 ### Loading modules by relative path
 
-To load modules by relative path, you must pass full path of the script you're running as a second argument of vm's `run` method. Filename then also shows up in any stack traces produced from the script.
+To load modules by relative path, you must pass full path of the script you're running as a second argument of vm's `run` method if the script is a string. Filename then also shows up in any stack traces produced from the script.
 
 ```javascript
 vm.run("require('foobar')", "/data/myvmscript.js");
+```
+
+If the script you are running is an VMScript, the path is given in the VMScript constructor.
+
+```javascript
+const script = new VMScript("require('foobar')", {filename: "/data/myvmscript.js"});
+vm.run(script);
 ```
 
 ## VMScript

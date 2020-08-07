@@ -56,6 +56,11 @@ describe('NodeVM', () => {
 		assert.doesNotThrow(() => vm.run('#!shebang'));
 	});
 
+	it('strict', () => {
+		assert.doesNotThrow(() => vm.run('newGlobal = 2;'));
+		assert.throws(() => new NodeVM({strict: true}).run('newGlobal = 2;'), /ReferenceError: newGlobal is not defined/);
+	});
+
 	it.skip('timeout (not supported by Node\'s VM)', () => {
 		assert.throws(() => new NodeVM({
 			timeout: 10

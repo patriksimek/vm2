@@ -280,6 +280,63 @@ describe('contextify', () => {
 	});
 });
 
+describe('inspect', () => {
+	let vm;
+
+	before(() => {
+		const sandbox = { inspect };
+		vm = new VM({ sandbox });
+	});
+
+	it('boxed primitives', () => {
+		assert.equal(inspect(vm.run('new Number(1)')), inspect(new Number(1)));
+		assert.equal(vm.run('inspect(new Number(1))'), inspect(new Number(1)));
+		assert.equal(inspect(vm.run('new String(1)')), inspect(new String(1)));
+		assert.equal(vm.run('inspect(new String(1))'), inspect(new String(1)));
+		assert.equal(inspect(vm.run('new Boolean(1)')), inspect(new Boolean(1)));
+		assert.equal(vm.run('inspect(new Boolean(1))'), inspect(new Boolean(1)));
+	});
+
+	it('other built-in objects', () => {
+		assert.equal(inspect(vm.run('Object')), inspect(Object));
+		assert.equal(vm.run('inspect(Object)'), inspect(Object));
+		assert.equal(inspect(vm.run('Function')), inspect(Function));
+		assert.equal(vm.run('inspect(Function)'), inspect(Function));
+		assert.equal(inspect(vm.run('Symbol')), inspect(Symbol));
+		assert.equal(vm.run('inspect(Symbol)'), inspect(Symbol));
+		assert.equal(inspect(vm.run('Reflect')), inspect(Reflect));
+		assert.equal(vm.run('inspect(Reflect)'), inspect(Reflect));
+		assert.equal(inspect(vm.run('Proxy')), inspect(Proxy));
+		assert.equal(vm.run('inspect(Proxy)'), inspect(Proxy));
+		assert.equal(inspect(vm.run('JSON')), inspect(JSON));
+		assert.equal(vm.run('inspect(JSON)'), inspect(JSON));
+	});
+
+	it('built-in instances', () => {
+		assert.equal(inspect(vm.run('new Date')).slice(0, -3), inspect(new Date).slice(0, -3));
+		assert.equal(vm.run('inspect(new Date)').slice(0, -3), inspect(new Date).slice(0, -3));
+		assert.equal(inspect(vm.run('new RegExp("^", "g")')), inspect(new RegExp('^', 'g')));
+		assert.equal(vm.run('inspect(new RegExp("^", "g"))'), inspect(new RegExp('^', 'g')));
+		assert.equal(inspect(vm.run('new Array(50)')), inspect(new Array(50)));
+		assert.equal(vm.run('inspect(new Array(50))'), inspect(new Array(50)));
+		assert.equal(inspect(vm.run('new Set([1])')), inspect(new Set([1])));
+		assert.equal(vm.run('inspect(new Set([1]))'), inspect(new Set([1])));
+		assert.equal(inspect(vm.run('new Map([[1, 2]])')), inspect(new Map([[1, 2]])));
+		assert.equal(vm.run('inspect(new Map([[1, 2]]))'), inspect(new Map([[1, 2]])));
+		assert.equal(inspect(vm.run('Promise.resolve(1)')), inspect(Promise.resolve(1)));
+		assert.equal(vm.run('inspect(Promise.resolve(1))'), inspect(Promise.resolve(1)));
+	});
+
+	it('other objects', () => {
+		const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+		const GeneratorFunction = Object.getPrototypeOf(function* f() {}).constructor;
+		assert.equal(inspect(vm.run('Object.getPrototypeOf(async () => {}).constructor')), inspect(AsyncFunction));
+		assert.equal(vm.run('inspect(Object.getPrototypeOf(async () => {}).constructor)'), inspect(AsyncFunction));
+		assert.equal(inspect(vm.run('Object.getPrototypeOf(function* f() {}).constructor')), inspect(GeneratorFunction));
+		assert.equal(vm.run('inspect(Object.getPrototypeOf(function* f() {}).constructor)'), inspect(GeneratorFunction));
+	});
+});
+
 describe('VM', () => {
 	let vm;
 

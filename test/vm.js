@@ -327,14 +327,17 @@ describe('inspect', () => {
 		assert.equal(vm.run('inspect(Promise.resolve(1))'), inspect(Promise.resolve(1)));
 	});
 
-	it('other objects', () => {
-		const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
-		const GeneratorFunction = Object.getPrototypeOf(function* f() {}).constructor;
-		assert.equal(inspect(vm.run('Object.getPrototypeOf(async () => {}).constructor')), inspect(AsyncFunction));
-		assert.equal(vm.run('inspect(Object.getPrototypeOf(async () => {}).constructor)'), inspect(AsyncFunction));
-		assert.equal(inspect(vm.run('Object.getPrototypeOf(function* f() {}).constructor')), inspect(GeneratorFunction));
-		assert.equal(vm.run('inspect(Object.getPrototypeOf(function* f() {}).constructor)'), inspect(GeneratorFunction));
-	});
+	if (NODE_VERSION > 7) {
+		// Node until 7 had no async, see https://node.green/
+		it('other objects', () => {
+			const AsyncFunction = eval('Object.getPrototypeOf(async () => {}).constructor');
+			const GeneratorFunction = eval('Object.getPrototypeOf(function* f() {}).constructor');
+			assert.equal(inspect(vm.run('Object.getPrototypeOf(async () => {}).constructor')), inspect(AsyncFunction));
+			assert.equal(vm.run('inspect(Object.getPrototypeOf(async () => {}).constructor)'), inspect(AsyncFunction));
+			assert.equal(inspect(vm.run('Object.getPrototypeOf(function* f() {}).constructor')), inspect(GeneratorFunction));
+			assert.equal(vm.run('inspect(Object.getPrototypeOf(function* f() {}).constructor)'), inspect(GeneratorFunction));
+		});
+	}
 });
 
 describe('VM', () => {

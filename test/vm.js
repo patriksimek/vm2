@@ -972,7 +972,7 @@ describe('VM', () => {
 					return false;
 				}
 			});
-		`)
+		`);
 		assert.doesNotThrow(() => inspect(badObject));
 
 		// https://github.com/patriksimek/vm2/pull/315#issuecomment-673708529
@@ -984,7 +984,7 @@ describe('VM', () => {
 					throw (f) => f.constructor("return process;")();
 				}
 			});
-		`)
+		`);
 		assert.doesNotThrow(() => inspect(badObject));
 	});
 

@@ -480,13 +480,13 @@ describe('VM', () => {
 		`), /process is not defined/, '#1');
 
 		assert.throws(() => vm2.run(`
-		    try {
-		        boom();
-		    }
-		    catch (e) {
-		        const foreignFunction = e.constructor.constructor;
-		        const process = foreignFunction("return process")();
-		    }
+				try {
+						boom();
+				}
+				catch (e) {
+						const foreignFunction = e.constructor.constructor;
+						const process = foreignFunction("return process")();
+				}
 		`), /process is not defined/, '#2');
 
 		assert.doesNotThrow(() => vm2.run(`
@@ -946,6 +946,46 @@ describe('VM', () => {
 				}
 			})()
 		`), /e is not a function/);
+	});
+
+	it('inspect attack', () => {
+		// https://github.com/patriksimek/vm2/pull/315#issuecomment-673708529
+		let vm2 = new VM();
+		let badObject = vm2.run(`
+			const customInspect = Symbol.for('nodejs.util.inspect.custom');
+			Date.prototype[customInspect] = (depth, options) => {
+				const s = options.stylize;
+				function do_recursive() {
+					try {
+						s();
+					} catch(e) {
+						return e;
+					}
+					const r = do_recursive();
+					if (r) return r;
+					throw null;
+				}
+				throw do_recursive().constructor.constructor("return process;")();
+			}
+			new Proxy(new Date(), {
+				has(target, key) {
+					return false;
+				}
+			});
+		`)
+		assert.doesNotThrow(() => inspect(badObject));
+
+		// https://github.com/patriksimek/vm2/pull/315#issuecomment-673708529
+		vm2 = new VM();
+		badObject = vm2.run(`
+			const d = new Date();
+			new Proxy(d, {
+				has(target, key) {
+					throw (f) => f.constructor("return process;")();
+				}
+			});
+		`)
+		assert.doesNotThrow(() => inspect(badObject));
 	});
 
 	after(() => {

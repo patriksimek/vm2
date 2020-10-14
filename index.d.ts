@@ -58,6 +58,11 @@ export interface VMOptions {
    * If set to `true` any attempt to run code using async will throw a `VMError` (default: `false`).
    */
   fixAsync?: boolean;
+  /**
+   * If set to afterEvaluate, microtasks (tasks scheduled through Promises and async functions) will be run immediately after the script has run. They are included in the timeout and breakOnSigint scopes in that case.
+   */
+  microtaskMode?: "afterEvaluate";
+
 }
 
 /**
@@ -74,13 +79,13 @@ export interface NodeVMOptions extends VMOptions {
   wrapper?: "commonjs" | "none";
   /** File extensions that the internal module resolver should accept. */
   sourceExtensions?: string[];
-  /** 
-   * Array of arguments passed to `process.argv`. 
-	 * This object will not be copied and the script can change this object. 
+  /**
+   * Array of arguments passed to `process.argv`.
+	 * This object will not be copied and the script can change this object.
    */
   argv?: string[];
-  /** 
-   * Environment map passed to `process.env`. 
+  /**
+   * Environment map passed to `process.env`.
 	 * This object will not be copied and the script can change this object.
    */
   env?: any;
@@ -185,8 +190,8 @@ export class VMScript {
   readonly lineOffset: number;
   readonly columnOffset: number;
   readonly compiler: "javascript" | "coffeescript" | CompilerFunction;
-  /** 
-   * Wraps the code 
+  /**
+   * Wraps the code
    * @deprecated
    */
   wrap(prefix: string, postfix: string): this;

@@ -6,6 +6,7 @@
 const assert = require('assert');
 const {VM, VMScript} = require('..');
 const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
+const NODE_SUB_VERSION = parseInt(process.versions.node.split('.')[1]);
 const {inspect} = require('util');
 
 global.isVM = false;
@@ -347,13 +348,22 @@ describe('VM', () => {
 		}).run('while (true) {}'), message);
 		assert.throws(() => vm.run('sub.getter'), message);
 	});
-
 	it('timers', () => {
 		assert.equal(vm.run('global.setTimeout'), void 0);
 		assert.equal(vm.run('global.setInterval'), void 0);
 		assert.equal(vm.run('global.setImmediate'), void 0);
 	});
 
+	if (NODE_VERSION>=14 && NODE_SUB_VERSION>=6) {
+		it('timeout/microtask', ()=> {
+			const message = NODE_VERSION >= 11 ? /Script execution timed out after 10ms/ : /Script execution timed out\./;
+
+			assert.throws(()=>new VM({
+				timeout: 10,
+				microtaskMode: 'afterEvaluate'
+			}).run('Promise.resolve().then(()=>{while(1){}})'), message);
+		});
+	}
 	if (NODE_VERSION >= 10) {
 		it('eval/wasm', () => {
 			assert.equal(vm.run('eval("1")'), 1);

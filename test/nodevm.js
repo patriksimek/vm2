@@ -301,6 +301,20 @@ describe('modules', () => {
 		assert.throws(() => vm.run("var test = require('../package.json')", __filename), /Module '\.\.\/package.json' is not allowed to be required\. The path is outside the border!/);
 	});
 
+	it('path attack, external modules with root', () => {
+		const vm = new NodeVM({
+			context: 'sandbox',
+			require: {
+				external: true,
+				root: path.resolve(__dirname, 'data', 'root'),
+			},
+			sandbox: {},
+		});
+		const entrypoint = path.resolve(__dirname, 'data', 'root', 'index.js');
+		const script = new VMScript(fs.readFileSync(entrypoint), entrypoint);
+		assert.throws(() => vm.run(script, entrypoint), /Module '.*json.json' is not allowed to be required\. The path is outside the border!/);
+	});
+
 	it('process events', () => {
 		const vm = new NodeVM({
 			sandbox: {

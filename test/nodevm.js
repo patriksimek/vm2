@@ -126,11 +126,14 @@ describe('modules', () => {
 				builtin: ['fs']
 			}
 		});
-
-		vm.run("require('fs').readFileSync = undefined");
+		try {
+			vm.run("require('fs').readFileSync = undefined");
+		} catch (_) {}
 		assert.strictEqual(fs.readFileSync instanceof Function, true);
 
-		vm.run("require('fs').readFileSync.thisPropertyShouldntBeThere = true");
+		try {
+			vm.run("require('fs').readFileSync.thisPropertyShouldntBeThere = true");
+		} catch (_) {}
 		assert.strictEqual(fs.readFileSync.thisPropertyShouldntBeThere, undefined);
 
 		assert.throws(() => vm.run("Object.defineProperty(require('fs'), 'test', {})"), err => {
@@ -146,6 +149,25 @@ describe('modules', () => {
 			assert.equal(err.message, '\'deleteProperty\' on proxy: trap returned falsish for property \'readFileSync\'');
 			return true;
 		});
+	});
+
+	it('modifications of the objects inherited from builtin modules should be allowed', () => {
+		const vm = new NodeVM({
+			require: {
+				builtin: ['stream']
+			}
+		});
+		const result = vm.run(`
+			var Writable = require('stream').Writable;
+			
+			function RedirectableRequest(options, responseCallback) { }
+			RedirectableRequest.prototype = Object.create(Writable.prototype);
+			RedirectableRequest.prototype.performRequest = function () { return 'it works' }
+			
+			var redirectableRequest = new RedirectableRequest();
+			module.exports = redirectableRequest.performRequest();
+		`);
+		assert.strictEqual(result, 'it works');
 	});
 
 	it('enabled require for certain modules', () => {

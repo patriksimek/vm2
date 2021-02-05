@@ -163,12 +163,19 @@ describe('contextify', () => {
 		assert.strictEqual(o.a === o.b, true);
 	});
 
-	it('class', () => {
-		assert.strictEqual(vm.run('new test.klass()').isVMProxy, undefined);
-		assert.strictEqual(vm.run('new test.klass()').greet('friend'), 'hello friend');
-		assert.strictEqual(vm.run('new test.klass()') instanceof TestClass, true);
+	describe('class', () => {
+		it('classes passed through sandbox should work normally', () => {
+			assert.strictEqual(vm.run('new test.klass()').isVMProxy, undefined);
+			assert.strictEqual(vm.run('new test.klass().greeting'), 'hello');
+			assert.strictEqual(vm.run('new test.klass()').greet('friend'), 'hello friend');
+			assert.strictEqual(vm.run('new test.klass()') instanceof TestClass, true);
+		});
 
-		// vm.run("class LocalClass extends test.klass {}");
+		it('inheritance from classes passed through sandbox should work normally', () => {
+			assert.strictEqual(vm.run('new (class LocalClass extends test.klass {})().greeting'), 'hello');
+			assert.strictEqual(vm.run('new (class LocalClass extends test.klass {})()') instanceof TestClass, true);
+			assert.strictEqual(vm.run('new (class LocalClass extends test.klass {})()').greet('friend'), 'hello friend');
+		});
 	});
 
 	it('string', () => {
@@ -944,23 +951,26 @@ describe('freeze, protect', () => {
 
 		assert.throws(() => {
 			vm.run('"use strict"; x.a = () => { return `-` };');
-		}, /'set' on proxy: trap returned falsish for property 'a'/);
+		}, /trap returned falsish for property 'a'/);
+		assert.throws(() => {
+			vm.run('x.a = () => { return `-` };');
+		}, /trap returned falsish for property 'a'/);
+		assert.strictEqual(x.a(), 'a');
 
 		assert.throws(() => {
 			vm.run('"use strict"; (y) => { y.b = () => { return `--` } }')(x);
-		}, /'set' on proxy: trap returned falsish for property 'b'/);
+		}, /trap returned falsish for property 'b'/);
+		assert.throws(() => {
+			vm.run('(y) => { y.b = () => { return `--` } }')(x);
+		}, /trap returned falsish for property 'b'/);
+		assert.strictEqual(x.b(), 'b');
 
 		assert.throws(() => {
 			vm.run('"use strict"; x.c.d = () => { return `---` };');
-		}, /'set' on proxy: trap returned falsish for property 'd'/);
-
-		vm.run('x.a = () => { return `-` };');
-		assert.strictEqual(x.a(), 'a');
-
-		vm.run('(y) => { y.b = () => { return `--` } }')(x);
-		assert.strictEqual(x.b(), 'b');
-
-		vm.run('x.c.d = () => { return `---` };');
+		}, /trap returned falsish for property 'd'/);
+		assert.throws(() => {
+			vm.run('x.c.d = () => { return `---` };');
+		}, /trap returned falsish for property 'd'/);
 		assert.strictEqual(x.c.d(), 'd');
 	});
 

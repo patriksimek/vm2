@@ -888,6 +888,30 @@ describe('VM', () => {
 		`), /e is not a function/);
 	});
 
+	it('Dynamic import attack', (done) => {
+		process.once('unhandledRejection', (reason) => {
+			assert.strictEqual(reason.message, 'process is not defined');
+			done();
+		});
+
+		const vm2 = new VM();
+
+		vm2.run(`
+			(async () => {
+				try {
+					await import('oops!');
+				} catch (ex) {
+					// ex is an instance of NodeError which is not proxied;
+					const process = ex.constructor.constructor('return process')();
+					const require = process.mainModule.require;
+					const child_process = require('child_process');
+					const output = child_process.execSync('id');
+					process.stdout.write(output);
+				}
+			})();
+		`);
+	});
+
 	after(() => {
 		vm = null;
 	});

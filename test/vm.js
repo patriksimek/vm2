@@ -379,6 +379,13 @@ describe('VM', () => {
 		});
 	}
 
+	it('proxy trap errors', () => {
+		const vm2 = new VM();
+		assert.doesNotThrow(() => {
+			Reflect.ownKeys(vm2.run('(function(){}).bind(null)'));
+		});
+	});
+
 	it('frozen unconfigurable access', () => {
 		const vm2 = new VM();
 		const obj = {};

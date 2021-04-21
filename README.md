@@ -144,6 +144,7 @@ Unlike `VM`, `NodeVM` lets you require modules same way like in regular Node's c
 * `wrapper` - `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script.
 * `argv` - Array to be passed to `process.argv`.
 * `env` - Object to be passed to `process.env`.
+* `strict` - `true` to loaded modules in strict mode (default: `false`).
 
 **IMPORTANT**: Timeout is not effective for NodeVM so it is not immune to `while (true) {}` or similar evil.
 

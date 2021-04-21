@@ -560,6 +560,21 @@ describe('VM', () => {
 		assert.strictEqual(vm2.run(`
 			class MyBuffer extends Buffer {}; MyBuffer.alloc(100).toString('hex');
 		`), '00'.repeat(100), '#4');
+
+		assert.strictEqual(vm2.run(`
+			new Buffer(100).toString('hex');
+		`), '00'.repeat(100), '#5');
+
+		if (NODE_VERSION < 8) {
+			assert.strictEqual(vm2.run(`
+				Buffer(100).toString('hex');
+			`), '00'.repeat(100), '#6');
+		}
+
+		assert.strictEqual(vm2.run(`
+			class MyBuffer2 extends Buffer {}; new MyBuffer2(100).toString('hex');
+		`), '00'.repeat(100), '#7');
+
 	});
 
 	it('instanceof attack', () => {

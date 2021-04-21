@@ -1,3 +1,12 @@
+v3.9.3 (2020-04-07)
+-------------------
+[fix] Security fixes
+[fix] Fixed problems when Promise object is deleted (XmiliaH)  
+[fix] Fixed oversight that write ability can change on non configurable properties (XmiliaH)  
+[fix] Support shebang as node does (XmiliaH)  
+[fix] Property typos (Shigma)
+
+
 v3.9.2 (2020-04-29)
 -------------------
 [new] Added NodeVM options to pass argv & env to process object (XmiliaH)

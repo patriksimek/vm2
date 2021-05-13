@@ -283,26 +283,25 @@ describe('contextify', () => {
 describe('VM', () => {
 	let vm;
 
-	before(() => {
-		const sandbox = {
-			round(number) {
-				return Math.round(number);
-			},
-			sub: {}
-		};
+	const sandbox = {
+		round(number) {
+			return Math.round(number);
+		},
+		sub: {}
+	};
 
-		Object.defineProperty(sandbox.sub, 'getter', {
-			get() {
-				const results = [];
-				while (true) {
-					results.push(1);
-				}
-				return results;
+	Object.defineProperty(sandbox.sub, 'getter', {
+		get() {
+			const results = [];
+			while (true) {
+				results.push(1);
 			}
-		});
+			return results;
+		}
+	});
 
+	before(() => {
 		vm = new VM({
-			timeout: 10,
 			sandbox
 		});
 	});
@@ -345,7 +344,7 @@ describe('VM', () => {
 		assert.throws(() => new VM({
 			timeout: 10
 		}).run('while (true) {}'), message);
-		assert.throws(() => vm.run('sub.getter'), message);
+		assert.throws(() => new VM({timeout: 10, sandbox}).run('sub.getter'), message);
 	});
 
 	it('timers', () => {

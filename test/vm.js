@@ -1009,6 +1009,9 @@ describe('freeze, protect', () => {
 
 		vm.run('x.c.d = () => { return `---` };');
 		assert.strictEqual(x.c.d(), 'd');
+
+		// Extension of frozen objects should be writeable.
+		assert.strictEqual(vm.run('y = Object.create(x); y.f = 1; y.f'), 1);
 	});
 
 	it('without protect', () => {

@@ -1,0 +1,15 @@
+{
+  "author": {
+    "name": "jay"
+  },
+  "name": "vm2-test",
+  "description": "",
+  "version": "1.0.0",
+  "main": "index.js",
+  "repository": "github:patriksimek/vm2",
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@polkadot/util": "^6.4.1"
+  }
+}

@@ -237,6 +237,22 @@ describe('modules', () => {
 		assert.ok(vm.run("require('my-module')", __filename));
 	});
 
+	it('can require and run cjs path within package', () => {
+		const vm = new NodeVM({
+			require: {
+				external: true,
+				resolve: moduleName => require.resolve(moduleName, {paths: [path.resolve(__dirname)]})
+			},
+			sourceExtensions: ['js', 'cjs']
+		});
+		assert.ok(vm.run(`
+// const util = require('@polkadot/util');
+// console.log('hex:'+util.numberToHex(322))
+const {numberToHex} = require('@polkadot/util/number/toHex');
+console.log('hex:'+numberToHex(322))
+		`, __filename));
+	});
+
 	it('allows for multiple root folders', () => {
 		const vm = new NodeVM({
 			require: {

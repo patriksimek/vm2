@@ -170,11 +170,13 @@ export class NodeVM extends EventEmitter implements VM {
  */
 export class VMScript {
   constructor(code: string, path: string, options?: {
+    displayErrors?: boolean;
     lineOffset?: number;
     columnOffset?: number;
     compiler?: "javascript" | "coffeescript" | CompilerFunction;
   });
   constructor(code: string, options?: {
+    displayErrors?: boolean;
     filename?: string,
     lineOffset?: number;
     columnOffset?: number;
@@ -182,6 +184,7 @@ export class VMScript {
   });
   readonly code: string;
   readonly filename: string;
+  readonly displayErrors: boolean;
   readonly lineOffset: number;
   readonly columnOffset: number;
   readonly compiler: "javascript" | "coffeescript" | CompilerFunction;

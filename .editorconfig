@@ -1,0 +1,4 @@
+root = true
+
+[*.js]
+end_of_line = lf # Matches lint

@@ -1,6 +1,9 @@
 v3.9.4 (2021-10-12)
 -------------------
+[new] Added strict option  
 [fix] Security fixes (XmiliaH)  
+[fix] Fixed bound function causes TypeError (XmiliaH)  
+[fix] Allow extending of frozen objects  
 
 v3.9.3 (2020-04-07)
 -------------------

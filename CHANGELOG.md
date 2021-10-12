@@ -1,3 +1,7 @@
+v3.9.4 (2021-10-12)
+-------------------
+[fix] Security fixes (XmiliaH)  
+
 v3.9.3 (2020-04-07)
 -------------------
 [fix] Security fixes  

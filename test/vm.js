@@ -910,30 +910,22 @@ describe('VM', () => {
 	});
 
 	if (NODE_VERSION >= 10) {
-		it('Dynamic import attack', (done) => {
-			process.once('unhandledRejection', (reason) => {
-				assert.strictEqual(reason.message, 'process is not defined');
-				done();
-			});
+		it('Dynamic import attack', () => {
 
 			const vm2 = new VM();
 
-			vm2.run(`
-				(async () => {
-					try {
-						await import('oops!');
-					} catch (ex) {
-						// ex is an instance of NodeError which is not proxied;
-						const process = ex.constructor.constructor('return process')();
-						const require = process.mainModule.require;
-						const child_process = require('child_process');
-						const output = child_process.execSync('id');
-						process.stdout.write(output);
-					}
-				})();
-			`);
+			assert.throws(()=>vm2.run(`
+				const process = import('oops!').constructor.constructor('return process')();
+			`), /VMError: Dynamic Import not supported/);
 		});
 	}
+
+	it('Error.prepareStackTrace attack', () => {
+		const vm2 = new VM();
+		const sst = vm2.run('Error.prepareStackTrace = (e,sst)=>sst;const sst = new Error().stack;Error.prepareStackTrace = undefined;sst');
+		assert.strictEqual(vm2.run('sst=>Object.getPrototypeOf(sst)')(sst), vm2.run('Array.prototype'));
+		assert.throws(()=>vm2.run('sst=>sst[0].getThis().constructor.constructor')(sst), /TypeError: Cannot read property 'constructor' of undefined/);
+	});
 
 	after(() => {
 		vm = null;

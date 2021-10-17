@@ -330,7 +330,7 @@ describe('VM', () => {
 			assert.throws(() => vm.run('function test(){ return await Promise.resolve(); };'), err => {
 				assert.ok(err instanceof Error);
 				assert.equal(err.name, 'SyntaxError');
-				assert.equal(err.message, 'await is only valid in async function');
+				assert.match(err.message, /await is only valid in async function/);
 				return true;
 			});
 		}
@@ -681,7 +681,7 @@ describe('VM', () => {
 					value: new Proxy({}, {
 						getPrototypeOf(target) {
 							delete this.getPrototypeOf;
-			
+
 							Object.defineProperty(Object.prototype, "get", {
 								get() {
 									delete Object.prototype.get;
@@ -689,7 +689,7 @@ describe('VM', () => {
 									throw f=>f.constructor("return process")();
 								}
 							});
-			
+
 							return Object.getPrototypeOf(target);
 						}
 					})
@@ -698,7 +698,7 @@ describe('VM', () => {
 				process = e(() => {});
 			}
 			process.mainModule.require("child_process").execSync("whoami").toString()
-		`), /Cannot read property 'mainModule' of undefined/, '#3');
+		`), /Cannot read propert.*mainModule/, '#3');
 
 		vm2 = new VM();
 
@@ -795,7 +795,7 @@ describe('VM', () => {
 			}
 			"" in Buffer.from;
 			process.mainModule;
-		`), /Cannot read property 'mainModule' of undefined/, '#1');
+		`), /Cannot read propert.*mainModule/, '#1');
 
 		const vm22 = new VM();
 
@@ -818,7 +818,7 @@ describe('VM', () => {
 			var process = Buffer.from.process;
 			Object.create = oc;
 			process.mainModule
-		`), /Cannot read property 'mainModule' of undefined/, '#1');
+		`), /Cannot read propert.*mainModule/, '#1');
 	});
 
 	it('function returned from construct attack', () => {
@@ -924,7 +924,7 @@ describe('VM', () => {
 		const vm2 = new VM();
 		const sst = vm2.run('Error.prepareStackTrace = (e,sst)=>sst;const sst = new Error().stack;Error.prepareStackTrace = undefined;sst');
 		assert.strictEqual(vm2.run('sst=>Object.getPrototypeOf(sst)')(sst), vm2.run('Array.prototype'));
-		assert.throws(()=>vm2.run('sst=>sst[0].getThis().constructor.constructor')(sst), /TypeError: Cannot read property 'constructor' of undefined/);
+		assert.throws(()=>vm2.run('sst=>sst[0].getThis().constructor.constructor')(sst), /TypeError: Cannot read propert.*constructor/);
 	});
 
 	after(() => {

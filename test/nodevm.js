@@ -45,7 +45,7 @@ describe('NodeVM', () => {
 
 	it('arguments attack', () => {
 		assert.strictEqual(vm.run('module.exports = (function() { return arguments.callee.caller.constructor === Function; })()'), true);
-		assert.throws(() => vm.run('module.exports = (function() { return arguments.callee.caller.caller.toString(); })()'), /Cannot read property 'toString' of null/);
+		assert.throws(() => vm.run('module.exports = (function() { return arguments.callee.caller.caller.toString(); })()'), /Cannot read propert.*toString/);
 	});
 
 	it('global attack', () => {
@@ -274,11 +274,11 @@ describe('modules', () => {
 	it('arguments attack', () => {
 		let vm = new NodeVM;
 
-		assert.throws(() => vm.run('module.exports = function fce(msg) { return arguments.callee.caller.toString(); }')(), /Cannot read property 'toString' of null/);
+		assert.throws(() => vm.run('module.exports = function fce(msg) { return arguments.callee.caller.toString(); }')(), /Cannot read propert.*toString/);
 
 		vm = new NodeVM;
 
-		assert.throws(() => vm.run('module.exports = function fce(msg) { return fce.caller.toString(); }')(), /Cannot read property 'toString' of null/);
+		assert.throws(() => vm.run('module.exports = function fce(msg) { return fce.caller.toString(); }')(), /Cannot read propert.*toString/);
 	});
 
 	it('builtin module arguments attack', done => {
@@ -386,7 +386,7 @@ describe('modules', () => {
 		assert.strictEqual(vm.run(`try {
 			process.listeners({toString(){return {};}});
 			module.exports = true;
-		  } catch(e) {    
+		  } catch(e) {
 			module.exports = e.constructor.constructor === Function;
 		  }`), true);
 

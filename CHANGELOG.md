@@ -1,3 +1,9 @@
+v3.9.5 (2021-10-17)
+-------------------
+[new] Editor config (aubelsb2)
+[fix] Fix for Promise.then breaking
+[fix] Fix for missing properties on CallSite
+
 v3.9.4 (2021-10-12)
 -------------------
 [new] Added strict option  

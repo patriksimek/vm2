@@ -1,4 +1,4 @@
-# vm2 [![NPM Version][npm-image]][npm-url] [![NPM Downloads][downloads-image]][downloads-url] [![Package Quality][quality-image]][quality-url] [![Travis CI][travis-image]][travis-url] [![Known Vulnerabilities][snyk-image]][snyk-url]
+# vm2 [![NPM Version][npm-image]][npm-url] [![NPM Downloads][downloads-image]][downloads-url] [![Package Quality][quality-image]][quality-url] [![Node.js CI](https://github.com/patriksimek/vm2/actions/workflows/node-test.yml/badge.svg)](https://github.com/patriksimek/vm2/actions/workflows/node-test.yml) [![Known Vulnerabilities][snyk-image]][snyk-url]
 
 vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules. Securely!
 

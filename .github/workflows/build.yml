@@ -1,0 +1,23 @@
+
+name: build
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v1
+        with:
+          node-version: 14
+          registry-url: https://registry.npmjs.org/
+      - run: yarn install
+      - run: git config --global user.name "ON LX Team"
+      - run: git config --global user.email "team@onlx.ltd"
+      - run: npm version ${{ github.event.release.tag_name }} --allow-same-version
+      - run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{secrets.NPM_TOKEN}}

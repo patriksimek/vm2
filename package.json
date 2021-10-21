@@ -3,8 +3,8 @@
     "name": "Patrik Simek",
     "url": "https://patriksimek.cz"
   },
-  "name": "vm2",
-  "description": "vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules. Securely!",
+  "name": "vm2-extra",
+  "description": "vm2-extra is a sandbox that can run untrusted code with whitelisted Node's built-in modules. Securely!",
   "keywords": [
     "sandbox",
     "prison",
@@ -15,7 +15,7 @@
   ],
   "version": "3.9.5",
   "main": "index.js",
-  "repository": "github:patriksimek/vm2",
+  "repository": "github:onlxltd/vm2",
   "license": "MIT",
   "dependencies": {},
   "devDependencies": {

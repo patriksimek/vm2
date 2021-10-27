@@ -917,6 +917,20 @@ describe('VM', () => {
 			assert.throws(()=>vm2.run(`
 				const process = import('oops!').constructor.constructor('return process')();
 			`), /VMError: Dynamic Import not supported/);
+
+			assert.throws(()=>vm2.run(`
+				const process = import ('oops!').constructor.constructor('return process')();
+			`), /VMError: Dynamic Import not supported/);
+
+			assert.doesNotThrow(()=>vm2.run(`
+				let a = {import: 1}
+				let b = {import : {"import": 2}};
+				let c = { import : 1};
+				let d = a.import;
+				let e = a. import;
+				let f = a.import-1;
+				let g = a.import.import;
+			`));
 		});
 	}
 

@@ -392,6 +392,29 @@ describe('modules', () => {
 
 	});
 
+	it('disabled require resolve', () => {
+		const vm = new NodeVM;
+
+		assert.throws(() => vm.run("require.resolve('fs')"), /Access denied to resolve 'fs'/);
+	});
+
+	it('enable require resolve', () => {
+		const vm = new NodeVM({ resolve: true });
+
+		assert.strictEqual(vm.run("module.exports = require.resolve('fs')"), 'fs');
+	});
+
+	it('mock require resolve', () => {
+		const vm = new NodeVM({
+			resolve: (module, options) => {
+				return (module === 'path') ? require.resolve('path') : 'Nice try!';
+			}
+		});
+
+		assert.strictEqual(vm.run("module.exports = require.resolve('fs')"), 'Nice try!');
+		assert.strictEqual(vm.run("module.exports = require.resolve('path')"), 'path');
+	});
+
 	if (NODE_VERSION < 12) {
 		// Doesn't work under Node 12, fix pending
 		it('native event emitter', done => {

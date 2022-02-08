@@ -1,4 +1,4 @@
-v3.9.6 (TBD)
+v3.9.6 (2022-02-08)
 -------------------
 [fix] Security fixes (XmiliaH)  
 

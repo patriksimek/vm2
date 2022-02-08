@@ -21,6 +21,8 @@ export interface VMRequire {
   mock?: any;
   /* An additional lookup function in case a module wasn't found in one of the traditional node lookup paths. */
   resolve?: (moduleName: string, parentDirname: string) => string;
+  /** Custom require to require host and built-in modules. */
+  customRequire?: (id: string) => any;
 }
 
 /**
@@ -56,8 +58,14 @@ export interface VMOptions {
   wasm?: boolean;
   /**
    * If set to `true` any attempt to run code using async will throw a `VMError` (default: `false`).
+   * @deprecated Use ``allowAsync` instead
    */
   fixAsync?: boolean;
+
+  /**
+   * If set to `false` any attempt to run code using async will throw a `VMError` (default: `true`).
+   */
+  allowAsync?: boolean;
 }
 
 /**
@@ -84,6 +92,8 @@ export interface NodeVMOptions extends VMOptions {
 	 * This object will not be copied and the script can change this object.
    */
   env?: any;
+  /** Run modules in strict mode. Required modules are always strict. */
+  strict?: boolean;
 }
 
 /**
@@ -98,9 +108,7 @@ export class VM {
   /** Timeout to use for the run methods */
   timeout?: number;
   /** Runs the code */
-  run(js: string, path?: string): any;
-  /** Runs the VMScript object */
-  run(script: VMScript): any;
+  run(script: string|VMScript, options?: string|{filename?: string}): any;
   /** Runs the code in the specific file */
   runFile(filename: string): any;
   /** Loads all the values into the global object with the same names */
@@ -146,9 +154,7 @@ export class NodeVM extends EventEmitter implements VM {
   /** Only here because of implements VM. Does nothing. */
   timeout?: number;
   /** Runs the code */
-  run(js: string, path?: string): any;
-  /** Runs the VMScript object */
-  run(script: VMScript): any;
+  run(js: string|VMScript, options?: string|{filename?: string, wrapper?: "commonjs" | "none", strict?: boolean}): any;
   /** Runs the code in the specific file */
   runFile(filename: string): any;
   /** Loads all the values into the global object with the same names */
@@ -159,6 +165,8 @@ export class NodeVM extends EventEmitter implements VM {
   getGlobal(name: string): any;
   /** Freezes the object inside VM making it read-only. Not available for primitive values. */
   freeze(object: any, name?: string): any;
+  /** Freezes the object inside VM making it read-only. Not available for primitive values. */
+  readonly(object: any): any;
   /** Protects the object inside VM making impossible to set functions as it's properties. Not available for primitive values */
   protect(object: any, name?: string): any;
 }

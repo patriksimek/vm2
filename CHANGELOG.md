@@ -1,8 +1,12 @@
+v3.9.6 (2022-02-08)
+-------------------
+[fix] Security fixes (XmiliaH)  
+
 v3.9.5 (2021-10-17)
 -------------------
-[new] Editor config (aubelsb2)
-[fix] Fix for Promise.then breaking
-[fix] Fix for missing properties on CallSite
+[new] Editor config (aubelsb2)  
+[fix] Fix for Promise.then breaking  
+[fix] Fix for missing properties on CallSite  
 
 v3.9.4 (2021-10-12)
 -------------------

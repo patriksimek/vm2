@@ -350,6 +350,36 @@ describe('contextify', () => {
 		assert.strictEqual(vm.run('test.error.constructor.constructor === Function;'), true);
 	});
 
+	it('tostring', () => {
+		const list = [
+			'Object',
+			'Array',
+			'Number',
+			'String',
+			'Boolean',
+			'Date',
+			'RegExp',
+			'Map',
+			'WeakMap',
+			'Set',
+			'WeakSet',
+			'Function',
+			'RangeError',
+			'ReferenceError',
+			'SyntaxError',
+			'TypeError',
+			'EvalError',
+			'URIError',
+			'Error'
+		];
+		const gen = vm.run('name => new (global[name])()');
+		const oToString = Object.prototype.toString;
+		for (let i = 0; i < list.length; i++) {
+			const obj = list[i];
+			assert.strictEqual(oToString.call(gen(obj)), oToString.call(new (global[obj])()));
+		}
+	});
+
 	after(() => {
 		vm = null;
 	});

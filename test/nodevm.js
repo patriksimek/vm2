@@ -272,6 +272,32 @@ describe('modules', () => {
 		assert.equal(vm.run("module.exports = require('module-main-without-extension').bar()", __filename), 1);
 	});
 
+	it('module with exports', () => {
+		const vm = new NodeVM({
+			require: {
+				external: [
+					'with-exports'
+				]
+			}
+		});
+
+		assert.strictEqual(vm.run("module.exports = require('with-exports')", __filename).ok, true);
+
+	});
+
+	it('whitelist check before custom resolver', () => {
+		const vm = new NodeVM({
+			require: {
+				external: [],
+				resolve: () => {
+					throw new Error('Unexpected');
+				},
+			},
+		});
+
+		assert.throws(() => vm.run("require('mocha')", __filename), /Cannot find module 'mocha'/);
+	});
+
 	it('arguments attack', () => {
 		let vm = new NodeVM;
 

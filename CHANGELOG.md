@@ -1,3 +1,11 @@
+v3.9.7 (2022-02-10)
+-------------------
+[fix] Allow relative require from base script  
+[fix] Fix issue with modules with exports clause in package json  
+[fix] Added missing whitelist check before custom require  
+[fix] Revert plain object toString behavior  
+[fix] Root path check improved  
+
 v3.9.6 (2022-02-08)
 -------------------
 [fix] Security fixes (XmiliaH)  

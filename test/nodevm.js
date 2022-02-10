@@ -272,6 +272,54 @@ describe('modules', () => {
 		assert.equal(vm.run("module.exports = require('module-main-without-extension').bar()", __filename), 1);
 	});
 
+	it('module with exports', () => {
+		const vm = new NodeVM({
+			require: {
+				external: [
+					'with-exports'
+				]
+			}
+		});
+
+		assert.strictEqual(vm.run("module.exports = require('with-exports')", __filename).ok, true);
+
+	});
+
+	it('whitelist check before custom resolver', () => {
+		const vm = new NodeVM({
+			require: {
+				external: [],
+				resolve: () => {
+					throw new Error('Unexpected');
+				},
+			},
+		});
+
+		assert.throws(() => vm.run("require('mocha')", __filename), /Cannot find module 'mocha'/);
+	});
+
+	it('root path checking', () => {
+		const vm = new NodeVM({
+			require: {
+				external: true,
+				root: `${__dirname}/node_modules/module`
+			},
+		});
+
+		assert.throws(() => vm.run("require('module2')", __filename), /Cannot find module 'module2'/);
+	});
+
+	it('relative require not allowed to enter node modules', () => {
+		const vm = new NodeVM({
+			require: {
+				external: ['mocha'],
+				root: `${__dirname}`
+			},
+		});
+
+		assert.throws(() => vm.run("require('./node_modules/module2')", __filename), /Cannot find module '\.\/node_modules\/module2'/);
+	});
+
 	it('arguments attack', () => {
 		let vm = new NodeVM;
 

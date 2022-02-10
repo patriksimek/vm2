@@ -298,6 +298,28 @@ describe('modules', () => {
 		assert.throws(() => vm.run("require('mocha')", __filename), /Cannot find module 'mocha'/);
 	});
 
+	it('root path checking', () => {
+		const vm = new NodeVM({
+			require: {
+				external: true,
+				root: `${__dirname}/node_modules/module`
+			},
+		});
+
+		assert.throws(() => vm.run("require('module2')", __filename), /Cannot find module 'module2'/);
+	});
+
+	it('relative require not allowed to enter node modules', () => {
+		const vm = new NodeVM({
+			require: {
+				external: ['mocha'],
+				root: `${__dirname}`
+			},
+		});
+
+		assert.throws(() => vm.run("require('./node_modules/module2')", __filename), /Cannot find module '\.\/node_modules\/module2'/);
+	});
+
 	it('arguments attack', () => {
 		let vm = new NodeVM;
 

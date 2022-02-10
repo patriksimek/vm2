@@ -377,6 +377,9 @@ vm2 ./script.js
 ## Known Issues
 
 * It is not possible to define a class that extends a proxied class.
+* Direct eval does not work.
+* Logging sandbox arrays will repeat the array part in the properties.
+* Source code transformations can result a different source string for a function.
 
 ## Deployment
 

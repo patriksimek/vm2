@@ -77,7 +77,8 @@ describe('modules', () => {
 	it('require json', () => {
 		const vm = new NodeVM({
 			require: {
-				external: true
+				external: true,
+				context: 'sandbox'
 			}
 		});
 

@@ -380,6 +380,10 @@ describe('contextify', () => {
 		}
 	});
 
+	it('arguments', () => {
+		assert.doesNotThrow(() => vm.run('(o) => o.arguments')({arguments: 1}));
+	});
+
 	after(() => {
 		vm = null;
 	});

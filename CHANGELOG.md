@@ -1,7 +1,7 @@
 v3.9.8 (TBD)
 -------------------
 [fix] Add function typecheck for arguments, caller, and callee property check (GeoffRen)  
-[fix] Fix fix best extension handler  
+[fix] Fix find best extension handler  
 
 v3.9.7 (2022-02-10)
 -------------------

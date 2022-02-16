@@ -321,6 +321,18 @@ describe('modules', () => {
 		assert.throws(() => vm.run("require('./node_modules/module2')", __filename), /Cannot find module '\.\/node_modules\/module2'/);
 	});
 
+	it('outer require', () => {
+		const vm = new NodeVM({
+			require: {
+				external: [],
+				context: 'sandbox',
+				root: `${__dirname}`
+			},
+		});
+		assert.strictEqual(vm.require(`${__dirname}/data/json.json`).working, true);
+		assert.strictEqual(vm.require(`${__dirname}/additional-modules/my-module`).additional_module, true);
+	});
+
 	it('arguments attack', () => {
 		let vm = new NodeVM;
 

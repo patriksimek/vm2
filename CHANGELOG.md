@@ -1,12 +1,12 @@
-v3.9.8 (TBD)
+v3.9.8 (2022-92-16)
 -------------------
-[fix] Add function typecheck for arguments, caller, and callee property check (GeoffRen)  
+[fix] Add function type check for arguments, caller, and callee property check (GeoffRen)  
 [fix] Fix find best extension handler  
 
 v3.9.7 (2022-02-10)
 -------------------
 [fix] Allow relative require from base script  
-[fix] Fix issue with modules with exports clause in package json  
+[fix] Fix issue with modules with exports clause in package JSON  
 [fix] Added missing whitelist check before custom require  
 [fix] Revert plain object toString behavior  
 [fix] Root path check improved  

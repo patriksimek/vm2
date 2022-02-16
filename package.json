@@ -23,7 +23,7 @@
     "acorn-walk": "^8.2.0"
   },
   "devDependencies": {
-    "eslint": "^8.9.0",
+    "eslint": "^5.16.0",
     "eslint-config-integromat": "^1.5.0",
     "mocha": "^9.2.0"
   },

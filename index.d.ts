@@ -4,11 +4,12 @@ import {EventEmitter} from 'events';
  *  Require options for a VM
  */
 export interface VMRequire {
-  /** Array of allowed builtin modules, accepts ["*"] for all (default: none) */
+  /** Array of allowed built-in modules, accepts ["*"] for all. Using "*" increases the attack surface and potential
+   * new modules allow to escape the sandbox. (default: none) */
   builtin?: string[];
   /*
    * `host` (default) to require modules in host and proxy them to sandbox. `sandbox` to load, compile and
-   * require modules in sandbox. Builtin modules except `events` always required in host and proxied to sandbox
+   * require modules in sandbox. Built-in modules except `events` always required in host and proxied to sandbox
    */
   context?: "host" | "sandbox";
   /** `true`, an array of allowed external modules or an object with external options (default: `false`) */
@@ -17,7 +18,7 @@ export interface VMRequire {
   import?: string[];
   /** Restricted path(s) where local modules can be required (default: every path). */
   root?: string | string[];
-  /** Collection of mock modules (both external or builtin). */
+  /** Collection of mock modules (both external or built-in). */
   mock?: any;
   /* An additional lookup function in case a module wasn't found in one of the traditional node lookup paths. */
   resolve?: (moduleName: string, parentDirname: string) => string | undefined;
@@ -36,7 +37,7 @@ type CompilerFunction = (code: string, filename: string) => string;
  */
 export interface VMOptions {
   /**
-   * `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's filepath).
+   * `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's file path).
    *  The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
    */
   compiler?: "javascript" | "coffeescript" | CompilerFunction;
@@ -48,7 +49,7 @@ export interface VMOptions {
    */
   timeout?: number;
   /**
-   * If set to `false` any calls to eval or function constructors (`Function`, `GeneratorFunction`, etc) will throw an
+   * If set to `false` any calls to eval or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an
    * `EvalError` (default: `true`).
    */
   eval?: boolean;
@@ -58,7 +59,7 @@ export interface VMOptions {
   wasm?: boolean;
   /**
    * If set to `true` any attempt to run code using async will throw a `VMError` (default: `false`).
-   * @deprecated Use ``allowAsync` instead
+   * @deprecated Use `allowAsync` instead.
    */
   fixAsync?: boolean;
 
@@ -76,7 +77,8 @@ export interface NodeVMOptions extends VMOptions {
   console?: "inherit" | "redirect" | "off";
   /** `true` or an object to enable `require` options (default: `false`). */
   require?: true | VMRequire;
-  /** `true` to enable VMs nesting (default: `false`). */
+  /** **WARNING**: This should be disabled. It allows to create a NodeVM form within the sandbox which could return any host module.
+   * `true` to enable VMs nesting (default: `false`). */
   nesting?: boolean;
   /** `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script. */
   wrapper?: "commonjs" | "none";
@@ -119,6 +121,8 @@ export class VM {
   getGlobal(name: string): any;
   /** Freezes the object inside VM making it read-only. Not available for primitive values. */
   freeze(object: any, name?: string): any;
+  /** Freezes the object inside VM making it read-only. Not available for primitive values. */
+  readonly(object: any): any;
   /** Protects the object inside VM making impossible to set functions as it's properties. Not available for primitive values */
   protect(object: any, name?: string): any;
 }
@@ -135,7 +139,7 @@ export class NodeVM extends EventEmitter implements VM {
    /**
    * Create NodeVM and run code inside it.
    *
-   * @param {string} script Javascript code.
+   * @param {string} script JavaScript code.
    * @param {string} [filename] File name (used in stack traces only).
    * @param {Object} [options] VM options.
    */

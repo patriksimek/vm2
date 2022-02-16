@@ -1,1 +1,1 @@
-module.exports = {};
+module.exports = {additional_module: true};

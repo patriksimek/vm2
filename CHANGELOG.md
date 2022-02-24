@@ -1,4 +1,8 @@
-v3.9.8 (2022-92-16)
+v3.9.9 (2022-02-24)
+-------------------
+[fix] Bump parser ECMA version to 2022.  
+
+v3.9.8 (2022-02-16)
 -------------------
 [fix] Add function type check for arguments, caller, and callee property check (GeoffRen)  
 [fix] Fix find best extension handler  

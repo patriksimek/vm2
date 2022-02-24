@@ -5,6 +5,7 @@
 
 const assert = require('assert');
 const {VM, VMScript} = require('..');
+const {INTERNAL_STATE_NAME} = require('../lib/transformer');
 const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
 const {inspect} = require('util');
 
@@ -657,6 +658,16 @@ describe('VM', () => {
 			if (!(Object.keys(boom) instanceof Array)) throw new Error('Shouldnt be there.');
 			if (!(Reflect.ownKeys(boom) instanceof Array)) throw new Error('Shouldnt be there.');
 		`));
+	});
+
+	it('internal state attack', () => {
+		const vm2 = new VM();
+		assert.throws(() => vm2.run(`${INTERNAL_STATE_NAME}=1;`), /Use of internal vm2 state variable/);
+		assert.throws(() => vm2.run(`const ${INTERNAL_STATE_NAME} = {};`), /Use of internal vm2 state variable/);
+		assert.throws(() => vm2.run(`var ${INTERNAL_STATE_NAME} = {};`), /Use of internal vm2 state variable/);
+		assert.throws(() => vm2.run(`let ${INTERNAL_STATE_NAME} = {};`), /Use of internal vm2 state variable/);
+		assert.throws(() => vm2.run(`class ${INTERNAL_STATE_NAME} {};`), /Use of internal vm2 state variable/);
+		assert.throws(() => vm2.run(`function ${INTERNAL_STATE_NAME} () {};`), /Use of internal vm2 state variable/);
 	});
 
 	it('buffer attack', () => {

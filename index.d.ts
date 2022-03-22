@@ -37,10 +37,9 @@ type CompilerFunction = (code: string, filename: string) => string;
  */
 export interface VMOptions {
   /**
-   * `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's file path).
-   *  The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
+   * `javascript` (default) or custom compiler function (which receives the code, and it's file path).
    */
-  compiler?: "javascript" | "coffeescript" | CompilerFunction;
+  compiler?: "javascript" | CompilerFunction;
   /** VM's global object. */
   sandbox?: any;
   /**
@@ -184,19 +183,19 @@ export class VMScript {
   constructor(code: string, path: string, options?: {
     lineOffset?: number;
     columnOffset?: number;
-    compiler?: "javascript" | "coffeescript" | CompilerFunction;
+    compiler?: "javascript" | CompilerFunction;
   });
   constructor(code: string, options?: {
     filename?: string,
     lineOffset?: number;
     columnOffset?: number;
-    compiler?: "javascript" | "coffeescript" | CompilerFunction;
+    compiler?: "javascript" | CompilerFunction;
   });
   readonly code: string;
   readonly filename: string;
   readonly lineOffset: number;
   readonly columnOffset: number;
-  readonly compiler: "javascript" | "coffeescript" | CompilerFunction;
+  readonly compiler: "javascript" | CompilerFunction;
   /** 
    * Wraps the code 
    * @deprecated

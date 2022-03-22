@@ -95,7 +95,7 @@ VM is a simple sandbox to synchronously run untrusted code without the `require`
 
 * `timeout` - Script timeout in milliseconds. **WARNING**: You might want to use this option together with `allowAsync=false`. Further, operating on returned objects from the sandbox can run arbitrary code and circumvent the timeout. One should test if the returned object is a primitive with `typeof` and fully discard it (doing logging or creating error messages with such an object might also run arbitrary code again) in the other case.
 * `sandbox` - VM's global object.
-* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function. The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
+* `compiler` - `javascript` (default)  or custom compiler function.
 * `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
 * `wasm` -  If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
 * `allowAsync` - If set to `false` any attempt to run code using `async` will throw a `VMError` (default: `true`).
@@ -130,7 +130,7 @@ Unlike `VM`, `NodeVM` allows you to require modules in the same way that you wou
 
 * `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`).
 * `sandbox` - VM's global object.
-* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's file path). The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
+* `compiler` - `javascript` (default) or custom compiler function (which receives the code, and it's file path).
 * `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
 * `wasm` -  If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
 * `sourceExtensions` - Array of file extensions to treat as source code (default: `['js']`).

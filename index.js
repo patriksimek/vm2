@@ -6,5 +6,6 @@ if (parseInt(process.versions.node.split('.')[0]) < 6) throw new Error('vm2 requ
 try { require('./lib/contextify') } catch(_) {}
 try { require('./lib/fixasync') } catch(_) {}
 try { require('./lib/sandbox') } catch(_) {}
+try { require('./lib/setup-sandbox') } catch(_) {}
 
 module.exports = require('./lib/main');

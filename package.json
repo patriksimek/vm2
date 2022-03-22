@@ -13,11 +13,15 @@
     "alcatraz",
     "contextify"
   ],
-  "version": "3.9.5",
+  "version": "3.9.9",
   "main": "index.js",
   "repository": "github:onlxltd/vm2",
+  "sideEffects": false,
   "license": "MIT",
-  "dependencies": {},
+  "dependencies": {
+    "acorn": "^8.7.0",
+    "acorn-walk": "^8.2.0"
+  },
   "devDependencies": {
     "eslint": "^5.16.0",
     "eslint-config-integromat": "^1.5.0",

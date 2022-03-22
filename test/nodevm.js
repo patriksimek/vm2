@@ -6,10 +6,11 @@
 const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
+const {EventEmitter} = require('events');
 const {NodeVM, VMScript} = require('..');
-const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
+// const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
 
-global.isVM = false;
+global.isHost = true;
 
 describe('NodeVM', () => {
 	let vm;
@@ -26,7 +27,7 @@ describe('NodeVM', () => {
 
 	it('globals', () => {
 		const ex = vm.run('module.exports = global');
-		assert.equal(ex.isVM, true);
+		assert.equal(ex.isHost, undefined);
 	});
 
 	it('options', ()=>{
@@ -49,7 +50,7 @@ describe('NodeVM', () => {
 	});
 
 	it('global attack', () => {
-		assert.equal(vm.run("module.exports = console.log.constructor('return (function(){return this})().isVM')()"), true);
+		assert.equal(vm.run("module.exports = console.log.constructor('return (function(){return this})().isHost')()"), undefined);
 	});
 
 	it('shebang', () => {
@@ -76,11 +77,12 @@ describe('modules', () => {
 	it('require json', () => {
 		const vm = new NodeVM({
 			require: {
-				external: true
+				external: true,
+				context: 'sandbox'
 			}
 		});
 
-		assert.equal(vm.run(`module.exports = require('${__dirname}/data/json.json')`).working, true);
+		assert.equal(vm.run(`module.exports = require('./data/json.json')`, `${__dirname}/vm.js`).working, true);
 	});
 
 	it.skip('run coffee-script', () => {
@@ -122,7 +124,7 @@ describe('modules', () => {
 	it('disabled require', () => {
 		const vm = new NodeVM;
 
-		assert.throws(() => vm.run("require('fs')"), /Access denied to require 'fs'/);
+		assert.throws(() => vm.run("require('fs')"), /Cannot find module 'fs'/);
 	});
 
 	it('disable setters on builtin modules', () => {
@@ -192,7 +194,7 @@ describe('modules', () => {
 
 		assert.throws(() => vm.run("require('mocha')", __filename), err => {
 			assert.equal(err.name, 'VMError');
-			assert.equal(err.message, 'Access denied to require \'mocha\'');
+			assert.equal(err.message, 'Cannot find module \'mocha\'');
 			return true;
 		});
 	});
@@ -207,7 +209,7 @@ describe('modules', () => {
 		assert.ok(vm.run("require('mocha')", __filename));
 		assert.throws(() => vm.run("require('unknown')", __filename), err => {
 			assert.equal(err.name, 'VMError');
-			assert.equal(err.message, "The module 'unknown' is not whitelisted in VM.");
+			assert.equal(err.message, "Cannot find module 'unknown'");
 			return true;
 		});
 	});
@@ -271,6 +273,66 @@ describe('modules', () => {
 		assert.equal(vm.run("module.exports = require('module-main-without-extension').bar()", __filename), 1);
 	});
 
+	it('module with exports', () => {
+		const vm = new NodeVM({
+			require: {
+				external: [
+					'with-exports'
+				]
+			}
+		});
+
+		assert.strictEqual(vm.run("module.exports = require('with-exports')", __filename).ok, true);
+
+	});
+
+	it('whitelist check before custom resolver', () => {
+		const vm = new NodeVM({
+			require: {
+				external: [],
+				resolve: () => {
+					throw new Error('Unexpected');
+				},
+			},
+		});
+
+		assert.throws(() => vm.run("require('mocha')", __filename), /Cannot find module 'mocha'/);
+	});
+
+	it('root path checking', () => {
+		const vm = new NodeVM({
+			require: {
+				external: true,
+				root: `${__dirname}/node_modules/module`
+			},
+		});
+
+		assert.throws(() => vm.run("require('module2')", __filename), /Cannot find module 'module2'/);
+	});
+
+	it('relative require not allowed to enter node modules', () => {
+		const vm = new NodeVM({
+			require: {
+				external: ['mocha'],
+				root: `${__dirname}`
+			},
+		});
+
+		assert.throws(() => vm.run("require('./node_modules/module2')", __filename), /Cannot find module '\.\/node_modules\/module2'/);
+	});
+
+	it('outer require', () => {
+		const vm = new NodeVM({
+			require: {
+				external: [],
+				context: 'sandbox',
+				root: `${__dirname}`
+			},
+		});
+		assert.strictEqual(vm.require(`${__dirname}/data/json.json`).working, true);
+		assert.strictEqual(vm.require(`${__dirname}/additional-modules/my-module`).additional_module, true);
+	});
+
 	it('arguments attack', () => {
 		let vm = new NodeVM;
 
@@ -303,7 +365,7 @@ describe('modules', () => {
 			}
 		});
 
-		assert.throws(() => vm.run("var test = require('../package.json')", __filename), /Module '\.\.\/package.json' is not allowed to be required\. The path is outside the border!/);
+		assert.throws(() => vm.run("var test = require('../package.json')", __filename), /Cannot find module '\.\.\/package.json'/);
 	});
 
 	it('process events', () => {
@@ -380,7 +442,7 @@ describe('modules', () => {
 		const vm = new NodeVM();
 
 		// https://github.com/patriksimek/vm2/issues/276
-		assert.strictEqual(vm.run('module.exports = setTimeout(()=>{}).ref().constructor.constructor === Function'), true);
+		assert.strictEqual(vm.run('const timeout = setTimeout(()=>{});module.exports = !timeout.ref || timeout.ref().constructor.constructor === Function'), true);
 
 		// https://github.com/patriksimek/vm2/issues/285
 		assert.strictEqual(vm.run(`try {
@@ -392,21 +454,67 @@ describe('modules', () => {
 
 	});
 
-	if (NODE_VERSION < 12) {
-		// Doesn't work under Node 12, fix pending
-		it('native event emitter', done => {
-			const vm = new NodeVM({
-				require: {
-					builtin: ['events']
-				},
-				sandbox: {
-					done
-				}
-			});
-
-			vm.run(`let {EventEmitter} = require('events'); const ee = new EventEmitter(); ee.on('test', done); ee.emit('test');`);
+	it('native event emitter', () => {
+		const vm = new NodeVM({
+			require: {
+				builtin: ['events']
+			}
 		});
-	}
+
+		assert.ok(vm.run(`const {EventEmitter} = require('events'); const ee = new EventEmitter(); let tr; ee.on('test', ()=>{tr = true;}); ee.emit('test'); return tr`, {wrapper: 'none'}));
+		assert.ok(vm.run('const {EventEmitter} = require("events"); return new EventEmitter()', {wrapper: 'none'}) instanceof EventEmitter);
+		assert.ok(vm.run('return nei => nei instanceof require("events").EventEmitter', {wrapper: 'none'})(new EventEmitter()));
+		assert.ok(vm.run(`
+		const {EventEmitter} = require('events');
+		class EEE extends EventEmitter {
+			test() {return true;}
+		}
+		return new EEE().test();
+		`, {wrapper: 'none'}));
+
+	});
+
+	it('cache modules', () => {
+		const vm = new NodeVM({
+			require: {
+				context: 'sandbox',
+				external: ['module1', 'module2', 'require'],
+				builtin: ['*']
+			}
+		});
+		assert.ok(vm.run('return require("module1") === require("module2")', {filename: `${__dirname}/vm.js`, wrapper: 'none'}));
+		assert.ok(vm.run('return require("require").require("fs") === require("fs")', {filename: `${__dirname}/vm.js`, wrapper: 'none'}));
+		assert.ok(vm.run('return require("require").require("buffer") === require("buffer")', {filename: `${__dirname}/vm.js`, wrapper: 'none'}));
+		assert.ok(vm.run('return require("require").require("util") === require("util")', {filename: `${__dirname}/vm.js`, wrapper: 'none'}));
+	});
+
+	it('strict module name checks', () => {
+		const vm = new NodeVM({
+			require: {
+				external: ['module']
+			}
+		});
+		assert.throws(()=>vm.run('require("module1")', `${__dirname}/vm.js`), /Cannot find module 'module1'/);
+	});
+
+	it('module name globs', () => {
+		const vm = new NodeVM({
+			require: {
+				external: ['mo?ule1', 'm*e2']
+			}
+		});
+		assert.doesNotThrow(()=>vm.run('require("module1");require("module2")', `${__dirname}/vm.js`));
+	});
+
+	it('module name glob escape', () => {
+		const vm = new NodeVM({
+			require: {
+				external: ['module1*']
+			}
+		});
+		assert.throws(()=>vm.run('require("module1/../module2")', `${__dirname}/vm.js`), /Cannot find module 'module1\/..\/module2'/);
+	});
+
 });
 
 describe('nesting', () => {

@@ -1,8 +1,29 @@
+v3.9.9 (2022-02-24)
+-------------------
+[fix] Bump parser ECMA version to 2022.  
+
+v3.9.8 (2022-02-16)
+-------------------
+[fix] Add function type check for arguments, caller, and callee property check (GeoffRen)  
+[fix] Fix find best extension handler  
+
+v3.9.7 (2022-02-10)
+-------------------
+[fix] Allow relative require from base script  
+[fix] Fix issue with modules with exports clause in package JSON  
+[fix] Added missing whitelist check before custom require  
+[fix] Revert plain object toString behavior  
+[fix] Root path check improved  
+
+v3.9.6 (2022-02-08)
+-------------------
+[fix] Security fixes (XmiliaH)  
+
 v3.9.5 (2021-10-17)
 -------------------
-[new] Editor config (aubelsb2)
-[fix] Fix for Promise.then breaking
-[fix] Fix for missing properties on CallSite
+[new] Editor config (aubelsb2)  
+[fix] Fix for Promise.then breaking  
+[fix] Fix for missing properties on CallSite  
 
 v3.9.4 (2021-10-12)
 -------------------

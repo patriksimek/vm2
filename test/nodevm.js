@@ -73,6 +73,35 @@ describe('NodeVM', () => {
 	});
 });
 
+describe('error events', () => {
+	it('async errors', done => {
+		const vm = new NodeVM;
+		vm.on('uncaughtException', err => {
+			assert.equal(err.message, 'fail');
+			done();
+		});
+		vm.run('setTimeout(function() { throw new Error("fail"); })');
+	});
+
+	it('promise errors', done => {
+		const vm = new NodeVM;
+		vm.on('unhandledRejection', err => {
+			assert.equal(err.message, 'fail');
+			done();
+		});
+		vm.run('new Promise(function() { throw new Error("fail"); })');
+	});
+
+	it('rejected promises', done => {
+		const vm = new NodeVM;
+		vm.on('promiseRejected', err => {
+			assert.equal(err.message, 'fail');
+			done();
+		});
+		vm.run('new Promise(function(resolve, reject) { reject(new Error("fail")); })');
+	});
+});
+
 describe('modules', () => {
 	it('require json', () => {
 		const vm = new NodeVM({

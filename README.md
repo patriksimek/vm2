@@ -138,7 +138,7 @@ Unlike `VM`, `NodeVM` allows you to require modules in the same way that you wou
 * `require.external` - Values can be `true`, an array of allowed external modules, or an object (default: `false`). All paths matching `/node_modules/${any_allowed_external_module}/(?!/node_modules/)` are allowed to be required.
 * `require.external.modules` - Array of allowed external modules. Also supports wildcards, so specifying `['@scope/*-ver-??]`, for instance, will allow using all modules having a name of the form `@scope/something-ver-aa`, `@scope/other-ver-11`, etc. The `*` wildcard does not match path separators.
 * `require.external.transitive` - Boolean which indicates if transitive dependencies of external modules are allowed (default: `false`). **WARNING**: When a module is required transitively, any module is then able to require it normally, even if this was not possible before it was loaded.
-* `require.builtin` - Array of allowed built-in modules, accepts ["*"] for all (default: none). **WARNING**: "*" can be dangerous as new built-ins can be added.
+* `require.builtin` - Array of allowed built-in modules, accepts ["\*"] for all (default: none). **WARNING**: "\*" can be dangerous as new built-ins can be added.
 * `require.root` - Restricted path(s) where local modules can be required (default: every path).
 * `require.mock` - Collection of mock modules (both external or built-in).
 * `require.context` - `host` (default) to require modules in the host and proxy them into the sandbox. `sandbox` to load, compile, and require modules in the sandbox. Except for `events`, built-in modules are always required in the host and proxied into the sandbox.

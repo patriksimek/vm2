@@ -91,9 +91,10 @@ describe('node', () => {
 	before(() => {
 		vm = new VM();
 	});
-	it.skip('inspect', () => {
+	it('inspect', () => {
 		assert.throws(() => inspect(doubleProxy), /Expected/);
-		if (NODE_VERSION !== 10) {
+		assert.doesNotThrow(() => inspect(vm.run('({})'), {showProxy: true, customInspect: true}));
+		if (NODE_VERSION !== 10 && false) {
 			// This failes on node 10 since they do not unwrap proxys.
 			// And the hack to fix this is only in the inner proxy.
 			// We could add another hack, but that one would require

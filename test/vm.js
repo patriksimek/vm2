@@ -1058,6 +1058,18 @@ describe('VM', () => {
 		const sst = vm2.run('Error.prepareStackTrace = (e,sst)=>sst;const sst = new Error().stack;Error.prepareStackTrace = undefined;sst');
 		assert.strictEqual(vm2.run('sst=>Object.getPrototypeOf(sst)')(sst), vm2.run('Array.prototype'));
 		assert.throws(()=>vm2.run('sst=>sst[0].getThis().constructor.constructor')(sst), /TypeError: Cannot read propert.*constructor/);
+		assert.throws(()=>vm2.run(`
+			const { set } = WeakMap.prototype;
+			WeakMap.prototype.set = function(v) {
+				return set.call(this, v, v);
+			};
+			Error.prepareStackTrace =
+			Error.prepareStackTrace =
+			(_, c) => c.map(c => c.getThis()).find(a => a);
+			const { stack } = new Error();
+			Error.prepareStackTrace = undefined;
+			stack.process
+		`));
 	});
 
 	it('Node internal prepareStackTrace attack', () => {

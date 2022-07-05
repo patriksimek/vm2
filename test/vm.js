@@ -663,12 +663,12 @@ describe('VM', () => {
 
 	it('internal state attack', () => {
 		const vm2 = new VM();
-		assert.throws(() => vm2.run(`${INTERNAL_STATE_NAME}=1;`), /Use of internal vm2 state variable/);
-		assert.throws(() => vm2.run(`const ${INTERNAL_STATE_NAME} = {};`), /Use of internal vm2 state variable/);
-		assert.throws(() => vm2.run(`var ${INTERNAL_STATE_NAME} = {};`), /Use of internal vm2 state variable/);
-		assert.throws(() => vm2.run(`let ${INTERNAL_STATE_NAME} = {};`), /Use of internal vm2 state variable/);
-		assert.throws(() => vm2.run(`class ${INTERNAL_STATE_NAME} {};`), /Use of internal vm2 state variable/);
-		assert.throws(() => vm2.run(`function ${INTERNAL_STATE_NAME} () {};`), /Use of internal vm2 state variable/);
+		assert.throws(() => vm2.run(`${INTERNAL_STATE_NAME}="async";`), /Use of internal vm2 state variable/);
+		assert.throws(() => vm2.run(`const ${INTERNAL_STATE_NAME} = "async";`), /Use of internal vm2 state variable/);
+		assert.throws(() => vm2.run(`var ${INTERNAL_STATE_NAME} = "async";`), /Use of internal vm2 state variable/);
+		assert.throws(() => vm2.run(`let ${INTERNAL_STATE_NAME} = "async";`), /Use of internal vm2 state variable/);
+		assert.throws(() => vm2.run(`class ${INTERNAL_STATE_NAME} {}; // async`), /Use of internal vm2 state variable/);
+		assert.throws(() => vm2.run(`function ${INTERNAL_STATE_NAME} () {}; // async`), /Use of internal vm2 state variable/);
 	});
 
 	it('buffer attack', () => {

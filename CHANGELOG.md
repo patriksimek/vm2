@@ -1,3 +1,9 @@
+v3.9.10 (2022-07-05)
+-------------------
+[new] Add uptime to process.  
+[fix] Security fix.  
+[fix] Fix inspection with showProxy.
+
 v3.9.9 (2022-02-24)
 -------------------
 [fix] Bump parser ECMA version to 2022.  

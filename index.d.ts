@@ -76,7 +76,7 @@ export interface NodeVMOptions extends VMOptions {
   /** `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`). */
   console?: "inherit" | "redirect" | "off";
   /** `true` or an object to enable `require` options (default: `false`). */
-  require?: true | VMRequire;
+  require?: boolean | VMRequire;
   /** **WARNING**: This should be disabled. It allows to create a NodeVM form within the sandbox which could return any host module.
    * `true` to enable VMs nesting (default: `false`). */
   nesting?: boolean;

@@ -24,6 +24,8 @@ export interface VMRequire {
   resolve?: (moduleName: string, parentDirname: string) => string | undefined;
   /** Custom require to require host and built-in modules. */
   customRequire?: (id: string) => any;
+  /** Load modules in strict mode. (default: true) */
+  strict?: boolean;
 }
 
 /**

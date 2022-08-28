@@ -144,6 +144,8 @@ Unlike `VM`, `NodeVM` allows you to require modules in the same way that you wou
 * `require.context` - `host` (default) to require modules in the host and proxy them into the sandbox. `sandbox` to load, compile, and require modules in the sandbox. Except for `events`, built-in modules are always required in the host and proxied into the sandbox.
 * `require.import` - An array of modules to be loaded into NodeVM on start.
 * `require.resolve` - An additional lookup function in case a module wasn't found in one of the traditional node lookup paths.
+* `require.customRequire` - Use instead of the `require` function to load modules from the host.
+* `require.strict` - `false` to not force strict mode on modules loaded by require (default: `true`).
 * `nesting` - **WARNING**: Allowing this is a security risk as scripts can create a NodeVM which can require any host module. `true` to enable VMs nesting (default: `false`).
 * `wrapper` - `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script.
 * `argv` - Array to be passed to `process.argv`.

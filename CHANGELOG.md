@@ -1,3 +1,8 @@
+v3.9.11 (2022-08-28)
+--------------------
+[new] Add option `require.strict` to allow to load required modules in non strict mode.  
+[fix] Security fix.  
+
 v3.9.10 (2022-07-05)
 -------------------
 [new] Add uptime to process.  

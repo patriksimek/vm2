@@ -1070,6 +1070,13 @@ describe('VM', () => {
 			Error.prepareStackTrace = undefined;
 			stack.process
 		`));
+		assert.throws(()=>vm2.run(`(()=>{
+			const OldError = Error;
+			global.Error = {prepareStackTrace: (_, c) => c.map(c => c.getThis()).find(a => a && a.process)};
+			const { stack } = new OldError();
+			global.Error = OldError;
+			return stack.process.mainModule;
+		})()`));
 	});
 
 	it('Node internal prepareStackTrace attack', () => {

@@ -146,6 +146,7 @@ Unlike `VM`, `NodeVM` allows you to require modules in the same way that you wou
 * `require.resolve` - An additional lookup function in case a module wasn't found in one of the traditional node lookup paths.
 * `require.customRequire` - Use instead of the `require` function to load modules from the host.
 * `require.strict` - `false` to not force strict mode on modules loaded by require (default: `true`).
+* `require.fs` - Custom file system implementation.
 * `nesting` - **WARNING**: Allowing this is a security risk as scripts can create a NodeVM which can require any host module. `true` to enable VMs nesting (default: `false`).
 * `wrapper` - `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script.
 * `argv` - Array to be passed to `process.argv`.

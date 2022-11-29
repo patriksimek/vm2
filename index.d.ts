@@ -1,4 +1,51 @@
 import {EventEmitter} from 'events';
+import fs from 'fs';
+import pa from 'path';
+
+/**
+ * Interface for nodes fs module
+ */
+export interface VMFS {
+  /** Implements fs.statSync */
+	statSync: typeof fs.statSync;
+  /** Implements fs.readFileSync */
+	readFileSync: typeof fs.readFileSync;
+}
+
+/**
+ * Interface for nodes path module
+ */
+export interface VMPath {
+  /** Implements path.resolve */
+  resolve: typeof pa.resolve;
+  /** Implements path.isAbsolute */
+	isAbsolute: typeof pa.isAbsolute;
+  /** Implements path.join */
+	join: typeof pa.join;
+  /** Implements path.basename */
+	basename: typeof pa.basename;
+  /** Implements path.dirname */
+	dirname: typeof pa.dirname;
+  /** Implements fs.statSync */
+	statSync: typeof fs.statSync;
+  /** Implements fs.readFileSync */
+	readFileSync: typeof fs.readFileSync;
+}
+
+/**
+ * Custom file system which abstracts functions from node's fs and path modules.
+ */
+export interface VMFileSystemInterface implements VMFS, VMPath {
+  /** Implements (sep) => sep === path.sep */
+	isSeparator(char: string): boolean;
+}
+
+/**
+ * Implementation of a default file system.
+ */
+export class VMFileSystem implements VMFileSystemInterface {
+  constructor(options?: {fs?: VMFS, path?: VMPath});
+}
 
 /**
  *  Require options for a VM
@@ -26,6 +73,8 @@ export interface VMRequire {
   customRequire?: (id: string) => any;
   /** Load modules in strict mode. (default: true) */
   strict?: boolean;
+  /** FileSystem to load files from */
+  fs?: VMFileSystemInterface;
 }
 
 /**

@@ -1,3 +1,8 @@
+v3.9.12 (2022-11-29)
+--------------------
+[new] Add file system API.  
+[fix] Fix parsing error with object patter in catch clause.  
+
 v3.9.11 (2022-08-28)
 --------------------
 [new] Add option `require.strict` to allow to load required modules in non strict mode.  

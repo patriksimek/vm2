@@ -1,4 +1,4 @@
-import {EventEmitter} from 'events';
+import { EventEmitter } from 'events';
 import fs from 'fs';
 import pa from 'path';
 
@@ -7,9 +7,9 @@ import pa from 'path';
  */
 export interface VMFS {
   /** Implements fs.statSync */
-	statSync: typeof fs.statSync;
+  statSync: typeof fs.statSync;
   /** Implements fs.readFileSync */
-	readFileSync: typeof fs.readFileSync;
+  readFileSync: typeof fs.readFileSync;
 }
 
 /**
@@ -19,40 +19,54 @@ export interface VMPath {
   /** Implements path.resolve */
   resolve: typeof pa.resolve;
   /** Implements path.isAbsolute */
-	isAbsolute: typeof pa.isAbsolute;
+  isAbsolute: typeof pa.isAbsolute;
   /** Implements path.join */
-	join: typeof pa.join;
+  join: typeof pa.join;
   /** Implements path.basename */
-	basename: typeof pa.basename;
+  basename: typeof pa.basename;
   /** Implements path.dirname */
-	dirname: typeof pa.dirname;
-  /** Implements fs.statSync */
-	statSync: typeof fs.statSync;
-  /** Implements fs.readFileSync */
-	readFileSync: typeof fs.readFileSync;
+  dirname: typeof pa.dirname;
 }
 
 /**
  * Custom file system which abstracts functions from node's fs and path modules.
  */
-export interface VMFileSystemInterface implements VMFS, VMPath {
+export interface VMFileSystemInterface extends VMFS, VMPath {
   /** Implements (sep) => sep === path.sep */
-	isSeparator(char: string): boolean;
+  isSeparator(char: string): boolean;
 }
 
 /**
  * Implementation of a default file system.
  */
 export class VMFileSystem implements VMFileSystemInterface {
-  constructor(options?: {fs?: VMFS, path?: VMPath});
+  constructor(options?: { fs?: VMFS, path?: VMPath });
+  /** Implements fs.statSync */
+  statSync: typeof fs.statSync;
+  /** Implements fs.readFileSync */
+  readFileSync: typeof fs.readFileSync;
+  /** Implements path.resolve */
+  resolve: typeof pa.resolve;
+  /** Implements path.isAbsolute */
+  isAbsolute: typeof pa.isAbsolute;
+  /** Implements path.join */
+  join: typeof pa.join;
+  /** Implements path.basename */
+  basename: typeof pa.basename;
+  /** Implements path.dirname */
+  dirname: typeof pa.dirname;
+  /** Implements (sep) => sep === path.sep */
+  isSeparator(char: string): boolean;
 }
 
 /**
  *  Require options for a VM
  */
 export interface VMRequire {
-  /** Array of allowed built-in modules, accepts ["*"] for all. Using "*" increases the attack surface and potential
-   * new modules allow to escape the sandbox. (default: none) */
+  /**
+   * Array of allowed built-in modules, accepts ["*"] for all. Using "*" increases the attack surface and potential
+   * new modules allow to escape the sandbox. (default: none)
+   */
   builtin?: string[];
   /*
    * `host` (default) to require modules in host and proxy them to sandbox. `sandbox` to load, compile and
@@ -81,7 +95,7 @@ export interface VMRequire {
  * A custom compiler function for all of the JS that comes
  * into the VM
  */
-type CompilerFunction = (code: string, filename: string) => string;
+export type CompilerFunction = (code: string, filename: string) => string;
 
 /**
  *  Options for creating a VM
@@ -128,21 +142,23 @@ export interface NodeVMOptions extends VMOptions {
   console?: "inherit" | "redirect" | "off";
   /** `true` or an object to enable `require` options (default: `false`). */
   require?: boolean | VMRequire;
-  /** **WARNING**: This should be disabled. It allows to create a NodeVM form within the sandbox which could return any host module.
-   * `true` to enable VMs nesting (default: `false`). */
+  /**
+   * **WARNING**: This should be disabled. It allows to create a NodeVM form within the sandbox which could return any host module.
+   * `true` to enable VMs nesting (default: `false`).
+   */
   nesting?: boolean;
   /** `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script. */
   wrapper?: "commonjs" | "none";
   /** File extensions that the internal module resolver should accept. */
   sourceExtensions?: string[];
-  /** 
-   * Array of arguments passed to `process.argv`. 
-	 * This object will not be copied and the script can change this object. 
+  /**
+   * Array of arguments passed to `process.argv`.
+   * This object will not be copied and the script can change this object.
    */
   argv?: string[];
-  /** 
-   * Environment map passed to `process.env`. 
-	 * This object will not be copied and the script can change this object.
+  /**
+   * Environment map passed to `process.env`.
+   * This object will not be copied and the script can change this object.
    */
   env?: any;
   /** Run modules in strict mode. Required modules are always strict. */
@@ -161,7 +177,7 @@ export class VM {
   /** Timeout to use for the run methods */
   timeout?: number;
   /** Runs the code */
-  run(script: string|VMScript, options?: string|{filename?: string}): any;
+  run(script: string | VMScript, options?: string | { filename?: string }): any;
   /** Runs the code in the specific file */
   runFile(filename: string): any;
   /** Loads all the values into the global object with the same names */
@@ -187,7 +203,7 @@ export class NodeVM extends EventEmitter implements VM {
   /** Require a module in VM and return it's exports. */
   require(module: string): any;
 
-   /**
+  /**
    * Create NodeVM and run code inside it.
    *
    * @param {string} script JavaScript code.
@@ -204,12 +220,12 @@ export class NodeVM extends EventEmitter implements VM {
    */
   static file(filename: string, options?: NodeVMOptions): any;
 
-   /** Direct access to the global sandbox object */
+  /** Direct access to the global sandbox object */
   readonly sandbox: any;
   /** Only here because of implements VM. Does nothing. */
   timeout?: number;
   /** Runs the code */
-  run(js: string|VMScript, options?: string|{filename?: string, wrapper?: "commonjs" | "none", strict?: boolean}): any;
+  run(js: string | VMScript, options?: string | { filename?: string, wrapper?: "commonjs" | "none", strict?: boolean }): any;
   /** Runs the code in the specific file */
   runFile(filename: string): any;
   /** Loads all the values into the global object with the same names */
@@ -248,8 +264,8 @@ export class VMScript {
   readonly lineOffset: number;
   readonly columnOffset: number;
   readonly compiler: "javascript" | "coffeescript" | CompilerFunction;
-  /** 
-   * Wraps the code 
+  /**
+   * Wraps the code
    * @deprecated
    */
   wrap(prefix: string, postfix: string): this;
@@ -258,4 +274,4 @@ export class VMScript {
 }
 
 /** Custom Error class */
-export class VMError extends Error {}
+export class VMError extends Error { }

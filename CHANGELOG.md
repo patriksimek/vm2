@@ -1,3 +1,7 @@
+v3.9.3 (2022-12-08)
+--------------------
+[fix] Fix typescript errors in index.d.ts  
+
 v3.9.12 (2022-11-29)
 --------------------
 [new] Add file system API.  

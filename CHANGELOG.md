@@ -1,11 +1,11 @@
-v3.9.3 (2022-12-08)
+v3.9.13 (2022-12-08)
 --------------------
 [fix] Fix typescript errors in index.d.ts  
 
 v3.9.12 (2022-11-29)
 --------------------
 [new] Add file system API.  
-[fix] Fix parsing error with object patter in catch clause.  
+[fix] Fix parsing error with object pattern in catch clause.  
 
 v3.9.11 (2022-08-28)
 --------------------
@@ -179,7 +179,7 @@ v3.5.1 (2017-10-04)
 
 v3.5.0 (2017-08-31)
 -------------------
-[new] Allow a custom compiler to recieve the filetype (Orta Therox)  
+[new] Allow a custom compiler to receive the filetype (Orta Therox)  
 [new] Allow in-sandbox requires to also get called through the compiler (Orta Therox)  
 [new] Support whitelisting modules inside a VM (Orta Therox)  
 [new] Add TypeScript definition (Orta Therox)  

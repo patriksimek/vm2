@@ -239,6 +239,17 @@ describe('modules', () => {
 		assert.ok(vm.run("require('my-module')", __filename));
 	});
 
+	it('can resolve conditional exports with a custom resolver', () => {
+		const vm = new NodeVM({
+			require: {
+				external: ['my-es-module'],
+				resolve: () => ({ path: path.resolve(__dirname, 'additional-modules') })
+			}
+		});
+
+		assert.ok(vm.run("require('my-es-module')", __filename));
+	});
+
 	it('allows for multiple root folders', () => {
 		const vm = new NodeVM({
 			require: {

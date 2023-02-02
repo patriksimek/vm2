@@ -1,0 +1,12 @@
+{
+    "main": "index.js",
+    "type": "module",
+    "exports": {
+        ".": {
+          "default": {
+            "require": "./index.cjs",
+            "default": "./index.js"
+          }
+        }
+    }
+}

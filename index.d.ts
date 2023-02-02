@@ -82,7 +82,7 @@ export interface VMRequire {
   /** Collection of mock modules (both external or built-in). */
   mock?: any;
   /* An additional lookup function in case a module wasn't found in one of the traditional node lookup paths. */
-  resolve?: (moduleName: string, parentDirname: string) => string | undefined;
+  resolve?: (moduleName: string, parentDirname: string) => string | { path: string, module?: string } | undefined;
   /** Custom require to require host and built-in modules. */
   customRequire?: (id: string) => any;
   /** Load modules in strict mode. (default: true) */

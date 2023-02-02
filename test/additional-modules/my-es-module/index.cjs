@@ -1,0 +1,1 @@
+module.exports = {additional_cjs_module: true};

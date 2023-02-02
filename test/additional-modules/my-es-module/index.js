@@ -1,0 +1,1 @@
+export default {additional_es_module: true};

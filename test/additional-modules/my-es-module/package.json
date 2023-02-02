@@ -1,0 +1,11 @@
+{
+    "main": "index.js",
+    "exports": {
+        ".": {
+          "default": {
+            "require": "./index.cjs",
+            "default": "./index.js"
+          }
+        }
+    }
+}

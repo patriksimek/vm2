@@ -248,7 +248,7 @@ describe('modules', () => {
 		});
 
 		assert.ok(vm.run("require('my-es-module')", __filename));
-	})
+	});
 
 	it('allows for multiple root folders', () => {
 		const vm = new NodeVM({

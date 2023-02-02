@@ -1,5 +1,6 @@
 {
     "main": "index.js",
+    "type": "module",
     "exports": {
         ".": {
           "default": {

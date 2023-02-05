@@ -1,3 +1,7 @@
+v3.9.14 (2023-02-05)
+--------------------
+[new] Support conditional export resolution with custom resolver. (nick-klaviyo)  
+
 v3.9.13 (2022-12-08)
 --------------------
 [fix] Fix typescript errors in index.d.ts  

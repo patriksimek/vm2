@@ -1,3 +1,7 @@
+v3.9.15 (2023-04-06)
+--------------------
+[fix] Security fix (see https://github.com/patriksimek/vm2/issues/515).
+
 v3.9.14 (2023-02-05)
 --------------------
 [new] Support conditional export resolution with custom resolver. (nick-klaviyo)  

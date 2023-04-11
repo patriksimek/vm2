@@ -1,3 +1,7 @@
+v3.9.16 (2023-04-11)
+--------------------
+[fix] Security fix (see https://github.com/patriksimek/vm2/issues/516).
+
 v3.9.15 (2023-04-06)
 --------------------
 [fix] Security fix (see https://github.com/patriksimek/vm2/issues/515).

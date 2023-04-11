@@ -134,7 +134,7 @@ Unlike `VM`, `NodeVM` allows you to require modules in the same way that you wou
 * `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
 * `wasm` -  If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
 * `sourceExtensions` - Array of file extensions to treat as source code (default: `['js']`).
-* `require` - `true` or object to enable `require` method (default: `false`).
+* `require` - `true`, an object or a Resolver to enable `require` method (default: `false`).
 * `require.external` - Values can be `true`, an array of allowed external modules, or an object (default: `false`). All paths matching `/node_modules/${any_allowed_external_module}/(?!/node_modules/)` are allowed to be required.
 * `require.external.modules` - Array of allowed external modules. Also supports wildcards, so specifying `['@scope/*-ver-??]`, for instance, will allow using all modules having a name of the form `@scope/something-ver-aa`, `@scope/other-ver-11`, etc. The `*` wildcard does not match path separators.
 * `require.external.transitive` - Boolean which indicates if transitive dependencies of external modules are allowed (default: `false`). **WARNING**: When a module is required transitively, any module is then able to require it normally, even if this was not possible before it was loaded.
@@ -209,6 +209,28 @@ If the script you are running is a VMScript, the path is given in the VMScript c
 ```js
 const script = new VMScript('require("foobar")', {filename: '/data/myvmscript.js'});
 vm.run(script);
+```
+
+### Resolver
+
+A resolver can be created via `makeResolverFromLegacyOptions` and be used for multiple `NodeVM` instances allowing to share compiled module code potentially speeding up load times. The first example of `NodeVM` can be rewritten using `makeResolverFromLegacyOptions` as follows.
+
+```js
+const resolver = makeResolverFromLegacyOptions({
+    external: true,
+    builtin: ['fs', 'path'],
+    root: './',
+    mock: {
+        fs: {
+            readFileSync: () => 'Nice try!'
+        }
+    }
+});
+const vm = new NodeVM({
+    console: 'inherit',
+    sandbox: {},
+    require: resolver
+});
 ```
 
 ## VMScript

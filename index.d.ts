@@ -59,86 +59,18 @@ export class VMFileSystem implements VMFileSystemInterface {
   isSeparator(char: string): boolean;
 }
 
+/**
+ * Function that will be called to load a built-in into a vm.
+ */
 export type BuiltinLoad = (vm: NodeVM) => any;
+/**
+ * Either a function that will be called to load a built-in into a vm or an object with a init method and a load method to load the built-in.
+ */
 export type Builtin = BuiltinLoad | {init: (vm: NodeVM)=>void, load: BuiltinLoad};
-export type Builtins = Map<string, Builtin>;
+/**
+ * Require method
+ */
 export type HostRequire = (id: string) => any;
-export type JSONValue = null | boolean | number | string | readonly JSONValue[] | {[key: string]: JSONValue};
-export interface Package {
-  name: JSONValue,
-  main: JSONValue,
-  exports: JSONValue,
-  imports: JSONValue,
-  type: JSONValue
-};
-
-export function makeBuiltins(builtins: string[], hostRequire: HostRequire): Builtins;
-export function makeBuiltinsFromLegacyOptions(builtins: string[], hostRequire: HostRequire, mocks?: {[key: string]: any}, overrides?: {[key: string]: Builtin}): Builtins;
-export function makeResolverFromLegacyOptions(options: VMRequire, override?: {[key: string]: Builtin}, compiler?: CompilerFunction): Resolver;
-
-export abstract class Resolver {
-  constructor(readonly fs: VMFileSystemInterface, readonly globalPaths: readonly string[], readonly builtins: Builtins);
-  init(vm: NodeVM): void;
-  abstract isPathAllowed(path: string): boolean;
-	checkAccess(mod: any, filename: string): void;
-	pathIsRelative(path: string): boolean;
-	pathIsAbsolute(path: string): boolean;
-	lookupPaths(mod: any, id: string): readonly string[];
-	getBuiltinModulesList(vm: NodeVM): readonly string[];
-	loadBuiltinModule(vm: NodeVM, id: string): any;
-	makeExtensionHandler(vm: NodeVM, name: string): (mod: any, filename: string) => void;
-	getExtensions(vm: NodeVM): {[key: string]: (mod: any, filename: string) => void};
-	loadJS(vm: NodeVM, mod: any, filename: string): void;
-	loadJSON(vm: NodeVM, mod: any, filename: string): void;
-	loadNode(vm: NodeVM, mod: any, filename: string): void;
-	registerModule(mod: any, filename: string, path: string, parent: any, direct: boolean): void;
-	resolve(mod: any, id: string, options: {paths?: readonly string[], unsafeOptions: any}, extList: readonly string[], direct: boolean): string;
-	resolveFull(mod: any, id: string, options: {paths?: readonly string[], unsafeOptions: any}, extList: readonly string[], direct: boolean): string;
-	genLookupPaths(path: string): readonly string[];
-}
-
-export abstract class DefaultResolver extends Resolver {
-  private packageCache: Map<string, Package | false>;
-  private scriptCache: Map<string, VMScript>;
-  constructor(fs: VMFileSystemInterface, globalPaths: readonly string[], builtins: Builtins);
-  getCompiler(filename: string): CompilerFunction;
-	isStrict(filename: string): boolean;
-	readScript(filename: string): string;
-	customResolve(id: string, path: string, extList: readonly string[]): string | undefined;
-	loadAsFileOrDirectory(x: string, extList: readonly string[]): string | undefined;
-	tryFile(x: string): string | undefined;
-	tryWithExtension(x: string, extList: readonly string[]): string | undefined;
-	readPackage(path: string): Package | undefined;
-	readPackageScope(path: string): {data?: Package, scope?: string};
-	// LOAD_AS_FILE(X)
-	loadAsFile(x: string, extList: readonly string[]): string | undefined;
-	// LOAD_INDEX(X)
-	loadIndex(x: string, extList: readonly string[]): string | undefined;
-	// LOAD_AS_DIRECTORY(X)
-	loadAsPackage(x: string, pack: Package | undefined, extList: readonly string[]): string | undefined;
-	// LOAD_AS_DIRECTORY(X)
-	loadAsDirectory(x: string, extList: readonly string[]): string | undefined;
-	// LOAD_NODE_MODULES(X, START)
-	loadNodeModules(x: string, dirs: readonly string[], extList: readonly string[]): string | undefined;
-	// LOAD_PACKAGE_IMPORTS(X, DIR)
-	loadPackageImports(x: string, dir: string, extList: readonly string[]): string | undefined;
-	// LOAD_PACKAGE_EXPORTS(X, DIR)
-	loadPackageExports(x: string, dir: string, extList: readonly string[]): string | undefined;
-	// LOAD_PACKAGE_SELF(X, DIR)
-	loadPackageSelf(x: string, dir: string, extList: readonly string[]): string | undefined;
-	// RESOLVE_ESM_MATCH(MATCH)
-	resolveEsmMatch(match: string, x: string, extList: readonly string[]): string;
-	// PACKAGE_EXPORTS_RESOLVE(packageURL, subpath, exports, conditions)
-	packageExportsResolve(packageURL: string, subpath: string, rexports: JSONValue, conditions: readonly string[], extList: readonly string[]): string;
-	// PACKAGE_IMPORTS_EXPORTS_RESOLVE(matchKey, matchObj, packageURL, isImports, conditions)
-	packageImportsExportsResolve(matchKey: string, matchObj: {[key: string]: JSONValue}, packageURL: string, isImports: boolean, conditions: readonly string[], extList: readonly string[]): string | undefined | null;
-	// PATTERN_KEY_COMPARE(keyA, keyB)
-	patternKeyCompare(keyA: string, keyB: string): number;
-	// PACKAGE_TARGET_RESOLVE(packageURL, target, subpath, pattern, internal, conditions)
-	packageTargetResolve(packageURL: string, target: JSONValue, subpath: string, pattern: boolean, internal: boolean, conditions: readonly string[], extList: readonly string[]): string | undefined | null;
-	// PACKAGE_RESOLVE(packageSpecifier, parentURL)
-	packageResolve(packageSpecifier: string, parentURL: string, conditions: readonly string[], extList: readonly string[]): string;
-}
 
 /**
  *  Require options for a VM
@@ -165,7 +97,7 @@ export interface VMRequire {
   /* An additional lookup function in case a module wasn't found in one of the traditional node lookup paths. */
   resolve?: (moduleName: string, parentDirname: string) => string | { path: string, module?: string } | undefined;
   /** Custom require to require host and built-in modules. */
-  customRequire?: (id: string) => any;
+  customRequire?: HostRequire;
   /** Load modules in strict mode. (default: true) */
   strict?: boolean;
   /** FileSystem to load files from */
@@ -177,6 +109,19 @@ export interface VMRequire {
  * into the VM
  */
 export type CompilerFunction = (code: string, filename: string) => string;
+
+export abstract class Resolver {
+  private constructor(fs: VMFileSystemInterface, globalPaths: readonly string[], builtins: Map<string, Builtin>);
+}
+
+/**
+ * Create a resolver as normal `NodeVM` does given `VMRequire` options.
+ *
+ * @param options The options that would have been given to `NodeVM`.
+ * @param override Custom overrides for built-ins.
+ * @param compiler Compiler to be used for loaded modules.
+ */
+export function makeResolverFromLegacyOptions(options: VMRequire, override?: {[key: string]: Builtin}, compiler?: CompilerFunction): Resolver;
 
 /**
  *  Options for creating a VM
@@ -190,7 +135,7 @@ export interface VMOptions {
   /** VM's global object. */
   sandbox?: any;
   /**
-   * Script timeout in milliseconds.  Timeout is only effective on code you run through `run`.
+   * Script timeout in milliseconds. Timeout is only effective on code you run through `run`.
    * Timeout is NOT effective on any method returned by VM.
    */
   timeout?: number;

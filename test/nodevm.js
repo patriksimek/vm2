@@ -228,6 +228,23 @@ describe('modules', () => {
 		assert.ok(vm.run("require('module1')", __filename));
 	});
 
+	it('allows choosing a context by path', () => {
+		const vm = new NodeVM({
+			require: {
+				external: {
+					modules: ['mocha', 'module1'],
+				},
+				context(module) {
+					if (module === 'mocha') return 'host';
+					if (module === 'module1') return 'sandbox';
+				}
+			}
+		});
+
+		assert.ok(vm.run("require('module1')", __filename));
+		assert.ok(vm.run("require('mocha')", __filename));
+	});
+
 	it('can resolve paths based on a custom resolver', () => {
 		const vm = new NodeVM({
 			require: {

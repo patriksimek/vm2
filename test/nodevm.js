@@ -233,16 +233,25 @@ describe('modules', () => {
 			require: {
 				external: {
 					modules: ['mocha', 'module1'],
+					transitive: true,
 				},
 				context(module) {
-					if (module === 'mocha') return 'host';
-					if (module === 'module1') return 'sandbox';
+					if (module.includes('mocha')) return 'host';
+					return 'sandbox';
 				}
 			}
 		});
-
-		assert.ok(vm.run("require('module1')", __filename));
-		assert.ok(vm.run("require('mocha')", __filename));
+		function isVMProxy(obj) {
+			const key = {};
+			const proto = Object.getPrototypeOf(obj);
+			if (!proto) return undefined;
+			proto.isVMProxy = key;
+			const proxy = obj.isVMProxy !== key;
+			delete proto.isVMProxy;
+			return proxy;
+		}
+		assert.equal(isVMProxy(vm.run("module.exports = require('mocha')", __filename)), false, 'Mocha is a proxy');
+		assert.equal(isVMProxy(vm.run("module.exports = require('module1')", __filename)), true, 'Module1 is not a proxy');
 	});
 
 	it('can resolve paths based on a custom resolver', () => {

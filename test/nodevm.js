@@ -7,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const assert = require('assert');
 const {EventEmitter} = require('events');
-const {NodeVM, VMScript} = require('..');
+const {NodeVM, VMScript, makeResolverFromLegacyOptions} = require('..');
 // const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
 
 global.isHost = true;
@@ -624,6 +624,19 @@ function getStack(error) {
 		// https://github.com/nodejs/node/issues/26780
 		assert.ok(stack.columnNumber > (code.indexOf('new Error') + 20));
 
+	});
+});
+
+describe('resolver', () => {
+	it('use resolver', () => {
+		const resolver = makeResolverFromLegacyOptions({
+			external: true
+		});
+		const vm = new NodeVM({
+			require: resolver
+		});
+
+		vm.run("require('mocha')", __filename);
 	});
 });
 

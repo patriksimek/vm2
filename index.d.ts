@@ -60,6 +60,24 @@ export class VMFileSystem implements VMFileSystemInterface {
 }
 
 /**
+ * Function that will be called to load a built-in into a vm.
+ */
+export type BuiltinLoad = (vm: NodeVM) => any;
+/**
+ * Either a function that will be called to load a built-in into a vm or an object with a init method and a load method to load the built-in.
+ */
+export type Builtin = BuiltinLoad | {init: (vm: NodeVM)=>void, load: BuiltinLoad};
+/**
+ * Require method
+ */
+export type HostRequire = (id: string) => any;
+
+/**
+ * This callback will be called to specify the context to use "per" module. Defaults to 'sandbox' if no return value provided.
+ */
+export type PathContextCallback = (modulePath: string, extensionType: string) => 'host' | 'sandbox';
+
+/**
  *  Require options for a VM
  */
 export interface VMRequire {
@@ -67,24 +85,25 @@ export interface VMRequire {
    * Array of allowed built-in modules, accepts ["*"] for all. Using "*" increases the attack surface and potential
    * new modules allow to escape the sandbox. (default: none)
    */
-  builtin?: string[];
+  builtin?: readonly string[];
   /*
    * `host` (default) to require modules in host and proxy them to sandbox. `sandbox` to load, compile and
-   * require modules in sandbox. Built-in modules except `events` always required in host and proxied to sandbox
+   * require modules in sandbox or a callback which chooses the context based on the filename.
+   * Built-in modules except `events` always required in host and proxied to sandbox
    */
-  context?: "host" | "sandbox";
+  context?: "host" | "sandbox" | PathContextCallback;
   /** `true`, an array of allowed external modules or an object with external options (default: `false`) */
-  external?: boolean | string[] | { modules: string[], transitive: boolean };
+  external?: boolean | readonly string[] | { modules: readonly string[], transitive: boolean };
   /** Array of modules to be loaded into NodeVM on start. */
-  import?: string[];
+  import?: readonly string[];
   /** Restricted path(s) where local modules can be required (default: every path). */
-  root?: string | string[];
+  root?: string | readonly string[];
   /** Collection of mock modules (both external or built-in). */
   mock?: any;
   /* An additional lookup function in case a module wasn't found in one of the traditional node lookup paths. */
   resolve?: (moduleName: string, parentDirname: string) => string | { path: string, module?: string } | undefined;
   /** Custom require to require host and built-in modules. */
-  customRequire?: (id: string) => any;
+  customRequire?: HostRequire;
   /** Load modules in strict mode. (default: true) */
   strict?: boolean;
   /** FileSystem to load files from */
@@ -96,6 +115,19 @@ export interface VMRequire {
  * into the VM
  */
 export type CompilerFunction = (code: string, filename: string) => string;
+
+export abstract class Resolver {
+  private constructor(fs: VMFileSystemInterface, globalPaths: readonly string[], builtins: Map<string, Builtin>);
+}
+
+/**
+ * Create a resolver as normal `NodeVM` does given `VMRequire` options.
+ *
+ * @param options The options that would have been given to `NodeVM`.
+ * @param override Custom overrides for built-ins.
+ * @param compiler Compiler to be used for loaded modules.
+ */
+export function makeResolverFromLegacyOptions(options: VMRequire, override?: {[key: string]: Builtin}, compiler?: CompilerFunction): Resolver;
 
 /**
  *  Options for creating a VM
@@ -109,7 +141,7 @@ export interface VMOptions {
   /** VM's global object. */
   sandbox?: any;
   /**
-   * Script timeout in milliseconds.  Timeout is only effective on code you run through `run`.
+   * Script timeout in milliseconds. Timeout is only effective on code you run through `run`.
    * Timeout is NOT effective on any method returned by VM.
    */
   timeout?: number;
@@ -141,7 +173,7 @@ export interface NodeVMOptions extends VMOptions {
   /** `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`). */
   console?: "inherit" | "redirect" | "off";
   /** `true` or an object to enable `require` options (default: `false`). */
-  require?: boolean | VMRequire;
+  require?: boolean | VMRequire | Resolver;
   /**
    * **WARNING**: This should be disabled. It allows to create a NodeVM form within the sandbox which could return any host module.
    * `true` to enable VMs nesting (default: `false`).
@@ -150,7 +182,7 @@ export interface NodeVMOptions extends VMOptions {
   /** `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script. */
   wrapper?: "commonjs" | "none";
   /** File extensions that the internal module resolver should accept. */
-  sourceExtensions?: string[];
+  sourceExtensions?: readonly string[];
   /**
    * Array of arguments passed to `process.argv`.
    * This object will not be copied and the script can change this object.
@@ -224,6 +256,8 @@ export class NodeVM extends EventEmitter implements VM {
   readonly sandbox: any;
   /** Only here because of implements VM. Does nothing. */
   timeout?: number;
+  /** The resolver used to resolve modules */
+  readonly resolver: Resolver;
   /** Runs the code */
   run(js: string | VMScript, options?: string | { filename?: string, wrapper?: "commonjs" | "none", strict?: boolean }): any;
   /** Runs the code in the specific file */

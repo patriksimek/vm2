@@ -73,6 +73,11 @@ export type Builtin = BuiltinLoad | {init: (vm: NodeVM)=>void, load: BuiltinLoad
 export type HostRequire = (id: string) => any;
 
 /**
+ * This callback will be called to specify the context to use "per" module. Defaults to 'sandbox' if no return value provided.
+ */
+export type PathContextCallback = (modulePath: string, extensionType: string) => 'host' | 'sandbox';
+
+/**
  *  Require options for a VM
  */
 export interface VMRequire {
@@ -83,9 +88,10 @@ export interface VMRequire {
   builtin?: readonly string[];
   /*
    * `host` (default) to require modules in host and proxy them to sandbox. `sandbox` to load, compile and
-   * require modules in sandbox. Built-in modules except `events` always required in host and proxied to sandbox
+   * require modules in sandbox or a callback which chooses the context based on the filename.
+   * Built-in modules except `events` always required in host and proxied to sandbox
    */
-  context?: "host" | "sandbox";
+  context?: "host" | "sandbox" | PathContextCallback;
   /** `true`, an array of allowed external modules or an object with external options (default: `false`) */
   external?: boolean | readonly string[] | { modules: readonly string[], transitive: boolean };
   /** Array of modules to be loaded into NodeVM on start. */

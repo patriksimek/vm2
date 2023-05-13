@@ -141,7 +141,7 @@ Unlike `VM`, `NodeVM` allows you to require modules in the same way that you wou
 * `require.builtin` - Array of allowed built-in modules, accepts ["\*"] for all (default: none). **WARNING**: "\*" can be dangerous as new built-ins can be added.
 * `require.root` - Restricted path(s) where local modules can be required (default: every path).
 * `require.mock` - Collection of mock modules (both external or built-in).
-* `require.context` - `host` (default) to require modules in the host and proxy them into the sandbox. `sandbox` to load, compile, and require modules in the sandbox. Except for `events`, built-in modules are always required in the host and proxied into the sandbox.
+* `require.context` - `host` (default) to require modules in the host and proxy them into the sandbox. `sandbox` to load, compile, and require modules in the sandbox. `callback(moduleFilename, ext)` to dynamically choose a context per module. The default will be sandbox is nothing is specified. Except for `events`, built-in modules are always required in the host and proxied into the sandbox.
 * `require.import` - An array of modules to be loaded into NodeVM on start.
 * `require.resolve` - An additional lookup function in case a module wasn't found in one of the traditional node lookup paths.
 * `require.customRequire` - Use instead of the `require` function to load modules from the host.

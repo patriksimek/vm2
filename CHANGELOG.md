@@ -1,3 +1,9 @@
+v3.9.18 (2023-05-15)
+--------------------
+[fix] Multiple security fixes.
+[new] Add resolver API to create a shared resolver for multiple `NodeVM` instances allowing to cache scripts and increase sandbox startup times.
+[new] Allow to pass a function to `require.context` which is called with the filename allowing to specify the context pre file.
+
 v3.9.17 (2023-04-17)
 --------------------
 [fix] Multiple security fixes.

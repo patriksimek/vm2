@@ -659,6 +659,22 @@ describe('VM', () => {
 			if (!(Object.keys(boom) instanceof Array)) throw new Error('Shouldnt be there.');
 			if (!(Reflect.ownKeys(boom) instanceof Array)) throw new Error('Shouldnt be there.');
 		`));
+
+		assert.throws(() => vm2.run(`
+			const proxiedErr = new Proxy({}, {
+				getPrototypeOf(target) {
+					(function stack() {
+						new Error().stack;
+						stack();
+					})();
+				}
+			});
+			try {
+				throw proxiedErr;
+			} catch ({constructor: c}) {
+				c.constructor('return process')();
+			}
+		`), /Maximum call stack size exceeded/, '#9');
 	});
 
 	it('internal state attack', () => {
@@ -1125,6 +1141,23 @@ describe('VM', () => {
 			`);
 			f((a, b) => b, {}, {});
 		});
+	});
+
+	it('transformer attack', () => {
+		const vm2 = new VM();
+
+		assert.throws(()=>vm2.run(`
+			aVM2_INTERNAL_TMPNAME = {};
+			function stack() {
+				new Error().stack;
+				stack();
+			}
+			try {
+				stack();
+			} catch (a$tmpname) {
+				a$tmpname.constructor.constructor('return process')();
+			}
+		`), /process is not defined/);
 	});
 
 	after(() => {

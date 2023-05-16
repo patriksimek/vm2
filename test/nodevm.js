@@ -12,6 +12,16 @@ const {NodeVM, VMScript, makeResolverFromLegacyOptions} = require('..');
 
 global.isHost = true;
 
+function isVMProxy(obj) {
+	const key = {};
+	const proto = Object.getPrototypeOf(obj);
+	if (!proto) return undefined;
+	proto.isVMProxy = key;
+	const proxy = obj.isVMProxy !== key;
+	delete proto.isVMProxy;
+	return proxy;
+}
+
 describe('NodeVM', () => {
 	let vm;
 
@@ -228,7 +238,7 @@ describe('modules', () => {
 		assert.ok(vm.run("require('module1')", __filename));
 	});
 
-	it('allows choosing a context by path', () => {
+	it('allows choosing a context by path legacy', () => {
 		const vm = new NodeVM({
 			require: {
 				external: {
@@ -241,15 +251,20 @@ describe('modules', () => {
 				}
 			}
 		});
-		function isVMProxy(obj) {
-			const key = {};
-			const proto = Object.getPrototypeOf(obj);
-			if (!proto) return undefined;
-			proto.isVMProxy = key;
-			const proxy = obj.isVMProxy !== key;
-			delete proto.isVMProxy;
-			return proxy;
-		}
+		assert.equal(isVMProxy(vm.run("module.exports = require('mocha')", __filename)), false, 'Mocha is a proxy');
+		assert.equal(isVMProxy(vm.run("module.exports = require('module1')", __filename)), true, 'Module1 is not a proxy');
+	});
+
+	it('allows choosing a context by path', () => {
+		const vm = new NodeVM({
+			require: {
+				external: true,
+				context(module) {
+					if (module.includes('mocha')) return 'host';
+					return 'sandbox';
+				}
+			}
+		});
 		assert.equal(isVMProxy(vm.run("module.exports = require('mocha')", __filename)), false, 'Mocha is a proxy');
 		assert.equal(isVMProxy(vm.run("module.exports = require('module1')", __filename)), true, 'Module1 is not a proxy');
 	});

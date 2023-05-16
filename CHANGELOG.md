@@ -1,3 +1,7 @@
+v3.9.19 (2023-05-16)
+--------------------
+[fix] Fix resolver issue.
+
 v3.9.18 (2023-05-15)
 --------------------
 [fix] Multiple security fixes.

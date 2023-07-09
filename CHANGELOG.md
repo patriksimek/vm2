@@ -1,3 +1,7 @@
+(discontinued) (2023-07-09)
+---------------------------
+Discontinued do to security issues without proper fixes.
+
 v3.9.19 (2023-05-16)
 --------------------
 [fix] Fix resolver issue.

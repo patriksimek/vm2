@@ -1,6 +1,17 @@
 # vm2 [![NPM Version][npm-image]][npm-url] [![NPM Downloads][downloads-image]][downloads-url] [![Package Quality][quality-image]][quality-url] [![Node.js CI](https://github.com/patriksimek/vm2/actions/workflows/node-test.yml/badge.svg)](https://github.com/patriksimek/vm2/actions/workflows/node-test.yml) [![Known Vulnerabilities][snyk-image]][snyk-url]
 
-vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules. Securely!
+## Security Issues
+
+Due to recent security issues which cannot be fixed properly I (XmiliaH) will stop maintaining this library.
+
+**The library has known security issues which can be used to break out of the sandbox!**
+
+For an alternative look into [isolated-vm](https://www.npmjs.com/package/isolated-vm).
+
+<details>
+<summary>Do not use this library in production code!</summary>
+
+vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules. **NOT!** Securely!
 
 ## Features
 
@@ -401,6 +412,7 @@ vm2 ./script.js
 
 ## Known Issues
 
+* **There are known security issues to circumvent the sandbox.**
 * It is not possible to define a class that extends a proxied class. This includes using a proxied class in `Object.create`.
 * Direct eval does not work.
 * Logging sandbox arrays will repeat the array part in the properties.
@@ -430,3 +442,5 @@ vm2 ./script.js
 [snyk-url]: https://snyk.io/test/github/patriksimek/vm2
 [integromat-image]: https://static.integromat.com/logo/45_text.png
 [integromat-url]: https://www.integromat.com
+
+</details>

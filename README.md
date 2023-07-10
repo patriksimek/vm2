@@ -1,17 +1,36 @@
 # vm2 [![NPM Version][npm-image]][npm-url] [![NPM Downloads][downloads-image]][downloads-url] [![Package Quality][quality-image]][quality-url] [![Node.js CI](https://github.com/patriksimek/vm2/actions/workflows/node-test.yml/badge.svg)](https://github.com/patriksimek/vm2/actions/workflows/node-test.yml) [![Known Vulnerabilities][snyk-image]][snyk-url]
 
-## Security Issues
+## ‼️ Project Discontinued ‼️
 
-Due to recent security issues which cannot be fixed properly I (XmiliaH) will stop maintaining this library.
+**TL;DR The library contains critical security issues and should not be used for production! The maintenance of the project has been discontinued. Consider migrating your code to [isolated-vm](https://www.npmjs.com/package/isolated-vm).**
 
-**The library has known security issues which can be used to break out of the sandbox!**
+Dear community,
 
-For an alternative look into [isolated-vm](https://www.npmjs.com/package/isolated-vm).
+It's been a truly remarkable journey for me since the vm2 project started nine years ago. The original intent was to devise a method for running untrusted code in Node, with a keen focus on maintaining in-process performance. Proxies, an emerging feature in JavaScript at that time, became our tool of choice for this task.
+
+From the get-go, we recognized the arduous task that lay ahead, as we tried to safeguard against the myriad of escape scenarios JavaScript presented. However, the thrill of the chase kept us going, hopeful that we could overcome these hurdles.
+
+Through the years, this project has seen numerous contributions from passionate individuals. I wish to extend my deepest gratitude to all of you. Special thanks go to @XmiliaH, whose unwavering dedication in maintaining and improving this library over the last 4 years was instrumental to its sustained relevance.
+
+Unfortunately, the growing complexity of Node has brought us to a crossroads. We now find ourselves facing an escape so complicated that fixing it seems impossible. And this isn't about one isolated issue. Recent reports have highlighted that sustaining this project in its current form is not viable in the long term.
+
+Therefore, we must announce the discontinuation of this project.
+
+You may wonder, "What now?"
+
+While this may seem like an end, I see it as an opportunity for you to transition your projects and adapt to a new solution. We would recommend migrating your code to the [isolated-vm](https://www.npmjs.com/package/isolated-vm), a library which employs a slightly different, yet equally effective, approach to sandboxing untrusted code.
+
+Thank you all for your support and understanding during this journey.
+
+Warm Regards,
+Patrik Simek
+
+---
 
 <details>
-<summary>Do not use this library in production code!</summary>
+<summary>The original Readme is available here.</summary>
 
-vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules. **NOT!** Securely!
+vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules. ~~Securely!~~
 
 ## Features
 

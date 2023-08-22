@@ -24,8 +24,10 @@
     "mocha": "^6.2.2"
   },
   "engines": {
-    "node": ">=18.10"
+    "node": ">=18.10",
+    "pnpm": ">=8.6.12"
   },
+  "packageManager": "pnpm@8.6.12",
   "scripts": {
     "test": "mocha test",
     "pretest": "eslint ."

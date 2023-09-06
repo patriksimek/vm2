@@ -1160,6 +1160,22 @@ describe('VM', () => {
 		`), /process is not defined/);
 	});
 
+	it('[Symbol.species] attack', async () => {
+		const vm2 = new VM();
+		const promise = vm2.run(`
+		class WrappedPromise extends Promise {
+			constructor(executor) {
+				super((resolve) => resolve(42));
+				executor(() => 43, () => 44);
+			}
+		}
+		const promise = new Promise((resolve, reject) => resolve(41));
+		promise.constructor = { [Symbol.species]: WrappedPromise };
+		promise.then();
+		`);
+		assert.strictEqual(await promise, 41);
+	});
+
 	after(() => {
 		vm = null;
 	});

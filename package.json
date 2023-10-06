@@ -9,7 +9,7 @@
     "alcatraz",
     "contextify"
   ],
-  "version": "3.9.20",
+  "version": "3.9.21",
   "main": "index.js",
   "sideEffects": false,
   "repository": "github:n8n-io/vm2",

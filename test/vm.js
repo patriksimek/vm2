@@ -1123,7 +1123,7 @@ describe('VM', () => {
 
 	it('[Symbol.species] attack', async () => {
 		const vm2 = new VM();
-		assert.throws(()=> vm2.run(`
+		const promise = vm2.run(`
 		class WrappedPromise extends Promise {
 			constructor(executor) {
 				super((resolve) => resolve(42));
@@ -1133,7 +1133,8 @@ describe('VM', () => {
 		const promise = new Promise((resolve, reject) => resolve(41));
 		promise.constructor = { [Symbol.species]: WrappedPromise };
 		promise.then();
-		`), /Sandbox escape attempt blocked/);
+		`);
+		assert.strictEqual(await promise, 41);
 	});
 
 	after(() => {

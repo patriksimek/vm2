@@ -42,7 +42,6 @@ function makeHelpers() {
 		function addProp(o, name, path) {
 			const prop = Object.getOwnPropertyDescriptor(o, name);
 			if (typeof name === 'symbol') name = '!' + name.toString();
-			Object.setPrototypeOf(prop, null);
 			addObj(prop.get, `${path}>${name}`);
 			addObj(prop.set, `${path}<${name}`);
 			addObj(prop.value, `${path}.${name}`);

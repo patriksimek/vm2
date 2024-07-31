@@ -1135,6 +1135,16 @@ describe('VM', () => {
 		`), /Sandbox escape attempt blocked/);
 	});
 
+	it('constructor arbitrary code attack', async () => {
+		const vm2 = new VM();
+		assert.throws(()=>vm2.run(`
+		const g = ({}).__lookupGetter__;
+		const a = Buffer.apply;
+		const p = a.apply(g, [Buffer, ['__proto__']]);
+		p.call(a).constructor('return process')();
+		`), /constructor is not a function/);
+	});
+
 	after(() => {
 		vm = null;
 	});

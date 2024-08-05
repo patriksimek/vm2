@@ -1120,19 +1120,35 @@ describe('VM', () => {
 		`), /process is not defined/);
 	});
 
+	it('allow regular async functions', async () => {
+		const vm2 = new VM();
+		const promise = vm2.run(`(async () => 42)()`);
+		assert.strictEqual(await promise, 42);
+	});
+
+	it('allow regular promises', async () => {
+		const vm2 = new VM();
+		const promise = vm2.run(`new Promise((resolve) => resolve(42))`);
+		assert.strictEqual(await promise, 42);
+	});
+
 	it('[Symbol.species] attack', async () => {
 		const vm2 = new VM();
-		assert.throws(()=>vm2.run(`
-		class WrappedPromise extends Promise {
-			constructor(executor) {
-				super((resolve) => resolve(42));
-				executor(() => 43, () => 44);
-			}
+		const promise = vm2.run(`
+		async function fn() {
+			throw new Error('random error');
 		}
-		const promise = new Promise((resolve, reject) => resolve(41));
-		promise.constructor = { [Symbol.species]: WrappedPromise };
+		const promise = fn();
+		promise.constructor = {
+			[Symbol.species]: class WrappedPromise {
+				constructor(executor) {
+					executor(() => 43, () => 44);
+				}
+			}
+		};
 		promise.then();
-		`), /Sandbox escape attempt blocked/);
+		`);
+		assert.rejects(() => promise, /random error/);
 	});
 
 	it('constructor arbitrary code attack', async () => {

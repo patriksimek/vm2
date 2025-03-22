@@ -25,12 +25,14 @@ Try it yourself:
 
 ```js
 const vm = require('vm');
+
 vm.runInNewContext('this.constructor.constructor("return process")().exit()');
 console.log('Never gets executed.');
 ```
 
 ```js
-const { VM } = require('vm2');
+import { VM } from 'vm2';
+
 new VM().run('this.constructor.constructor("return process")().exit()');
 // Throws ReferenceError: process is not defined
 ```
@@ -46,14 +48,15 @@ npm install vm2
 ## Quick Examples
 
 ```js
-const { VM } = require('vm2');
-const vm = new VM();
+import { VM } from 'vm2';
 
+const vm = new VM();
 vm.run(`process.exit()`); // TypeError: process.exit is not a function
 ```
 
 ```js
-const { NodeVM } = require('vm2');
+import { NodeVM } from 'vm2';
+
 const vm = new NodeVM({
 	require: {
 		external: true,
@@ -106,7 +109,7 @@ VM is a simple sandbox to synchronously run untrusted code without the `require`
 **IMPORTANT**: Timeout is only effective on synchronous code that you run through `run`. Timeout does **NOT** work on any method returned by VM. There are some situations when timeout doesn't work - see [#244](https://github.com/patriksimek/vm2/pull/244).
 
 ```js
-const { VM } = require('vm2');
+import { VM } from 'vm2';
 
 const vm = new VM({
 	timeout: 1000,
@@ -161,7 +164,7 @@ Unlike `VM`, `NodeVM` allows you to require modules in the same way that you wou
 **REMEMBER**: The more modules you allow, the more fragile your sandbox becomes.
 
 ```js
-const { NodeVM } = require('vm2');
+import { NodeVM } from 'vm2';
 
 const vm = new NodeVM({
 	console: 'inherit',
@@ -241,7 +244,7 @@ const vm = new NodeVM({
 You can increase performance by using precompiled scripts. The precompiled VMScript can be run multiple times. It is important to note that the code is not bound to any VM (context); rather, it is bound before each run, just for that run.
 
 ```js
-const { VM, VMScript } = require('vm2');
+import { VM, VMScript } from 'vm2';
 
 const vm = new VM();
 const script = new VMScript('Math.random()');
@@ -252,7 +255,7 @@ console.log(vm.run(script));
 It works for both `VM` and `NodeVM`.
 
 ```js
-const { NodeVM, VMScript } = require('vm2');
+import { NodeVM, VMScript } from 'vm2';
 
 const vm = new NodeVM();
 const script = new VMScript('module.exports = Math.random()');
@@ -297,12 +300,13 @@ You can debug or inspect code running in the sandbox as if it was running in a n
 /tmp/main.js:
 
 ```js
-const { VM, VMScript } = require('.');
-const fs = require('fs');
+import { VM, VMScript } from 'vm2';
+import { readFileSync } from 'node:fs';
+
 const file = `${__dirname}/sandbox.js`;
 
 // By providing a file name as second argument you enable breakpoints
-const script = new VMScript(fs.readFileSync(file), file);
+const script = new VMScript(readFileSync(file), file);
 
 new VM().run(script);
 ```
@@ -404,19 +408,11 @@ vm2 ./script.js
 
 ## Known Issues
 
--   **There are known security issues to circumvent the sandbox.**
 -   It is not possible to define a class that extends a proxied class. This includes using a proxied class in `Object.create`.
 -   Direct eval does not work.
 -   Logging sandbox arrays will repeat the array part in the properties.
 -   Source code transformations can result a different source string for a function.
 -   There are ways to crash the node process from inside the sandbox.
-
-## Deployment
-
-1. Update the `CHANGELOG.md`
-2. Update the `package.json` version number
-3. Commit the changes
-4. Run `npm publish`
 
 [npm-image]: https://img.shields.io/npm/v/vm2.svg
 [npm-url]: https://www.npmjs.com/package/vm2

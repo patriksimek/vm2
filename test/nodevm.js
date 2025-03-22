@@ -102,17 +102,6 @@ describe('modules', () => {
 		assert.equal(vm.run(`module.exports = require('./data/json.json')`, `${__dirname}/vm.js`).working, true);
 	});
 
-	it.skip('run coffee-script', () => {
-		const vm = new NodeVM({
-			require: {
-				external: true
-			},
-			compiler: 'coffeescript'
-		});
-
-		assert.equal(vm.run('module.exports = working: true').working, true);
-	});
-
 	it('optionally can run a custom compiler function', () => {
 		let ranCustomCompiler = false;
 		const scriptCode = 'var a = 1;';

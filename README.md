@@ -1,4 +1,4 @@
-# vm2 [![NPM Version][npm-image]][npm-url] [![NPM Downloads][downloads-image]][downloads-url] [![Package Quality][quality-image]][quality-url] [![Node.js CI](https://github.com/patriksimek/vm2/actions/workflows/test.yml/badge.svg)](https://github.com/patriksimek/vm2/actions/workflows/test.yml) [![Known Vulnerabilities][snyk-image]][snyk-url]
+# vm2 [![NPM Version][npm-image]][npm-url] [![NPM Downloads][downloads-image]][downloads-url] [![License][license-image]][license-url] [![Node.js CI](https://github.com/patriksimek/vm2/actions/workflows/test.yml/badge.svg)](https://github.com/patriksimek/vm2/actions/workflows/test.yml) [![Known Vulnerabilities][snyk-image]][snyk-url]
 
 vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules.
 
@@ -418,11 +418,11 @@ vm2 ./script.js
 3. Commit the changes
 4. Run `npm publish`
 
-[npm-image]: https://img.shields.io/npm/v/vm2.svg?style=flat-square
+[npm-image]: https://img.shields.io/npm/v/vm2.svg
 [npm-url]: https://www.npmjs.com/package/vm2
-[downloads-image]: https://img.shields.io/npm/dm/vm2.svg?style=flat-square
+[license-image]: https://img.shields.io/npm/l/vm2.svg
+[license-url]: https://github.com/patriksimek/vm2/blob/resurrection/LICENSE.md
+[downloads-image]: https://img.shields.io/npm/dm/vm2.svg
 [downloads-url]: https://www.npmjs.com/package/vm2
-[quality-image]: http://npm.packagequality.com/shield/vm2.svg?style=flat-square
-[quality-url]: http://packagequality.com/#?package=vm2
 [snyk-image]: https://snyk.io/test/github/patriksimek/vm2/badge.svg
 [snyk-url]: https://snyk.io/test/github/patriksimek/vm2

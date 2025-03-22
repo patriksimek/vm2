@@ -30,7 +30,7 @@ jobs:
 
             - name: Install dependencies (node < 8)
               if: ${{ matrix.node-version < 8 }}
-              run: npm install --omit=dev
+              run: npm install --only=prod
 
             - name: Run unit tests
               if: ${{ matrix.node-version >= 16 }}

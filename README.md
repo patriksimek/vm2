@@ -1,53 +1,23 @@
-# vm2 [![NPM Version][npm-image]][npm-url] [![NPM Downloads][downloads-image]][downloads-url] [![Package Quality][quality-image]][quality-url] [![Node.js CI](https://github.com/patriksimek/vm2/actions/workflows/node-test.yml/badge.svg)](https://github.com/patriksimek/vm2/actions/workflows/node-test.yml) [![Known Vulnerabilities][snyk-image]][snyk-url]
+# vm2 [![NPM Version][npm-image]][npm-url] [![NPM Downloads][downloads-image]][downloads-url] [![Package Quality][quality-image]][quality-url] [![Node.js CI](https://github.com/patriksimek/vm2/actions/workflows/test.yml/badge.svg)](https://github.com/patriksimek/vm2/actions/workflows/test.yml) [![Known Vulnerabilities][snyk-image]][snyk-url]
 
-## ‼️ Project Discontinued ‼️
-
-**TL;DR The library contains critical security issues and should not be used for production! The maintenance of the project has been discontinued. Consider migrating your code to [isolated-vm](https://www.npmjs.com/package/isolated-vm).**
-
-Dear community,
-
-It's been a truly remarkable journey for me since the vm2 project started nine years ago. The original intent was to devise a method for running untrusted code in Node, with a keen focus on maintaining in-process performance. Proxies, an emerging feature in JavaScript at that time, became our tool of choice for this task.
-
-From the get-go, we recognized the arduous task that lay ahead, as we tried to safeguard against the myriad of escape scenarios JavaScript presented. However, the thrill of the chase kept us going, hopeful that we could overcome these hurdles.
-
-Through the years, this project has seen numerous contributions from passionate individuals. I wish to extend my deepest gratitude to all of you. Special thanks go to @XmiliaH, whose unwavering dedication in maintaining and improving this library over the last 4 years was instrumental to its sustained relevance.
-
-Unfortunately, the growing complexity of Node has brought us to a crossroads. We now find ourselves facing an escape so complicated that fixing it seems impossible. And this isn't about one isolated issue. Recent reports have highlighted that sustaining this project in its current form is not viable in the long term.
-
-Therefore, we must announce the discontinuation of this project.
-
-You may wonder, "What now?"
-
-While this may seem like an end, I see it as an opportunity for you to transition your projects and adapt to a new solution. We would recommend migrating your code to the [isolated-vm](https://www.npmjs.com/package/isolated-vm), a library which employs a slightly different, yet equally effective, approach to sandboxing untrusted code.
-
-Thank you all for your support and understanding during this journey.
-
-Warm Regards,
-Patrik Simek
-
----
-
-<details>
-<summary>The original Readme is available here.</summary>
-
-vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules. ~~Securely!~~
+vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules.
 
 ## Features
 
-* Runs untrusted code securely in a single process with your code side by side
-* Full control over the sandbox's console output
-* The sandbox has limited access to the process's methods
-* It is possible to require modules (built-in and external) from the sandbox
-* You can limit access to certain (or all) built-in modules
-* You can securely call methods and exchange data and callbacks between sandboxes
-* Is immune to all known methods of attacks
-* Transpiler support
+-   Runs untrusted code securely in a single process with your code side by side
+-   Full control over the sandbox's console output
+-   The sandbox has limited access to the process's methods
+-   It is possible to require modules (built-in and external) from the sandbox
+-   You can limit access to certain (or all) built-in modules
+-   You can securely call methods and exchange data and callbacks between sandboxes
+-   Is immune to all known methods of attacks
+-   Transpiler support
 
 ## How does it work
 
-* It uses the internal VM module to create a secure context.
-* It uses [Proxies](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Proxy) to prevent escaping from the sandbox.
-* It overrides the built-in require to control access to modules.
+-   It uses the internal VM module to create a secure context.
+-   It uses [Proxies](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Proxy) to prevent escaping from the sandbox.
+-   It overrides the built-in require to control access to modules.
 
 ## What is the difference between Node's vm and vm2?
 
@@ -60,7 +30,7 @@ console.log('Never gets executed.');
 ```
 
 ```js
-const {VM} = require('vm2');
+const { VM } = require('vm2');
 new VM().run('this.constructor.constructor("return process")().exit()');
 // Throws ReferenceError: process is not defined
 ```
@@ -76,22 +46,23 @@ npm install vm2
 ## Quick Example
 
 ```js
-const {VM} = require('vm2');
+const { VM } = require('vm2');
 const vm = new VM();
 
 vm.run(`process.exit()`); // TypeError: process.exit is not a function
 ```
 
 ```js
-const {NodeVM} = require('vm2');
+const { NodeVM } = require('vm2');
 const vm = new NodeVM({
-    require: {
-        external: true,
-        root: './'
-    }
+	require: {
+		external: true,
+		root: './',
+	},
 });
 
-vm.run(`
+vm.run(
+	`
     var request = require('request');
     request('http://www.google.com', function (error, response, body) {
         console.error(error);
@@ -99,23 +70,25 @@ vm.run(`
             console.log(body); // Show the HTML for the Google homepage.
         }
     });
-`, 'vm.js');
+`,
+	'vm.js',
+);
 ```
 
 ## Documentation
 
-* [VM](#vm)
-* [NodeVM](#nodevm)
-* [VMScript](#vmscript)
-* [Error handling](#error-handling)
-* [Debugging a sandboxed code](#debugging-a-sandboxed-code)
-* [Read-only objects](#read-only-objects-experimental)
-* [Protected objects](#protected-objects-experimental)
-* [Cross-sandbox relationships](#cross-sandbox-relationships)
-* [CLI](#cli)
-* [2.x to 3.x changes](https://github.com/patriksimek/vm2/wiki/2.x-to-3.x-changes)
-* [1.x and 2.x docs](https://github.com/patriksimek/vm2/wiki/1.x-and-2.x-docs)
-* [Contributing](https://github.com/patriksimek/vm2/wiki/Contributing)
+-   [VM](#vm)
+-   [NodeVM](#nodevm)
+-   [VMScript](#vmscript)
+-   [Error handling](#error-handling)
+-   [Debugging a sandboxed code](#debugging-a-sandboxed-code)
+-   [Read-only objects](#read-only-objects-experimental)
+-   [Protected objects](#protected-objects-experimental)
+-   [Cross-sandbox relationships](#cross-sandbox-relationships)
+-   [CLI](#cli)
+-   [2.x to 3.x changes](https://github.com/patriksimek/vm2/wiki/2.x-to-3.x-changes)
+-   [1.x and 2.x docs](https://github.com/patriksimek/vm2/wiki/1.x-and-2.x-docs)
+-   [Contributing](https://github.com/patriksimek/vm2/wiki/Contributing)
 
 ## VM
 
@@ -123,22 +96,22 @@ VM is a simple sandbox to synchronously run untrusted code without the `require`
 
 **Options:**
 
-* `timeout` - Script timeout in milliseconds. **WARNING**: You might want to use this option together with `allowAsync=false`. Further, operating on returned objects from the sandbox can run arbitrary code and circumvent the timeout. One should test if the returned object is a primitive with `typeof` and fully discard it (doing logging or creating error messages with such an object might also run arbitrary code again) in the other case.
-* `sandbox` - VM's global object.
-* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function. The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
-* `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
-* `wasm` -  If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
-* `allowAsync` - If set to `false` any attempt to run code using `async` will throw a `VMError` (default: `true`).
+-   `timeout` - Script timeout in milliseconds. **WARNING**: You might want to use this option together with `allowAsync=false`. Further, operating on returned objects from the sandbox can run arbitrary code and circumvent the timeout. One should test if the returned object is a primitive with `typeof` and fully discard it (doing logging or creating error messages with such an object might also run arbitrary code again) in the other case.
+-   `sandbox` - VM's global object.
+-   `compiler` - `javascript` (default) or `coffeescript` or custom compiler function. The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
+-   `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
+-   `wasm` - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
+-   `allowAsync` - If set to `false` any attempt to run code using `async` will throw a `VMError` (default: `true`).
 
 **IMPORTANT**: Timeout is only effective on synchronous code that you run through `run`. Timeout does **NOT** work on any method returned by VM. There are some situations when timeout doesn't work - see [#244](https://github.com/patriksimek/vm2/pull/244).
 
 ```js
-const {VM} = require('vm2');
+const { VM } = require('vm2');
 
 const vm = new VM({
-    timeout: 1000,
-    allowAsync: false,
-    sandbox: {}
+	timeout: 1000,
+	allowAsync: false,
+	sandbox: {},
 });
 
 vm.run('process.exit()'); // throws ReferenceError: process is not defined
@@ -158,51 +131,51 @@ Unlike `VM`, `NodeVM` allows you to require modules in the same way that you wou
 
 **Options:**
 
-* `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`).
-* `sandbox` - VM's global object.
-* `compiler` - `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's file path). The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
-* `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
-* `wasm` -  If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
-* `sourceExtensions` - Array of file extensions to treat as source code (default: `['js']`).
-* `require` - `true`, an object or a Resolver to enable `require` method (default: `false`).
-* `require.external` - Values can be `true`, an array of allowed external modules, or an object (default: `false`). All paths matching `/node_modules/${any_allowed_external_module}/(?!/node_modules/)` are allowed to be required.
-* `require.external.modules` - Array of allowed external modules. Also supports wildcards, so specifying `['@scope/*-ver-??]`, for instance, will allow using all modules having a name of the form `@scope/something-ver-aa`, `@scope/other-ver-11`, etc. The `*` wildcard does not match path separators.
-* `require.external.transitive` - Boolean which indicates if transitive dependencies of external modules are allowed (default: `false`). **WARNING**: When a module is required transitively, any module is then able to require it normally, even if this was not possible before it was loaded.
-* `require.builtin` - Array of allowed built-in modules, accepts ["\*"] for all (default: none). **WARNING**: "\*" can be dangerous as new built-ins can be added.
-* `require.root` - Restricted path(s) where local modules can be required (default: every path).
-* `require.mock` - Collection of mock modules (both external or built-in).
-* `require.context` - `host` (default) to require modules in the host and proxy them into the sandbox. `sandbox` to load, compile, and require modules in the sandbox. `callback(moduleFilename, ext)` to dynamically choose a context per module. The default will be sandbox is nothing is specified. Except for `events`, built-in modules are always required in the host and proxied into the sandbox.
-* `require.import` - An array of modules to be loaded into NodeVM on start.
-* `require.resolve` - An additional lookup function in case a module wasn't found in one of the traditional node lookup paths.
-* `require.customRequire` - Use instead of the `require` function to load modules from the host.
-* `require.strict` - `false` to not force strict mode on modules loaded by require (default: `true`).
-* `require.fs` - Custom file system implementation.
-* `nesting` - **WARNING**: Allowing this is a security risk as scripts can create a NodeVM which can require any host module. `true` to enable VMs nesting (default: `false`).
-* `wrapper` - `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script.
-* `argv` - Array to be passed to `process.argv`.
-* `env` - Object to be passed to `process.env`.
-* `strict` - `true` to loaded modules in strict mode (default: `false`).
+-   `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`).
+-   `sandbox` - VM's global object.
+-   `compiler` - `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's file path). The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
+-   `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
+-   `wasm` - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
+-   `sourceExtensions` - Array of file extensions to treat as source code (default: `['js']`).
+-   `require` - `true`, an object or a Resolver to enable `require` method (default: `false`).
+-   `require.external` - Values can be `true`, an array of allowed external modules, or an object (default: `false`). All paths matching `/node_modules/${any_allowed_external_module}/(?!/node_modules/)` are allowed to be required.
+-   `require.external.modules` - Array of allowed external modules. Also supports wildcards, so specifying `['@scope/*-ver-??]`, for instance, will allow using all modules having a name of the form `@scope/something-ver-aa`, `@scope/other-ver-11`, etc. The `*` wildcard does not match path separators.
+-   `require.external.transitive` - Boolean which indicates if transitive dependencies of external modules are allowed (default: `false`). **WARNING**: When a module is required transitively, any module is then able to require it normally, even if this was not possible before it was loaded.
+-   `require.builtin` - Array of allowed built-in modules, accepts ["\*"] for all (default: none). **WARNING**: "\*" can be dangerous as new built-ins can be added.
+-   `require.root` - Restricted path(s) where local modules can be required (default: every path).
+-   `require.mock` - Collection of mock modules (both external or built-in).
+-   `require.context` - `host` (default) to require modules in the host and proxy them into the sandbox. `sandbox` to load, compile, and require modules in the sandbox. `callback(moduleFilename, ext)` to dynamically choose a context per module. The default will be sandbox is nothing is specified. Except for `events`, built-in modules are always required in the host and proxied into the sandbox.
+-   `require.import` - An array of modules to be loaded into NodeVM on start.
+-   `require.resolve` - An additional lookup function in case a module wasn't found in one of the traditional node lookup paths.
+-   `require.customRequire` - Use instead of the `require` function to load modules from the host.
+-   `require.strict` - `false` to not force strict mode on modules loaded by require (default: `true`).
+-   `require.fs` - Custom file system implementation.
+-   `nesting` - **WARNING**: Allowing this is a security risk as scripts can create a NodeVM which can require any host module. `true` to enable VMs nesting (default: `false`).
+-   `wrapper` - `commonjs` (default) to wrap script into CommonJS wrapper, `none` to retrieve value returned by the script.
+-   `argv` - Array to be passed to `process.argv`.
+-   `env` - Object to be passed to `process.env`.
+-   `strict` - `true` to loaded modules in strict mode (default: `false`).
 
 **IMPORTANT**: Timeout is not effective for NodeVM so it is not immune to `while (true) {}` or similar evil.
 
 **REMEMBER**: The more modules you allow, the more fragile your sandbox becomes.
 
 ```js
-const {NodeVM} = require('vm2');
+const { NodeVM } = require('vm2');
 
 const vm = new NodeVM({
-    console: 'inherit',
-    sandbox: {},
-    require: {
-        external: true,
-        builtin: ['fs', 'path'],
-        root: './',
-        mock: {
-            fs: {
-                readFileSync: () => 'Nice try!'
-            }
-        }
-    }
+	console: 'inherit',
+	sandbox: {},
+	require: {
+		external: true,
+		builtin: ['fs', 'path'],
+		root: './',
+		mock: {
+			fs: {
+				readFileSync: () => 'Nice try!',
+			},
+		},
+	},
 });
 
 // Sync
@@ -213,8 +186,8 @@ functionInSandbox('world');
 // Async
 
 let functionWithCallbackInSandbox = vm.run('module.exports = function(who, callback) { callback("hello "+ who); }');
-functionWithCallbackInSandbox('world', (greeting) => {
-    console.log(greeting);
+functionWithCallbackInSandbox('world', greeting => {
+	console.log(greeting);
 });
 ```
 
@@ -237,7 +210,7 @@ vm.run('require("foobar")', '/data/myvmscript.js');
 If the script you are running is a VMScript, the path is given in the VMScript constructor.
 
 ```js
-const script = new VMScript('require("foobar")', {filename: '/data/myvmscript.js'});
+const script = new VMScript('require("foobar")', { filename: '/data/myvmscript.js' });
 vm.run(script);
 ```
 
@@ -247,19 +220,19 @@ A resolver can be created via `makeResolverFromLegacyOptions` and be used for mu
 
 ```js
 const resolver = makeResolverFromLegacyOptions({
-    external: true,
-    builtin: ['fs', 'path'],
-    root: './',
-    mock: {
-        fs: {
-            readFileSync: () => 'Nice try!'
-        }
-    }
+	external: true,
+	builtin: ['fs', 'path'],
+	root: './',
+	mock: {
+		fs: {
+			readFileSync: () => 'Nice try!',
+		},
+	},
 });
 const vm = new NodeVM({
-    console: 'inherit',
-    sandbox: {},
-    require: resolver
+	console: 'inherit',
+	sandbox: {},
+	require: resolver,
 });
 ```
 
@@ -268,7 +241,7 @@ const vm = new NodeVM({
 You can increase performance by using precompiled scripts. The precompiled VMScript can be run multiple times. It is important to note that the code is not bound to any VM (context); rather, it is bound before each run, just for that run.
 
 ```js
-const {VM, VMScript} = require('vm2');
+const { VM, VMScript } = require('vm2');
 
 const vm = new VM();
 const script = new VMScript('Math.random()');
@@ -279,7 +252,7 @@ console.log(vm.run(script));
 It works for both `VM` and `NodeVM`.
 
 ```js
-const {NodeVM, VMScript} = require('vm2');
+const { NodeVM, VMScript } = require('vm2');
 
 const vm = new NodeVM();
 const script = new VMScript('module.exports = Math.random()');
@@ -295,19 +268,19 @@ Errors in code compilation and synchronous code execution can be handled by `try
 
 ```js
 try {
-    var script = new VMScript('Math.random()').compile();
+	var script = new VMScript('Math.random()').compile();
 } catch (err) {
-    console.error('Failed to compile script.', err);
+	console.error('Failed to compile script.', err);
 }
 
 try {
-    vm.run(script);
+	vm.run(script);
 } catch (err) {
-    console.error('Failed to execute script.', err);
+	console.error('Failed to execute script.', err);
 }
 
-process.on('uncaughtException', (err) => {
-    console.error('Asynchronous error caught.', err);
+process.on('uncaughtException', err => {
+	console.error('Asynchronous error caught.', err);
 });
 ```
 
@@ -315,16 +288,16 @@ process.on('uncaughtException', (err) => {
 
 You can debug or inspect code running in the sandbox as if it was running in a normal process.
 
-* You can use breakpoints (which requires you to specify a script file name)
-* You can use `debugger` keyword.
-* You can use step-in to step inside the code running in the sandbox.
+-   You can use breakpoints (which requires you to specify a script file name)
+-   You can use `debugger` keyword.
+-   You can use step-in to step inside the code running in the sandbox.
 
 ### Example
 
 /tmp/main.js:
 
 ```js
-const {VM, VMScript} = require('.');
+const { VM, VMScript } = require('.');
 const fs = require('fs');
 const file = `${__dirname}/sandbox.js`;
 
@@ -352,11 +325,11 @@ To prevent sandboxed scripts from adding, changing, or deleting properties from 
 
 ```js
 const util = {
-    add: (a, b) => a + b
-}
+	add: (a, b) => a + b,
+};
 
 const vm = new VM({
-    sandbox: {util}
+	sandbox: { util },
 });
 
 vm.run('util.add = (a, b) => a - b');
@@ -385,15 +358,15 @@ Unlike `freeze`, this method allows sandboxed scripts to add, change, or delete 
 
 ```js
 const assert = require('assert');
-const {VM} = require('vm2');
+const { VM } = require('vm2');
 
 const sandbox = {
-    object: new Object(),
-    func: new Function(),
-    buffer: new Buffer([0x01, 0x05])
-}
+	object: new Object(),
+	func: new Function(),
+	buffer: new Buffer([0x01, 0x05]),
+};
 
-const vm = new VM({sandbox});
+const vm = new VM({ sandbox });
 
 assert.ok(vm.run(`object`) === sandbox.object);
 assert.ok(vm.run(`object instanceof Object`));
@@ -431,12 +404,12 @@ vm2 ./script.js
 
 ## Known Issues
 
-* **There are known security issues to circumvent the sandbox.**
-* It is not possible to define a class that extends a proxied class. This includes using a proxied class in `Object.create`.
-* Direct eval does not work.
-* Logging sandbox arrays will repeat the array part in the properties.
-* Source code transformations can result a different source string for a function.
-* There are ways to crash the node process from inside the sandbox.
+-   **There are known security issues to circumvent the sandbox.**
+-   It is not possible to define a class that extends a proxied class. This includes using a proxied class in `Object.create`.
+-   Direct eval does not work.
+-   Logging sandbox arrays will repeat the array part in the properties.
+-   Source code transformations can result a different source string for a function.
+-   There are ways to crash the node process from inside the sandbox.
 
 ## Deployment
 
@@ -445,21 +418,11 @@ vm2 ./script.js
 3. Commit the changes
 4. Run `npm publish`
 
-## Sponsors
-
-[![Integromat][integromat-image]][integromat-url]
-
 [npm-image]: https://img.shields.io/npm/v/vm2.svg?style=flat-square
 [npm-url]: https://www.npmjs.com/package/vm2
 [downloads-image]: https://img.shields.io/npm/dm/vm2.svg?style=flat-square
 [downloads-url]: https://www.npmjs.com/package/vm2
 [quality-image]: http://npm.packagequality.com/shield/vm2.svg?style=flat-square
 [quality-url]: http://packagequality.com/#?package=vm2
-[travis-image]: https://img.shields.io/travis/patriksimek/vm2/master.svg?style=flat-square&label=unit
-[travis-url]: https://travis-ci.org/patriksimek/vm2
 [snyk-image]: https://snyk.io/test/github/patriksimek/vm2/badge.svg
 [snyk-url]: https://snyk.io/test/github/patriksimek/vm2
-[integromat-image]: https://static.integromat.com/logo/45_text.png
-[integromat-url]: https://www.integromat.com
-
-</details>

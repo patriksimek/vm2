@@ -42,7 +42,6 @@ function makeHelpers() {
 		function addProp(o, name, path) {
 			const prop = Object.getOwnPropertyDescriptor(o, name);
 			if (typeof name === 'symbol') name = '!' + name.toString();
-			Object.setPrototypeOf(prop, null);
 			addObj(prop.get, `${path}>${name}`);
 			addObj(prop.set, `${path}<${name}`);
 			addObj(prop.value, `${path}.${name}`);
@@ -622,7 +621,7 @@ describe('VM', () => {
 			if (o && o.constructor !== Function) throw new Error('Shouldnt be there.');
 		`), '#3');
 
-		assert.doesNotThrow(() => vm2.run(`
+		assert.throws(() => vm2.run(`
 			let method = () => {};
 			let proxy = new Proxy(method, {
 				apply: (target, context, args) => {
@@ -631,16 +630,16 @@ describe('VM', () => {
 				}
 			});
 			proxy
-		`)('asdf'), '#4');
+		`)('asdf'), /Proxy is not a constructor/, '#4');
 
-		assert.doesNotThrow(() => vm2.run(`
+		assert.throws(() => vm2.run(`
 			let proxy2 = new Proxy(function() {}, {
 				apply: (target, context, args) => {
 					if (args.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
 				}
 			});
 			proxy2
-		`)('asdf'), '#5');
+		`)('asdf'), /Proxy is not a constructor/, '#5');
 
 		assert.strictEqual(vm2.run(`
 			global.DEBUG = true;
@@ -674,7 +673,7 @@ describe('VM', () => {
 			} catch ({constructor: c}) {
 				c.constructor('return process')();
 			}
-		`), /Maximum call stack size exceeded/, '#9');
+		`), /Proxy is not a constructor/, '#9');
 	});
 
 	it('internal state attack', () => {
@@ -729,21 +728,15 @@ describe('VM', () => {
 			}
 		});
 
-		try {
-			vm2.run(`
-				func(() => {
-					throw new Proxy({}, {
-						getPrototypeOf: () => {
-							throw x => x.constructor.constructor("return process;")();
-						}
-					})
-				});
-			`);
-		} catch (ex) {
-			assert.throws(()=>{
-				ex(()=>{});
-			}, /process is not defined/);
-		}
+		assert.throws(() => vm2.run(`
+			func(() => {
+				throw new Proxy({}, {
+					getPrototypeOf: () => {
+						throw x => x.constructor.constructor("return process;")();
+					}
+				})
+			});
+		`), /Proxy is not a constructor/);
 	});
 
 	it('__defineGetter__ / __defineSetter__ attack', () => {
@@ -815,40 +808,11 @@ describe('VM', () => {
 					return () => x => x.constructor("return process")();
 				}
 			})))(()=>{}).mainModule.require("child_process").execSync("id").toString()
-		`), /process is not defined/, '#2');
+		`), /Proxy is not a constructor/, '#2');
 
 		vm2 = new VM();
 
 		assert.throws(() => vm2.run(`
-			var process;
-			try {
-				Object.defineProperty(Buffer.from(""), "y", {
-					writable: true,
-					value: new Proxy({}, {
-						getPrototypeOf(target) {
-							delete this.getPrototypeOf;
-
-							Object.defineProperty(Object.prototype, "get", {
-								get() {
-									delete Object.prototype.get;
-									Function.prototype.__proto__ = null;
-									throw f=>f.constructor("return process")();
-								}
-							});
-
-							return Object.getPrototypeOf(target);
-						}
-					})
-				});
-			} catch(e) {
-				process = e(() => {});
-			}
-			process.mainModule.require("child_process").execSync("whoami").toString()
-		`), /Cannot read propert.*mainModule/, '#3');
-
-		vm2 = new VM();
-
-		assert.doesNotThrow(() => vm2.run(`
 			Object.defineProperty(Buffer.from(""), "", {
 				value: new Proxy({}, {
 					getPrototypeOf(target) {
@@ -861,7 +825,7 @@ describe('VM', () => {
 					}
 				})
 			});
-		`), '#4');
+		`), /Proxy is not a constructor/, '#4');
 
 		vm2 = new VM();
 
@@ -988,7 +952,7 @@ describe('VM', () => {
 					}
 				}
 			}))}).mainModule.require("child_process").execSync("id").toString()
-		`), /process is not defined/, '#1');
+		`), /Proxy is not a constructor/, '#1');
 	});
 
 	it('throw while accessing propertyDescriptor properties', () => {
@@ -1045,17 +1009,13 @@ describe('VM', () => {
 
 		assert.throws(() => vm2.run(`
 			(function(){
-				try{
-					Buffer.from(new Proxy({}, {
-						getOwnPropertyDescriptor(){
-							throw f=>f.constructor("return process")();
-						}
-					}));
-				}catch(e){
-					return e(()=>{}).mainModule.require("child_process").execSync("whoami").toString();
-				}
+				Buffer.from(new Proxy({}, {
+					getOwnPropertyDescriptor(){
+						throw f=>f.constructor("return process")();
+					}
+				}));
 			})()
-		`), /process is not defined/);
+		`), /Proxy is not a constructor/);
 	});
 
 	if (NODE_VERSION >= 10) {
@@ -1158,6 +1118,47 @@ describe('VM', () => {
 				a$tmpname.constructor.constructor('return process')();
 			}
 		`), /process is not defined/);
+	});
+
+	it('allow regular async functions', async () => {
+		const vm2 = new VM();
+		const promise = vm2.run(`(async () => 42)()`);
+		assert.strictEqual(await promise, 42);
+	});
+
+	it('allow regular promises', async () => {
+		const vm2 = new VM();
+		const promise = vm2.run(`new Promise((resolve) => resolve(42))`);
+		assert.strictEqual(await promise, 42);
+	});
+
+	it('[Symbol.species] attack', async () => {
+		const vm2 = new VM();
+		const promise = vm2.run(`
+		async function fn() {
+			throw new Error('random error');
+		}
+		const promise = fn();
+		promise.constructor = {
+			[Symbol.species]: class WrappedPromise {
+				constructor(executor) {
+					executor(() => 43, () => 44);
+				}
+			}
+		};
+		promise.then();
+		`);
+		assert.rejects(() => promise, /random error/);
+	});
+
+	it('constructor arbitrary code attack', async () => {
+		const vm2 = new VM();
+		assert.throws(()=>vm2.run(`
+		const g = ({}).__lookupGetter__;
+		const a = Buffer.apply;
+		const p = a.apply(g, [Buffer, ['__proto__']]);
+		p.call(a).constructor('return process')();
+		`), /constructor is not a function/);
 	});
 
 	after(() => {

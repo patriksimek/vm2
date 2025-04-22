@@ -24,9 +24,9 @@ vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in mo
 Try it yourself:
 
 ```js
-const vm = require('vm');
+import { runInNewContext } from "node:vm";
 
-vm.runInNewContext('this.constructor.constructor("return process")().exit()');
+runInNewContext('this.constructor.constructor("return process")().exit()');
 console.log('Never gets executed.');
 ```
 
@@ -38,8 +38,6 @@ new VM().run('this.constructor.constructor("return process")().exit()');
 ```
 
 ## Installation
-
-**IMPORTANT**: VM2 requires Node.js 6 or newer.
 
 ```sh
 npm install vm2

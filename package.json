@@ -28,7 +28,7 @@
     "mocha": "^6.2.2"
   },
   "engines": {
-    "node": ">=6.0"
+    "node": ">=18.0"
   },
   "scripts": {
     "test": "mocha test",

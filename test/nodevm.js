@@ -8,9 +8,16 @@ const path = require('path');
 const assert = require('assert');
 const {EventEmitter} = require('events');
 const {NodeVM, VMScript, makeResolverFromLegacyOptions} = require('..');
-// const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
+const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
 
 global.isHost = true;
+global.it.cond = (name, cond, fn) => {
+	if (cond) {
+		it(name, fn);
+	} else {
+		it.skip(name, fn);
+	}
+};
 
 function isVMProxy(obj) {
 	const key = {};
@@ -93,17 +100,6 @@ describe('modules', () => {
 		});
 
 		assert.equal(vm.run(`module.exports = require('./data/json.json')`, `${__dirname}/vm.js`).working, true);
-	});
-
-	it.skip('run coffee-script', () => {
-		const vm = new NodeVM({
-			require: {
-				external: true
-			},
-			compiler: 'coffeescript'
-		});
-
-		assert.equal(vm.run('module.exports = working: true').working, true);
 	});
 
 	it('optionally can run a custom compiler function', () => {
@@ -192,7 +188,7 @@ describe('modules', () => {
 			}
 		});
 
-		vm.run("require('mocha')", __filename);
+		vm.run("require('acorn')", __filename);
 	});
 
 	it('can deny requiring modules inside the vm', () => {
@@ -202,9 +198,9 @@ describe('modules', () => {
 			},
 		});
 
-		assert.throws(() => vm.run("require('mocha')", __filename), err => {
+		assert.throws(() => vm.run("require('acorn')", __filename), err => {
 			assert.equal(err.name, 'VMError');
-			assert.equal(err.message, 'Cannot find module \'mocha\'');
+			assert.equal(err.message, 'Cannot find module \'acorn\'');
 			return true;
 		});
 	});
@@ -212,11 +208,11 @@ describe('modules', () => {
 	it('can whitelist modules inside the vm', () => {
 		const vm = new NodeVM({
 			require: {
-				external: ['mocha']
+				external: ['acorn']
 			}
 		});
 
-		assert.ok(vm.run("require('mocha')", __filename));
+		assert.ok(vm.run("require('acorn')", __filename));
 		assert.throws(() => vm.run("require('unknown')", __filename), err => {
 			assert.equal(err.name, 'VMError');
 			assert.equal(err.message, "Cannot find module 'unknown'");
@@ -242,16 +238,16 @@ describe('modules', () => {
 		const vm = new NodeVM({
 			require: {
 				external: {
-					modules: ['mocha', 'module1'],
+					modules: ['acorn', 'module1'],
 					transitive: true,
 				},
 				context(module) {
-					if (module.includes('mocha')) return 'host';
+					if (module.includes('acorn')) return 'host';
 					return 'sandbox';
 				}
 			}
 		});
-		assert.equal(isVMProxy(vm.run("module.exports = require('mocha')", __filename)), false, 'Mocha is a proxy');
+		assert.equal(isVMProxy(vm.run("module.exports = require('acorn')", __filename)), false, 'Acorn is a proxy');
 		assert.equal(isVMProxy(vm.run("module.exports = require('module1')", __filename)), true, 'Module1 is not a proxy');
 	});
 
@@ -260,12 +256,12 @@ describe('modules', () => {
 			require: {
 				external: true,
 				context(module) {
-					if (module.includes('mocha')) return 'host';
+					if (module.includes('acorn')) return 'host';
 					return 'sandbox';
 				}
 			}
 		});
-		assert.equal(isVMProxy(vm.run("module.exports = require('mocha')", __filename)), false, 'Mocha is a proxy');
+		assert.equal(isVMProxy(vm.run("module.exports = require('acorn')", __filename)), false, 'Acorn is a proxy');
 		assert.equal(isVMProxy(vm.run("module.exports = require('module1')", __filename)), true, 'Module1 is not a proxy');
 	});
 
@@ -294,7 +290,7 @@ describe('modules', () => {
 	it('allows for multiple root folders', () => {
 		const vm = new NodeVM({
 			require: {
-				external: ['mocha'],
+				external: ['acorn'],
 				root: [
 					path.resolve(__dirname),
 					path.resolve(__dirname, '..', 'node_modules')
@@ -302,7 +298,7 @@ describe('modules', () => {
 			}
 		});
 
-		assert.ok(vm.run("require('mocha')", __filename));
+		assert.ok(vm.run("require('acorn')", __filename));
 	});
 
 	it('falls back to index.js if the file specified in the package.json "main" attribute is missing', () => {
@@ -348,7 +344,7 @@ describe('modules', () => {
 			},
 		});
 
-		assert.throws(() => vm.run("require('mocha')", __filename), /Cannot find module 'mocha'/);
+		assert.throws(() => vm.run("require('acorn')", __filename), /Cannot find module 'acorn'/);
 	});
 
 	it('root path checking', () => {
@@ -365,7 +361,7 @@ describe('modules', () => {
 	it('relative require not allowed to enter node modules', () => {
 		const vm = new NodeVM({
 			require: {
-				external: ['mocha'],
+				external: ['acorn'],
 				root: `${__dirname}`
 			},
 		});
@@ -605,7 +601,8 @@ describe('precompiled scripts', () => {
 		assert.ok('number' === typeof val1 && 'number' === typeof val2);
 		assert.ok( val1 != val2);
 	});
-	it('VMScript options', () => {
+
+	it.cond('VMScript options', NODE_VERSION >= 12, () => {
 		const vm = new NodeVM();
 		// V8 Stack Trace API: https://v8.dev/docs/stack-trace-api
 		const code = `module.exports = getStack(new Error());
@@ -651,7 +648,7 @@ describe('resolver', () => {
 			require: resolver
 		});
 
-		vm.run("require('mocha')", __filename);
+		vm.run("require('acorn')", __filename);
 	});
 });
 

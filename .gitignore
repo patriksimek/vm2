@@ -1,6 +1,4 @@
 /node_modules
 .DS_Store
-.svn
-/node-*
-/test.js
 .vscode
+/test.js

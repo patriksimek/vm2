@@ -134,10 +134,14 @@ export function makeResolverFromLegacyOptions(options: VMRequire, override?: {[k
  */
 export interface VMOptions {
   /**
-   * `javascript` (default) or `coffeescript` or custom compiler function (which receives the code, and it's file path).
-   *  The library expects you to have coffee-script pre-installed if the compiler is set to `coffeescript`.
+   * `javascript` (default), `typescript`, `coffeescript` or custom compiler function (which receives the code, and it's file path).
+   *  The library expects you to have compiler pre-installed if the value is set to `typescript` or `coffeescript`.
    */
-  compiler?: "javascript" | "coffeescript" | CompilerFunction;
+  compiler?: "javascript" | "typescript" | "coffeescript" | CompilerFunction;
+  /**
+   * Compiler options.
+   */
+  compilerOptions?: Record<string, any>;
   /** VM's global object. */
   sandbox?: any;
   /**
@@ -285,19 +289,22 @@ export class VMScript {
   constructor(code: string, path: string, options?: {
     lineOffset?: number;
     columnOffset?: number;
-    compiler?: "javascript" | "coffeescript" | CompilerFunction;
+    compiler?: "javascript" | "typescript" | "coffeescript" | CompilerFunction;
+    compilerOptions?: Record<string, any>;
   });
   constructor(code: string, options?: {
     filename?: string,
     lineOffset?: number;
     columnOffset?: number;
-    compiler?: "javascript" | "coffeescript" | CompilerFunction;
+    compiler?: "javascript" | "typescript" | "coffeescript" | CompilerFunction;
+    compilerOptions?: Record<string, any>;
   });
   readonly code: string;
   readonly filename: string;
   readonly lineOffset: number;
   readonly columnOffset: number;
-  readonly compiler: "javascript" | "coffeescript" | CompilerFunction;
+  readonly compiler: "javascript" | "typescript" | "coffeescript" | CompilerFunction;
+  readonly compilerOptions: Record<string, any> | undefined;
   /**
    * Wraps the code
    * @deprecated

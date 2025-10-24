@@ -10,6 +10,13 @@ const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
 const {inspect} = require('util');
 
 global.isHost = true;
+global.it.cond = (name, cond, fn) => {
+	if (cond) {
+		it(name, fn);
+	} else {
+		it.skip(name, fn);
+	}
+};
 
 function makeHelpers() {
 	function isVMProxy(obj) {
@@ -90,10 +97,11 @@ describe('node', () => {
 	before(() => {
 		vm = new VM();
 	});
-	it('inspect', () => {
+
+	it.cond('inspect', NODE_VERSION >= 11, () => {
 		assert.throws(() => inspect(doubleProxy), /Expected/);
 		assert.doesNotThrow(() => inspect(vm.run('({})'), {showProxy: true, customInspect: true}));
-		if (NODE_VERSION !== 10 && false) {
+		if (false) {
 			// This failes on node 10 since they do not unwrap proxys.
 			// And the hack to fix this is only in the inner proxy.
 			// We could add another hack, but that one would require
@@ -105,6 +113,7 @@ describe('node', () => {
 			assert.strictEqual(inspect(vm.run('[1, 2, 3]')), inspect([1, 2, 3]), true);
 		}
 	});
+
 	after(() => {
 		vm = null;
 	});
@@ -463,39 +472,35 @@ describe('VM', () => {
 		assert.equal(vm.run('global.setImmediate'), void 0);
 	});
 
-	if (NODE_VERSION >= 10) {
-		it('eval/wasm', () => {
-			assert.equal(vm.run('eval("1")'), 1);
+	it.cond('eval/wasm', NODE_VERSION >= 10, () => {
+		assert.equal(vm.run('eval("1")'), 1);
 
-			const vm2 = new VM({eval: false});
-			assert.throws(() => vm2.run('eval("1")'), /Code generation from strings disallowed for this context/);
-		});
-	}
+		const vm2 = new VM({eval: false});
+		assert.throws(() => vm2.run('eval("1")'), /Code generation from strings disallowed for this context/);
+	});
 
-	if (NODE_VERSION > 7) {
-		// Node until 7 had no async, see https://node.green/
-		it('async', () => {
-			const vm2 = new VM({fixAsync: true});
-			assert.throws(() => vm2.run('(async function(){})'), /Async not available/, '#1');
-			assert.strictEqual(vm2.run('Object.getPrototypeOf((function*(){}).constructor)'), vm2.run('Function'), '#2');
-			assert.throws(() => vm2.run('new Function("(as"+"ync function(){})")'), /Async not available/, '#3');
-			assert.throws(() => vm2.run('new (function*(){}).constructor("(as"+"ync function(){})")'), /Async not available/, '#4');
-			assert.throws(() => vm2.run('Promise.resolve().then(function(){})'), /Async not available/, '#5');
-			if (Promise.prototype.finally) assert.throws(() => vm2.run('Promise.resolve().finally(function(){})'), /Async not available/, '#6');
-			if (Promise.prototype.catch) assert.throws(() => vm2.run('Promise.resolve().catch(function(){})'), /Async not available/, '#7');
-			assert.throws(() => vm2.run('eval("(as"+"ync function(){})")'), /Async not available/, '#8');
-			assert.throws(() => vm2.run('Function')('(async function(){})'), /Async not available/, '#9');
-			assert.doesNotThrow(() => vm2.run(`
-				let a = {import: 1}
-				let b = {import : {"import": 2}};
-				let c = { import : 1};
-				let d = a.import;
-				let e = a. import;
-				let f = a.import-1;
-				let g = a.import.import;
-			`));
-		});
-	}
+	// Node until 7 had no async, see https://node.green/
+	it.cond('async', NODE_VERSION >= 8, () => {
+		const vm2 = new VM({fixAsync: true});
+		assert.throws(() => vm2.run('(async function(){})'), /Async not available/, '#1');
+		assert.strictEqual(vm2.run('Object.getPrototypeOf((function*(){}).constructor)'), vm2.run('Function'), '#2');
+		assert.throws(() => vm2.run('new Function("(as"+"ync function(){})")'), /Async not available/, '#3');
+		assert.throws(() => vm2.run('new (function*(){}).constructor("(as"+"ync function(){})")'), /Async not available/, '#4');
+		assert.throws(() => vm2.run('Promise.resolve().then(function(){})'), /Async not available/, '#5');
+		if (Promise.prototype.finally) assert.throws(() => vm2.run('Promise.resolve().finally(function(){})'), /Async not available/, '#6');
+		if (Promise.prototype.catch) assert.throws(() => vm2.run('Promise.resolve().catch(function(){})'), /Async not available/, '#7');
+		assert.throws(() => vm2.run('eval("(as"+"ync function(){})")'), /Async not available/, '#8');
+		assert.throws(() => vm2.run('Function')('(async function(){})'), /Async not available/, '#9');
+		assert.doesNotThrow(() => vm2.run(`
+			let a = {import: 1}
+			let b = {import : {"import": 2}};
+			let c = { import : 1};
+			let d = a.import;
+			let e = a. import;
+			let f = a.import-1;
+			let g = a.import.import;
+		`));
+	});
 
 	it('proxy trap errors', () => {
 		const vm2 = new VM();
@@ -621,25 +626,47 @@ describe('VM', () => {
 			if (o && o.constructor !== Function) throw new Error('Shouldnt be there.');
 		`), '#3');
 
-		assert.throws(() => vm2.run(`
-			let method = () => {};
-			let proxy = new Proxy(method, {
-				apply: (target, context, args) => {
-					if (target.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
-					if (args.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
-				}
-			});
-			proxy
-		`)('asdf'), /Proxy is not a constructor/, '#4');
+		if (NODE_VERSION > 8) {
+			assert.throws(() => vm2.run(`
+				let method = () => {};
+				let proxy = new Proxy(method, {
+					apply: (target, context, args) => {
+						if (target.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
+						if (args.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
+					}
+				});
+				proxy
+			`)('asdf'), /Proxy is not a constructor/, '#4');
 
-		assert.throws(() => vm2.run(`
-			let proxy2 = new Proxy(function() {}, {
-				apply: (target, context, args) => {
-					if (args.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
-				}
-			});
-			proxy2
-		`)('asdf'), /Proxy is not a constructor/, '#5');
+			assert.throws(() => vm2.run(`
+				let proxy2 = new Proxy(function() {}, {
+					apply: (target, context, args) => {
+						if (args.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
+					}
+				});
+				proxy2
+			`)('asdf'), /Proxy is not a constructor/, '#5');
+		} else {
+			assert.doesNotThrow(() => vm2.run(`
+				let method = () => {};
+				let proxy = new Proxy(method, {
+					apply: (target, context, args) => {
+						if (target.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
+						if (args.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
+					}
+				});
+				proxy
+			`)('asdf'), '#4');
+
+			assert.doesNotThrow(() => vm2.run(`
+				let proxy2 = new Proxy(function() {}, {
+					apply: (target, context, args) => {
+						if (args.constructor.constructor !== Function) throw new Error('Shouldnt be there.');
+					}
+				});
+				proxy2
+			`)('asdf'), '#5');
+		}
 
 		assert.strictEqual(vm2.run(`
 			global.DEBUG = true;
@@ -659,21 +686,39 @@ describe('VM', () => {
 			if (!(Reflect.ownKeys(boom) instanceof Array)) throw new Error('Shouldnt be there.');
 		`));
 
-		assert.throws(() => vm2.run(`
-			const proxiedErr = new Proxy({}, {
-				getPrototypeOf(target) {
-					(function stack() {
-						new Error().stack;
-						stack();
-					})();
+		if (NODE_VERSION > 8) {
+			assert.throws(() => vm2.run(`
+				const proxiedErr = new Proxy({}, {
+					getPrototypeOf(target) {
+						(function stack() {
+							new Error().stack;
+							stack();
+						})();
+					}
+				});
+				try {
+					throw proxiedErr;
+				} catch ({constructor: c}) {
+					c.constructor('return process')();
 				}
-			});
-			try {
-				throw proxiedErr;
-			} catch ({constructor: c}) {
-				c.constructor('return process')();
-			}
-		`), /Proxy is not a constructor/, '#9');
+			`), /Proxy is not a constructor/, '#9');
+		} else {
+			assert.throws(() => vm2.run(`
+				const proxiedErr = new Proxy({}, {
+					getPrototypeOf(target) {
+						(function stack() {
+							new Error().stack;
+							stack();
+						})();
+					}
+				});
+				try {
+					throw proxiedErr;
+				} catch ({constructor: c}) {
+					c.constructor('return process')();
+				}
+			`), /Maximum call stack size exceeded/, '#9');
+		}
 	});
 
 	it('internal state attack', () => {
@@ -728,15 +773,33 @@ describe('VM', () => {
 			}
 		});
 
-		assert.throws(() => vm2.run(`
-			func(() => {
-				throw new Proxy({}, {
-					getPrototypeOf: () => {
-						throw x => x.constructor.constructor("return process;")();
-					}
-				})
-			});
-		`), /Proxy is not a constructor/);
+		if (NODE_VERSION > 8) {
+			assert.throws(() => vm2.run(`
+				func(() => {
+					throw new Proxy({}, {
+						getPrototypeOf: () => {
+							throw x => x.constructor.constructor("return process;")();
+						}
+					})
+				});
+			`), /Proxy is not a constructor/);
+		} else {
+			try {
+				vm2.run(`
+					func(() => {
+						throw new Proxy({}, {
+							getPrototypeOf: () => {
+								throw x => x.constructor.constructor("return process;")();
+							}
+						})
+					});
+				`);
+			} catch (ex) {
+				assert.throws(()=>{
+					ex(()=>{});
+				}, /process is not defined/);
+			}
+		}
 	});
 
 	it('__defineGetter__ / __defineSetter__ attack', () => {
@@ -808,24 +871,70 @@ describe('VM', () => {
 					return () => x => x.constructor("return process")();
 				}
 			})))(()=>{}).mainModule.require("child_process").execSync("id").toString()
-		`), /Proxy is not a constructor/, '#2');
+		`), NODE_VERSION > 8 ? /Proxy is not a constructor/ : /process is not defined/, '#2');
 
 		vm2 = new VM();
 
 		assert.throws(() => vm2.run(`
-			Object.defineProperty(Buffer.from(""), "", {
-				value: new Proxy({}, {
-					getPrototypeOf(target) {
-						if(this.t) {
-							throw Buffer.from;
-						}
+			var process;
+			try {
+				Object.defineProperty(Buffer.from(""), "y", {
+					writable: true,
+					value: new Proxy({}, {
+						getPrototypeOf(target) {
+							delete this.getPrototypeOf;
 
-						this.t=true;
-						return Object.getPrototypeOf(target);
-					}
-				})
-			});
-		`), /Proxy is not a constructor/, '#4');
+							Object.defineProperty(Object.prototype, "get", {
+								get() {
+									delete Object.prototype.get;
+									Function.prototype.__proto__ = null;
+									throw f=>f.constructor("return process")();
+								}
+							});
+
+							return Object.getPrototypeOf(target);
+						}
+					})
+				});
+			} catch(e) {
+				process = e(() => {});
+			}
+			process.mainModule.require("child_process").execSync("whoami").toString()
+		`), NODE_VERSION > 8 ? /e is not a function/ : /Cannot read propert.*mainModule/, '#3');
+
+		vm2 = new VM();
+
+		if (NODE_VERSION > 8) {
+			assert.throws(() => vm2.run(`
+				Object.defineProperty(Buffer.from(""), "", {
+					value: new Proxy({}, {
+						getPrototypeOf(target) {
+							if(this.t) {
+								throw Buffer.from;
+							}
+	
+							this.t=true;
+							return Object.getPrototypeOf(target);
+						}
+					})
+				});
+			`), /Proxy is not a constructor/, '#4');
+		} else {
+			assert.doesNotThrow(() => vm2.run(`
+				Object.defineProperty(Buffer.from(""), "", {
+					value: new Proxy({}, {
+						getPrototypeOf(target) {
+							if(this.t) {
+								throw Buffer.from;
+							}
+	
+							this.t=true;
+							return Object.getPrototypeOf(target);
+						}
+					})
+				});
+			`), '#4');
+		}
 
 		vm2 = new VM();
 
@@ -952,7 +1061,7 @@ describe('VM', () => {
 					}
 				}
 			}))}).mainModule.require("child_process").execSync("id").toString()
-		`), /Proxy is not a constructor/, '#1');
+		`), NODE_VERSION > 8 ? /Proxy is not a constructor/ : /process is not defined/, '#1');
 	});
 
 	it('throw while accessing propertyDescriptor properties', () => {
@@ -1002,7 +1111,7 @@ describe('VM', () => {
 		`), /process is not defined/, '#2');
 	});
 
-	it('Proxy::getOwnPropertyDescriptor attack', () => {
+	it.cond('Proxy::getOwnPropertyDescriptor attack', NODE_VERSION >= 12, () => {
 		// https://github.com/patriksimek/vm2/issues/178#issuecomment-450978210
 
 		const vm2 = new VM();
@@ -1018,18 +1127,15 @@ describe('VM', () => {
 		`), /Proxy is not a constructor/);
 	});
 
-	if (NODE_VERSION >= 10) {
-		it('Dynamic import attack', () => {
+	it.cond('Dynamic import attack', NODE_VERSION >= 10, () => {
+		const vm2 = new VM();
 
-			const vm2 = new VM();
+		assert.throws(()=>vm2.run(`
+			const process = import('oops!').constructor.constructor('return process')();
+		`), /VMError: Dynamic Import not supported/);
+	});
 
-			assert.throws(()=>vm2.run(`
-				const process = import('oops!').constructor.constructor('return process')();
-			`), /VMError: Dynamic Import not supported/);
-		});
-	}
-
-	it('Error.prepareStackTrace attack', () => {
+	it.cond('Error.prepareStackTrace attack', NODE_VERSION >= 12, () => {
 		const vm2 = new VM();
 		const sst = vm2.run('Error.prepareStackTrace = (e,sst)=>sst;const sst = new Error().stack;Error.prepareStackTrace = undefined;sst');
 		assert.strictEqual(vm2.run('sst=>Object.getPrototypeOf(sst)')(sst), vm2.run('Array.prototype'));

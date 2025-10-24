@@ -19,6 +19,8 @@ vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in mo
 -   It uses [Proxies](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Proxy) to prevent escaping from the sandbox.
 -   It overrides the built-in require to control access to modules.
 
+For an in-depth look at vm2’s internals, see the [CONTRIBUTING.md](./CONTRIBUTING.md) file.
+
 ## What is the difference between Node's vm and vm2?
 
 Try it yourself:

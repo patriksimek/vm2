@@ -1267,6 +1267,33 @@ describe('VM', () => {
 		`), /constructor is not a function/);
 	});
 
+	it('Promise.prototype.then/catch callback sanitization bypass', async () => {
+		const vm2 = new VM();
+		// This attack uses an Error with a Symbol name to trigger a host error
+		// during stack trace computation, then tries to access host constructors
+		// through the unsanitized error in the Promise catch callback.
+		// If the error is not sanitized, e.constructor.constructor would be the
+		// host's Function which can access 'process'. If sanitized, it's the
+		// sandbox's Function where 'process' is not defined.
+		await assert.rejects(() => vm2.run(`
+			new Promise((resolve, reject) => {
+				const error = new Error();
+				error.name = Symbol();
+				const f = async () => error.stack;
+				f().catch(e => {
+					try {
+						const Error = e.constructor;
+						const Function = Error.constructor;
+						const p = Function('return process')();
+						resolve(p);
+					} catch (err) {
+						reject(err);
+					}
+				});
+			});
+		`), /process is not defined/);
+	});
+
 	after(() => {
 		vm = null;
 	});

@@ -443,6 +443,18 @@ describe('VM', () => {
 			assert.equal(err.message, 'Operation not allowed on contextified object.');
 			return true;
 		});
+		assert.throws(() => vm.run('const obj = {}; obj.__proto__ = {};'), err => {
+			assert.ok(err instanceof Error);
+			assert.equal(err.name, 'VMError');
+			assert.equal(err.message, 'Operation not allowed on contextified object.');
+			return true;
+		});
+		assert.throws(() => vm.run('Reflect.setPrototypeOf({}, {})'), err => {
+			assert.ok(err instanceof Error);
+			assert.equal(err.name, 'VMError');
+			assert.equal(err.message, 'Operation not allowed on contextified object.');
+			return true;
+		});
 
 		if (NODE_VERSION > 6) {
 			// async/await was not there in Node 6
@@ -955,7 +967,7 @@ describe('VM', () => {
 				process = e(() => {});
 			}
 			process.mainModule.require("child_process").execSync("whoami").toString()
-		`), /e is not a function/, '#5');
+		`), /Operation not allowed on contextified object/, '#5');
 
 
 		/* TODO internal have changed too much for this to still work

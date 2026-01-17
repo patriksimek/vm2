@@ -1294,6 +1294,32 @@ describe('VM', () => {
 		`), /process is not defined/);
 	});
 
+	it('Function.prototype.call attack via Promise', async () => {
+		const vm2 = new VM();
+		// This attack attempts to override Function.prototype.call to capture
+		// references to functions being called. If globalPromise.prototype.then
+		// or .catch used .call() directly, an attacker could intercept and
+		// access host objects through the captured function reference.
+		// With the fix, Reflect.apply is used instead of .call(), so the
+		// attacker's override is never triggered and nothing is captured.
+		const result = await vm2.run(`
+			new Promise((resolve) => {
+				let captured = [];
+				const origCall = Function.prototype.call;
+				Function.prototype.call = function(...args) {
+					captured.push(this.name || 'anonymous');
+					return origCall.apply(this, args);
+				};
+				Promise.resolve().then(() => {
+					resolve(captured);
+				});
+			});
+		`);
+		// With the fix, Promise.prototype.then should use Reflect.apply,
+		// so Function.prototype.call should not be intercepted
+		assert.strictEqual(result.length, 0, 'Function.prototype.call should not be intercepted by Promise.then');
+	});
+
 	after(() => {
 		vm = null;
 	});

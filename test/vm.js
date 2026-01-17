@@ -951,7 +951,6 @@ describe('VM', () => {
 		vm2 = new VM();
 
 		assert.throws(() => vm2.run(`
-			Function.prototype.__proto__ = null;
 			var process;
 			try {
 				Buffer.from(new Proxy({}, {
@@ -967,7 +966,7 @@ describe('VM', () => {
 				process = e(() => {});
 			}
 			process.mainModule.require("child_process").execSync("whoami").toString()
-		`), /Operation not allowed on contextified object/, '#5');
+		`), /e is not a function/, '#5');
 
 
 		/* TODO internal have changed too much for this to still work

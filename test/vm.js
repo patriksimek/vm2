@@ -1294,6 +1294,46 @@ describe('VM', () => {
 		`), /process is not defined/);
 	});
 
+	it('Symbol.for dangerous Node.js symbols isolation', () => {
+		// Certain Node.js cross-realm symbols can be exploited for sandbox escapes:
+		// - 'nodejs.util.inspect.custom': Called by util.inspect with host's inspect function
+		// - 'nodejs.rejection': Called by EventEmitter on promise rejection
+		//
+		// Fix: These symbols return sandbox-local versions instead of cross-realm symbols,
+		// so Node.js internals won't recognize sandbox-defined symbol properties.
+		const vm2 = new VM();
+
+		// These dangerous symbols should be isolated (sandbox gets different symbol than host)
+		const dangerousSymbols = [
+			'nodejs.util.inspect.custom',
+			'nodejs.rejection'
+		];
+
+		for (const key of dangerousSymbols) {
+			const hostSymbol = Symbol.for(key);
+			const sandboxSymbol = vm2.run(`Symbol.for('${key}')`);
+
+			assert.notStrictEqual(
+				sandboxSymbol,
+				hostSymbol,
+				`Sandbox Symbol.for("${key}") should return a different symbol than host`
+			);
+		}
+
+		// Other symbols should still work cross-realm (backwards compatibility)
+		const safeSymbols = ['foo', 'bar', 'some.random.key'];
+		for (const key of safeSymbols) {
+			const hostSymbol = Symbol.for(key);
+			const sandboxSymbol = vm2.run(`Symbol.for('${key}')`);
+
+			assert.strictEqual(
+				sandboxSymbol,
+				hostSymbol,
+				`Symbol.for("${key}") should still work cross-realm`
+			);
+		}
+	});
+
 	it('Function.prototype.call attack via Promise', async () => {
 		const vm2 = new VM();
 		// This attack attempts to override Function.prototype.call to capture

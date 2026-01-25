@@ -1403,6 +1403,50 @@ describe('VM', () => {
 		);
 	});
 
+	it('Symbol extraction via spread operator on host objects', () => {
+		// The spread operator {...obj} calls [[OwnPropertyKeys]] internally,
+		// which invokes the proxy's ownKeys trap directly, bypassing any
+		// Reflect.ownKeys override in the sandbox.
+		const vm2 = new VM();
+		const hostInspectSymbol = Symbol.for('nodejs.util.inspect.custom');
+
+		// Verify spread operator doesn't copy dangerous symbol-keyed properties
+		const spread = vm2.run(`
+			const spread = {...Buffer.prototype};
+			spread;
+		`);
+
+		assert.strictEqual(
+			hostInspectSymbol in spread,
+			false,
+			'Spread operator should not copy dangerous symbol-keyed properties from host objects'
+		);
+
+		// Verify the full attack doesn't work
+		const vm3 = new VM();
+		const attackResult = vm3.run(`
+			const {...inspectDesc} = Buffer.prototype;
+			for (const k in inspectDesc) delete inspectDesc[k];
+
+			// If the dangerous symbol leaked, inspectDesc would have a symbol key
+			// with a function value that Object.defineProperties would interpret
+			let hasSymbolKey = false;
+			const symbols = Object.getOwnPropertySymbols(inspectDesc);
+			for (let i = 0; i < symbols.length; i++) {
+				if (symbols[i].description === 'nodejs.util.inspect.custom') {
+					hasSymbolKey = true;
+				}
+			}
+			hasSymbolKey;
+		`);
+
+		assert.strictEqual(
+			attackResult,
+			false,
+			'Dangerous symbol should not be extractable via spread operator'
+		);
+	});
+
 	it('Function.prototype.call attack via Promise', async () => {
 		const vm2 = new VM();
 		// This attack attempts to override Function.prototype.call to capture

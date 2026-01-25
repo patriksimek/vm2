@@ -1294,6 +1294,159 @@ describe('VM', () => {
 		`), /process is not defined/);
 	});
 
+	it('Symbol.for dangerous Node.js symbols isolation', () => {
+		// Certain Node.js cross-realm symbols can be exploited for sandbox escapes:
+		// - 'nodejs.util.inspect.custom': Called by util.inspect with host's inspect function
+		// - 'nodejs.rejection': Called by EventEmitter on promise rejection
+		//
+		// Fix: These symbols return sandbox-local versions instead of cross-realm symbols,
+		// so Node.js internals won't recognize sandbox-defined symbol properties.
+		const vm2 = new VM();
+
+		// These dangerous symbols should be isolated (sandbox gets different symbol than host)
+		const dangerousSymbols = [
+			'nodejs.util.inspect.custom',
+			'nodejs.rejection'
+		];
+
+		for (const key of dangerousSymbols) {
+			const hostSymbol = Symbol.for(key);
+			const sandboxSymbol = vm2.run(`Symbol.for('${key}')`);
+
+			assert.notStrictEqual(
+				sandboxSymbol,
+				hostSymbol,
+				`Sandbox Symbol.for("${key}") should return a different symbol than host`
+			);
+		}
+
+		// Other symbols should still work cross-realm (backwards compatibility)
+		const safeSymbols = ['foo', 'bar', 'some.random.key'];
+		for (const key of safeSymbols) {
+			const hostSymbol = Symbol.for(key);
+			const sandboxSymbol = vm2.run(`Symbol.for('${key}')`);
+
+			assert.strictEqual(
+				sandboxSymbol,
+				hostSymbol,
+				`Symbol.for("${key}") should still work cross-realm`
+			);
+		}
+	});
+
+	it('Symbol extraction via Object.getOwnPropertySymbols on host objects', () => {
+		// The cross-realm symbol can be obtained from host objects like Buffer.prototype
+		// via Object.getOwnPropertySymbols, bypassing the Symbol.for override entirely.
+		const vm2 = new VM();
+
+		// Attempt to extract the real cross-realm symbol from Buffer.prototype
+		const extractedSymbol = vm2.run(`
+			const symbols = Object.getOwnPropertySymbols(Buffer.prototype);
+			symbols.find(s => s.description === 'nodejs.util.inspect.custom');
+		`);
+
+		assert.strictEqual(
+			extractedSymbol,
+			undefined,
+			'Dangerous cross-realm symbols should be filtered from Object.getOwnPropertySymbols results'
+		);
+
+		// Also verify Reflect.ownKeys doesn't leak the real symbol
+		const extractedViaReflect = vm2.run(`
+			const keys = Reflect.ownKeys(Buffer.prototype);
+			keys.find(k => typeof k === 'symbol' && k.description === 'nodejs.util.inspect.custom');
+		`);
+
+		assert.strictEqual(
+			extractedViaReflect,
+			undefined,
+			'Dangerous cross-realm symbols should be filtered from Reflect.ownKeys results'
+		);
+
+		// Verify Array.prototype monkey-patching can't bypass the filter
+		const vm3 = new VM();
+		const extractedWithSplicePatch = vm3.run(`
+			Array.prototype.splice = function() { /* no-op */ };
+			const symbols2 = Object.getOwnPropertySymbols(Buffer.prototype);
+			symbols2.find(s => typeof s === 'symbol' && s.description === 'nodejs.util.inspect.custom');
+		`);
+
+		assert.strictEqual(
+			extractedWithSplicePatch,
+			undefined,
+			'Array.prototype.splice override should not bypass symbol filtering'
+		);
+
+		// Verify Object.getOwnPropertyDescriptors filters dangerous symbols from result
+		const vm4 = new VM();
+		const descs = vm4.run(`Object.getOwnPropertyDescriptors(Buffer.prototype)`);
+		const hostInspectSymbol = Symbol.for('nodejs.util.inspect.custom');
+
+		assert.strictEqual(
+			hostInspectSymbol in descs,
+			false,
+			'Object.getOwnPropertyDescriptors should not include dangerous symbol keys in result'
+		);
+
+		// Verify Object.assign doesn't copy dangerous symbol-keyed properties
+		const vm5 = new VM();
+		const assigned = vm5.run(`
+			const target = {};
+			Object.assign(target, Buffer.prototype);
+			target;
+		`);
+
+		assert.strictEqual(
+			hostInspectSymbol in assigned,
+			false,
+			'Object.assign should not copy dangerous symbol-keyed properties'
+		);
+	});
+
+	it('Symbol extraction via spread operator on host objects', () => {
+		// The spread operator {...obj} calls [[OwnPropertyKeys]] internally,
+		// which invokes the proxy's ownKeys trap directly, bypassing any
+		// Reflect.ownKeys override in the sandbox.
+		const vm2 = new VM();
+		const hostInspectSymbol = Symbol.for('nodejs.util.inspect.custom');
+
+		// Verify spread operator doesn't copy dangerous symbol-keyed properties
+		const spread = vm2.run(`
+			const spread = {...Buffer.prototype};
+			spread;
+		`);
+
+		assert.strictEqual(
+			hostInspectSymbol in spread,
+			false,
+			'Spread operator should not copy dangerous symbol-keyed properties from host objects'
+		);
+
+		// Verify the full attack doesn't work
+		const vm3 = new VM();
+		const attackResult = vm3.run(`
+			const {...inspectDesc} = Buffer.prototype;
+			for (const k in inspectDesc) delete inspectDesc[k];
+
+			// If the dangerous symbol leaked, inspectDesc would have a symbol key
+			// with a function value that Object.defineProperties would interpret
+			let hasSymbolKey = false;
+			const symbols = Object.getOwnPropertySymbols(inspectDesc);
+			for (let i = 0; i < symbols.length; i++) {
+				if (symbols[i].description === 'nodejs.util.inspect.custom') {
+					hasSymbolKey = true;
+				}
+			}
+			hasSymbolKey;
+		`);
+
+		assert.strictEqual(
+			attackResult,
+			false,
+			'Dangerous symbol should not be extractable via spread operator'
+		);
+	});
+
 	it('Function.prototype.call attack via Promise', async () => {
 		const vm2 = new VM();
 		// This attack attempts to override Function.prototype.call to capture

@@ -1473,6 +1473,333 @@ describe('VM', () => {
 		assert.strictEqual(result.length, 0, 'Function.prototype.call should not be intercepted by Promise.then');
 	});
 
+	it('Object.defineProperty override attack via Promise species', (done) => {
+		const vm2 = new VM();
+		// This attack overrides Object.defineProperty to prevent resetPromiseSpecies
+		// from resetting the species, then uses a custom species to escape.
+		// By setting e.name to a Symbol and accessing e.stack, a host-realm TypeError
+		// is thrown (Symbol cannot be converted to string). This error is passed to
+		// the FakePromise reject handler, where err.constructor.constructor gives
+		// access to the host Function constructor.
+		// The fix uses localReflectDefineProperty instead of Object.defineProperty.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+
+		vm2.run(`
+			Object.defineProperty = () => {};
+			async function fn() {
+				const e = new Error();
+				e.name = Symbol();
+				return e.stack;
+			}
+			const p = fn();
+			p.constructor = {
+				[Symbol.species]: class FakePromise {
+					constructor(executor) {
+						executor(
+							(x) => x,
+							(err) => {
+								try {
+									const hostFunc = err.constructor.constructor;
+									hostFunc('escapeMarker()')();
+								} catch (e) {}
+							}
+						);
+					}
+				}
+			};
+			p.then();
+		`);
+
+		setTimeout(() => {
+			delete global.escapeMarker;
+			assert.strictEqual(escaped, false, 'Sandbox escape via Object.defineProperty override should be prevented');
+			done();
+		}, 100);
+	});
+
+	it('Frozen constructor attack via Promise species', (done) => {
+		const vm2 = new VM();
+		// This attack uses Object.freeze on the constructor to prevent resetPromiseSpecies
+		// from resetting the species via defineProperty. Combined with the Symbol name trick
+		// to trigger a host-realm error, this would allow escape if not properly handled.
+		// The fix handles this by replacing p.constructor entirely when defineProperty fails.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+
+		vm2.run(`
+			async function fn() {
+				const e = new Error();
+				e.name = Symbol();
+				return e.stack;
+			}
+			const p = fn();
+
+			const fakeConstructor = Object.freeze({
+				[Symbol.species]: class FakePromise {
+					constructor(executor) {
+						executor(
+							(x) => x,
+							(err) => {
+								try { err.constructor.constructor('escapeMarker()')(); } catch(e) {}
+							}
+						);
+					}
+				}
+			});
+			p.constructor = fakeConstructor;
+			p.then();
+		`);
+
+		setTimeout(() => {
+			delete global.escapeMarker;
+			assert.strictEqual(escaped, false, 'Sandbox escape via frozen constructor should be prevented');
+			done();
+		}, 100);
+	});
+
+	it('Constructor getter TOCTOU attack via Promise (non-configurable)', () => {
+		const vm2 = new VM();
+		// This attack defines a non-configurable getter on the promise's 'constructor'
+		// property. The fix detects the accessor and throws before .then() can proceed.
+		assert.throws(() => {
+			vm2.run(`
+				async function fn() {
+					const e = new Error();
+					e.name = Symbol();
+					return e.stack;
+				}
+				let first = true;
+				p = fn();
+				Object.defineProperty(p, 'constructor', {get(){
+					if (first) {first = false; return Promise;}
+					return {[Symbol.species]: class FakePromise {
+							constructor(executor) {
+								executor(
+									(x) => x,
+									(err) => { return err.constructor.constructor('return process')().mainModule.require('child_process').execSync('touch pwned'); }
+								)
+							}
+						}
+					};
+				}});
+				p.then();
+			`);
+		}, /Unsafe Promise species cannot be reset/);
+	});
+
+	it('Constructor getter TOCTOU attack via Promise (configurable)', (done) => {
+		const vm2 = new VM();
+		// This attack defines a configurable getter on the promise's 'constructor'
+		// property. The fix replaces it unconditionally with a safe value.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+
+		vm2.run(`
+			async function fn() {
+				const e = new Error();
+				e.name = Symbol();
+				return e.stack;
+			}
+			let first = true;
+			p = fn();
+			Object.defineProperty(p, 'constructor', {configurable: true, get(){
+				if (first) {first = false; return Promise;}
+				return {[Symbol.species]: class FakePromise {
+						constructor(executor) {
+							executor(
+								(x) => x,
+								(err) => {
+									try { err.constructor.constructor('escapeMarker()')(); } catch(e) {}
+								}
+							)
+						}
+					}
+				};
+			}});
+			p.then();
+		`);
+
+		setTimeout(() => {
+			delete global.escapeMarker;
+			assert.strictEqual(escaped, false, 'Sandbox escape via constructor getter TOCTOU should be prevented');
+			done();
+		}, 100);
+	});
+
+	it('Constructor getter TOCTOU attack via Promise prototype', (done) => {
+		const vm2 = new VM();
+		// This attack tries to define a getter on globalPromise.prototype.constructor
+		// (accessible via Object.getPrototypeOf(Promise.prototype)).
+		// Prevented by freezing globalPromise.prototype so the defineProperty fails.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+
+		vm2.run(`
+			async function fn() {
+				const e = new Error();
+				e.name = Symbol();
+				return e.stack;
+			}
+			const realProto = Object.getPrototypeOf(Promise.prototype);
+			let first = true;
+			try {
+				Object.defineProperty(realProto, 'constructor', {configurable: true, get(){
+					if (first) {first = false; return Promise;}
+					return {[Symbol.species]: class FakePromise {
+							constructor(executor) {
+								executor(
+									(x) => x,
+									(err) => {
+										try { err.constructor.constructor('escapeMarker()')(); } catch(e) {}
+									}
+								)
+							}
+						}
+					};
+				}});
+			} catch(e) {}
+			const p = fn();
+			p.then();
+		`);
+
+		setTimeout(() => {
+			delete global.escapeMarker;
+			assert.strictEqual(escaped, false, 'Sandbox escape via prototype constructor getter TOCTOU should be prevented');
+			done();
+		}, 100);
+	});
+
+	it('Symbol.hasInstance override to bypass resetPromiseSpecies', (done) => {
+		const vm2 = new VM();
+		// This attack tries to override Symbol.hasInstance on globalPromise to
+		// make the instanceof check fail, skipping resetPromiseSpecies entirely.
+		// Prevented by freezing globalPromise.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+
+		vm2.run(`
+			async function fn() {
+				const e = new Error();
+				e.name = Symbol();
+				return e.stack;
+			}
+			try {
+				const GP = Object.getPrototypeOf(Promise);
+				Object.defineProperty(GP, Symbol.hasInstance, {value: () => false, configurable: true});
+			} catch(e) {}
+			const p = fn();
+			try {
+				p.constructor = {
+					[Symbol.species]: class FakePromise {
+						constructor(executor) {
+							executor(
+								(x) => x,
+								(err) => {
+									try { err.constructor.constructor('escapeMarker()')(); } catch(e) {}
+								}
+							)
+						}
+					}
+				};
+			} catch(e) {}
+			p.then();
+		`);
+
+		setTimeout(() => {
+			delete global.escapeMarker;
+			assert.strictEqual(escaped, false, 'Sandbox escape via Symbol.hasInstance override should be prevented');
+			done();
+		}, 100);
+	});
+
+	it('Symbol.species getter TOCTOU attack via Promise', (done) => {
+		const vm2 = new VM();
+		// This attack uses a Symbol.species getter that returns Promise on
+		// the first read (to pass the safety check) but returns FakePromise
+		// on subsequent reads (when V8 internally uses it). This is a TOCTOU
+		// (Time-Of-Check-Time-Of-Use) bypass.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+
+		vm2.run(`
+			async function fn() {
+				const e = new Error();
+				e.name = Symbol();
+				return e.stack;
+			}
+			let first = true;
+			const p = fn();
+			p.constructor = {
+				get [Symbol.species](){
+					if (first) {first = false; return Promise;}
+					return class FakePromise {
+						constructor(executor) {
+							executor(
+								(x) => x,
+								(err) => {
+									try { err.constructor.constructor('escapeMarker()')(); } catch(e) {}
+								}
+							)
+						}
+					}
+				}
+			};
+			p.then();
+		`);
+
+		setTimeout(() => {
+			delete global.escapeMarker;
+			assert.strictEqual(escaped, false, 'Sandbox escape via Symbol.species getter TOCTOU should be prevented');
+			done();
+		}, 100);
+	});
+
+	// Promise.try is available in Node.js 24+
+	// This is the ONLY Promise static method that is actually vulnerable because:
+	// - Promise.try catches errors thrown by the callback INSIDE V8's Promise executor
+	// - The error is passed directly to FakePromise's reject handler without bridge sanitization
+	// - Other methods (all/race/any/allSettled) use .then() internally which IS sanitized
+	// - Other methods (reject/withResolvers) receive errors from user catch blocks which ARE sanitized
+	it.cond('Promise.try static method stealing attack', NODE_VERSION >= 24, (done) => {
+		const vm2 = new VM({
+			sandbox: {
+				markEscape: () => { escaped = true; }
+			}
+		});
+		// This attack steals Promise.try (a static method that uses `this` as constructor)
+		// and assigns it to a FakePromise. When FakePromise.t() is called, Promise.try
+		// uses FakePromise as the constructor, passing unsanitized errors to FakePromise's
+		// executor reject handler.
+		let escaped = false;
+
+		vm2.run(`
+			function FakePromise(executor) {
+				executor(
+					(x) => x,
+					(err) => {
+						// Try to access process via the error's constructor chain
+						try {
+							const proc = err.constructor.constructor('return process')();
+							if (proc && proc.version) markEscape();
+						} catch(e) {}
+					}
+				)
+			}
+			FakePromise.t = Promise.try;
+			FakePromise.t(()=>{
+				const e = new Error();
+				e.name = Symbol();
+				return e.stack;
+			});
+		`);
+
+		setTimeout(() => {
+			assert.strictEqual(escaped, false, 'Sandbox escape via Promise.try static method stealing should be prevented');
+			done();
+		}, 100);
+	});
+
 	after(() => {
 		vm = null;
 	});

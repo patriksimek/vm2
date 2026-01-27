@@ -2,6 +2,43 @@
 
 vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules.
 
+## Important Security Disclaimer
+
+**Before using vm2, you should understand how it works and its limitations.**
+
+vm2 attempts to sandbox untrusted JavaScript code **within the same Node.js process** as your application. It does this through a complex network of [Proxies](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Proxy) that intercept and mediate every interaction between the sandbox and the host environment.
+
+### The Fundamental Challenge
+
+JavaScript is an extraordinarily dynamic language. Objects can be accessed through prototype chains, constructors can be reached via error objects, symbols provide protocol hooks, and async execution creates timing windows. The sheer number of ways to traverse from one object to another in JavaScript makes building an airtight in-process sandbox extremely difficult.
+
+**We are honest about this reality:** Despite our best efforts, researchers and security professionals continuously discover new ways to escape the vm2 sandbox. We actively patch these vulnerabilities as they are reported, but the cat-and-mouse nature of in-process sandboxing means that:
+
+1. **New bypasses will likely be discovered in the future.** Check our [security advisories](https://github.com/patriksimek/vm2/security/advisories) for known vulnerabilities.
+2. **You must keep vm2 updated** to benefit from the latest security fixes. Subscribe to security advisories and update promptly.
+3. **vm2 should not be your only line of defense.** Defense in depth is essential when running untrusted code.
+
+### More Robust Alternatives
+
+If you require stronger isolation guarantees, consider these alternatives that provide **true process or hardware-level isolation**:
+
+| Solution | Approach | Performance | Trade-offs |
+|----------|----------|-------------|------------|
+| **[isolated-vm](https://github.com/laverdet/isolated-vm)** | Separate V8 isolates (different V8 heap) | Fast | In maintenance mode; requires manual V8 updates |
+| **Separate process / Worker** | `child_process` or Worker threads with limited permissions | Medium | Higher IPC overhead; data must be serialized |
+| **Containers / VMs** | Docker, gVisor, Firecracker | Slow | Startup overhead; resource-heavy |
+| **Managed services** | Cloud-based code execution (e.g., AWS Lambda, Cloudflare Workers) | Variable | Network latency; external dependency |
+
+### When vm2 May Still Be Appropriate
+
+vm2 can be suitable when:
+- You need tight integration with host objects and fast synchronous communication
+- The untrusted code comes from a relatively trusted source (e.g., internal tools, plugin systems with vetted authors)
+- You combine vm2 with other security layers (network isolation, filesystem restrictions, resource limits)
+- You accept the risk and actively monitor for security updates
+
+**If you're running code from completely untrusted sources (e.g., arbitrary user submissions), we strongly recommend using a solution with stronger isolation guarantees.**
+
 ## Features
 
 -   Runs untrusted code securely in a single process with your code side by side
@@ -10,7 +47,7 @@ vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in mo
 -   It is possible to require modules (built-in and external) from the sandbox
 -   You can limit access to certain (or all) built-in modules
 -   You can securely call methods and exchange data and callbacks between sandboxes
--   Is immune to all known methods of attacks
+-   Actively maintained with patches for known escape methods (see [Security Disclaimer](#important-security-disclaimer))
 -   Transpiler support
 
 ## How does it work

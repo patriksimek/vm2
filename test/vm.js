@@ -1774,11 +1774,11 @@ describe('VM', () => {
 			try {
 				obj.slice(20, {showHidden: true, showProxy: true, depth: 10, stylize(a) {
 					// Try both objectWrapper (old vulnerability) and getObject (method that was left exposed)
-					if (this.seen?.[1]?.objectWrapper) {
+					if (this.seen && this.seen[1] && this.seen[1].objectWrapper) {
 						this.seen[1].objectWrapper().x = obj.slice;
 						escaped = true;
 					}
-					if (this.seen?.[1]?.getObject) {
+					if (this.seen && this.seen[1] && this.seen[1].getObject) {
 						this.seen[1].getObject().x = obj.slice;
 						escaped = true;
 					}

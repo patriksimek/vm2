@@ -1755,6 +1755,46 @@ describe('VM', () => {
 		}, 100);
 	});
 
+	it('Buffer.prototype.inspect handler exposure via showProxy attack', () => {
+		// This attack duck-types an object where subarray is Buffer.prototype.inspect,
+		// so that calling slice() actually calls inspect(). With showProxy:true in the
+		// inspect options, the proxy handler's internal state could be exposed via the
+		// seen array. Previously, handlers stored objectWrapper as an instance property
+		// and had a getObject() method, allowing access to raw host objects.
+		// The fix stores objects in a closure-scoped WeakMap with no public accessor.
+		const vm2 = new VM();
+		const attackResult = vm2.run(`
+			const obj = {
+				subarray: Buffer.prototype.inspect,
+				slice: Buffer.prototype.slice,
+				hexSlice:()=>'',
+				l:{__proto__: null}
+			};
+			let escaped = false;
+			try {
+				obj.slice(20, {showHidden: true, showProxy: true, depth: 10, stylize(a) {
+					// Try both objectWrapper (old vulnerability) and getObject (method that was left exposed)
+					if (this.seen?.[1]?.objectWrapper) {
+						this.seen[1].objectWrapper().x = obj.slice;
+						escaped = true;
+					}
+					if (this.seen?.[1]?.getObject) {
+						this.seen[1].getObject().x = obj.slice;
+						escaped = true;
+					}
+					return a;
+				}});
+				if (obj.l.x) {
+					escaped = true;
+				}
+			} catch (e) {
+				// Expected: "Unexpected access to key '...'" or similar
+			}
+			escaped;
+		`);
+		assert.strictEqual(attackResult, false, 'Handler internals should not be exposed via showProxy');
+	});
+
 	// Promise.try is available in Node.js 24+
 	// This is the ONLY Promise static method that is actually vulnerable because:
 	// - Promise.try catches errors thrown by the callback INSIDE V8's Promise executor

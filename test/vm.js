@@ -1800,6 +1800,88 @@ describe('VM', () => {
 		}, 100);
 	});
 
+	it('Promise.all static method stealing attack', (done) => {
+		const vm2 = new VM({
+			sandbox: {
+				markEscape: () => { escaped = true; }
+			}
+		});
+		// This attack steals Promise.all (a static method that uses `this` as constructor)
+		// and assigns it to a FakePromise. When FakePromise.all() is called, Promise.all
+		// uses FakePromise as the constructor. During iteration, if an error occurs
+		// (e.g., from accessing error.stack with error.name = Symbol()), that error is
+		// passed directly to FakePromise's executor reject handler.
+		let escaped = false;
+
+		vm2.run(`
+			function FakePromise(executor) {
+				executor(
+					(x) => x,
+					(err) => {
+						// Try to access process via the error's constructor chain
+						try {
+							const proc = err.constructor.constructor('return process')();
+							if (proc && proc.version) markEscape();
+						} catch(e) {}
+					}
+				)
+			}
+			FakePromise.all = Promise.all;
+			FakePromise.resolve = () => {};
+			try {
+				FakePromise.all({[Symbol.iterator]: () => {
+					const e = new Error();
+					e.name = Symbol();
+					return e.stack;
+				}});
+			} catch(e) {}
+		`);
+
+		setTimeout(() => {
+			assert.strictEqual(escaped, false, 'Sandbox escape via Promise.all static method stealing should be prevented');
+			done();
+		}, 100);
+	});
+
+	it('Reflect.construct Promise species bypass attack', (done) => {
+		// This attack uses Reflect.construct(Promise, [...], FakePromise) to create
+		// a real Promise whose prototype is FakePromise.prototype (not Promise.prototype).
+		// This bypassed the previous 'instanceof globalPromise' check in resetPromiseSpecies.
+		let escaped = false;
+		const vm2 = new VM({
+			sandbox: {
+				markEscape: () => { escaped = true; }
+			}
+		});
+		vm2.run(`
+			function FakePromise(executor) {
+				executor(
+					(x) => x,
+					(err) => {
+						try {
+							const proc = err.constructor.constructor('return process')();
+							if (proc && proc.version) markEscape();
+						} catch(e) {}
+					}
+				)
+			}
+			FakePromise[Symbol.species] = FakePromise;
+
+			const res = Reflect.construct(Promise, [()=>{
+				const e = new Error();
+				e.name = Symbol();
+				return e.stack;
+			}], FakePromise);
+			res.then = Promise.prototype.then;
+			res.then();
+		`);
+
+		setTimeout(() => {
+			assert.strictEqual(escaped, false, 'Sandbox escape via Reflect.construct Promise species bypass should be prevented');
+			done();
+		}, 100);
+	});
+
 	after(() => {
 		vm = null;
 	});

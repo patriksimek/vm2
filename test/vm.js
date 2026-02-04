@@ -443,6 +443,18 @@ describe('VM', () => {
 			assert.equal(err.message, 'Operation not allowed on contextified object.');
 			return true;
 		});
+		assert.throws(() => vm.run('const obj = {}; obj.__proto__ = {};'), err => {
+			assert.ok(err instanceof Error);
+			assert.equal(err.name, 'VMError');
+			assert.equal(err.message, 'Operation not allowed on contextified object.');
+			return true;
+		});
+		assert.throws(() => vm.run('Reflect.setPrototypeOf({}, {})'), err => {
+			assert.ok(err instanceof Error);
+			assert.equal(err.name, 'VMError');
+			assert.equal(err.message, 'Operation not allowed on contextified object.');
+			return true;
+		});
 
 		if (NODE_VERSION > 6) {
 			// async/await was not there in Node 6
@@ -939,7 +951,6 @@ describe('VM', () => {
 		vm2 = new VM();
 
 		assert.throws(() => vm2.run(`
-			Function.prototype.__proto__ = null;
 			var process;
 			try {
 				Buffer.from(new Proxy({}, {

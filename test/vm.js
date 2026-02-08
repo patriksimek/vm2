@@ -457,6 +457,15 @@ describe('VM', () => {
 		assert.throws(() => new VMScript('', '', {compiler: 'nonexistant'}), /Unsupported compiler/);
 	});
 
+	it('setPrototypeOf on sandbox-local objects', () => {
+		assert.strictEqual(vm.run(`
+			const obj = {};
+			const proto = { hello: 'world' };
+			Object.setPrototypeOf(obj, proto);
+			obj.hello;
+		`), 'world');
+	});
+
 	it('timeout', () => {
 		const message = NODE_VERSION >= 11 ? /Script execution timed out after 10ms/ : /Script execution timed out\./;
 

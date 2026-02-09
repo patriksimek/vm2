@@ -322,6 +322,20 @@ describe('contextify', () => {
 		assert.ok(d.constructor.constructor === Function);
 	});
 
+	it('buffer (deprecated constructor)', () => {
+		const result = vm.run('new Buffer("Hello")');
+		assert.ok(result instanceof Buffer, '#1');
+		assert.strictEqual(result.toString(), 'Hello', '#2');
+
+		const result2 = vm.run('new Buffer(5)');
+		assert.ok(result2 instanceof Buffer, '#3');
+		assert.strictEqual(result2.length, 5, '#4');
+
+		const result3 = vm.run('Buffer("Hello")');
+		assert.ok(result3 instanceof Buffer, '#5');
+		assert.strictEqual(result3.toString(), 'Hello', '#6');
+	});
+
 	it('function', () => {
 		assert.strictEqual(vm.run('test.function instanceof Function'), true, '#1');
 		assert.strictEqual(vm.run('test.function() instanceof Function'), true, '#2');

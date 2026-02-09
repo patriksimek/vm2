@@ -1247,6 +1247,21 @@ describe('VM', () => {
 		assert.strictEqual(await promise, 42);
 	});
 
+	it('async function Promise instanceof check', () => {
+		const vm2 = new VM();
+		assert.strictEqual(vm2.run(`
+			async function f() {}
+			const p = f();
+			p instanceof Promise
+		`), true, 'async function return value should be instanceof Promise');
+		assert.strictEqual(vm2.run(`
+			Promise.resolve(42) instanceof Promise
+		`), true, 'Promise.resolve should be instanceof Promise');
+		assert.strictEqual(vm2.run(`
+			new Promise(r => r()) instanceof Promise
+		`), true, 'new Promise should be instanceof Promise');
+	});
+
 	it('[Symbol.species] attack', async () => {
 		const vm2 = new VM();
 		const promise = vm2.run(`

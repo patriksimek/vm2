@@ -2209,6 +2209,96 @@ describe('VM', () => {
 		assert.strictEqual(attackResult, false, 'Handler internals should not be exposed via showProxy');
 	});
 
+	it('doPreventExtensions not accessible via handler exposure through showProxy', () => {
+		// This attack duck-types an object to invoke Buffer.prototype.inspect via
+		// slice → subarray, then uses showProxy:true to expose the proxy handler
+		// from the inspect context's seen array. Previously, doPreventExtensions was
+		// a method on BaseHandler and accepted `object` as a direct parameter,
+		// allowing attackers to pass crafted sandbox objects that could leak raw host
+		// function references through handlerFromOtherWithContext.
+		// The fix moves doPreventExtensions to a closure-scoped function that retrieves
+		// the object from a WeakMap, making it inaccessible from the handler reference.
+		const vm2 = new VM();
+		const attackResult = vm2.run(`
+			const obj = {
+				subarray: Buffer.prototype.inspect,
+				slice: Buffer.prototype.slice,
+				hexSlice: () => '',
+				l: {__proto__: null}
+			};
+			let escaped = false;
+			try {
+				obj.slice(20, {showHidden: true, showProxy: true, depth: 10, stylize(a) {
+					const handler = this.seen?.[1];
+					if (handler) {
+						// doPreventExtensions should NOT be accessible as a method
+						if (typeof handler.doPreventExtensions === 'function') {
+							// If it were still a method, attacker could call it with crafted args
+							try {
+								handler.doPreventExtensions(() => {}, {x: obj.slice}, handler);
+								escaped = true;
+							} catch (e) {
+								// Expected to fail
+							}
+						}
+					}
+					return a;
+				}});
+			} catch (e) {
+				// Expected: throws due to proxy handler access restrictions
+			}
+			escaped;
+		`);
+		assert.strictEqual(attackResult, false, 'doPreventExtensions should not be accessible on handler');
+	});
+
+	it('getFactory not accessible via handler exposure through showProxy', () => {
+		// This attack duck-types an object to invoke Buffer.prototype.inspect via
+		// slice → subarray, then uses showProxy:true to expose the proxy handler
+		// from the inspect context's seen array. Previously, getFactory() was a
+		// public method on BaseHandler that returned the raw host defaultFactory
+		// function. The attacker could call defaultFactory(sandboxLambda) to create
+		// a new handler wrapping an attacker-controlled function, then call
+		// handler.apply() to execute it. The result contained a sandbox proxy of a
+		// host function; the host bridge's mappingOtherToThis mapped that proxy back
+		// to the raw host function, bypassing proxy protection and enabling
+		// f.x.constructor("return process")() to escape.
+		// The fix stores the factory in a closure-scoped WeakMap (handlerToFactory)
+		// with a closure-scoped accessor (getHandlerFactory), making it inaccessible
+		// from the handler reference.
+		const vm2 = new VM();
+		const attackResult = vm2.run(`
+			const obj = {
+				subarray: Buffer.prototype.inspect,
+				slice: Buffer.prototype.slice,
+				hexSlice: () => ''
+			};
+			let escaped = false;
+			try {
+				obj.slice(20, {showHidden: true, showProxy: true, depth: 10, stylize(a) {
+					const handler = this.seen?.[1];
+					if (handler) {
+						// getFactory should NOT be accessible as a method
+						if (typeof handler.getFactory === 'function') {
+							try {
+								const f = handler.getFactory()(()=>({__proto__: null, x: obj.slice})).apply(null, null, []);
+								f.x.constructor("return process")().mainModule.require('child_process');
+								escaped = true;
+							} catch (e) {
+								// Expected to fail
+							}
+						}
+					}
+					return a;
+				}});
+			} catch (e) {
+				// Expected: throws due to proxy handler access restrictions
+			}
+			escaped;
+		`);
+		assert.strictEqual(attackResult, false, 'getFactory should not be accessible on handler');
+	});
+
 	// Promise.try is available in Node.js 24+
 	// This is the ONLY Promise static method that is actually vulnerable because:
 	// - Promise.try catches errors thrown by the callback INSIDE V8's Promise executor

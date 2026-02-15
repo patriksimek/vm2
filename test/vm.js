@@ -2229,7 +2229,7 @@ describe('VM', () => {
 			let escaped = false;
 			try {
 				obj.slice(20, {showHidden: true, showProxy: true, depth: 10, stylize(a) {
-					const handler = this.seen?.[1];
+					const handler = this.seen && this.seen[1];
 					if (handler) {
 						// doPreventExtensions should NOT be accessible as a method
 						if (typeof handler.doPreventExtensions === 'function') {
@@ -2276,7 +2276,7 @@ describe('VM', () => {
 			let escaped = false;
 			try {
 				obj.slice(20, {showHidden: true, showProxy: true, depth: 10, stylize(a) {
-					const handler = this.seen?.[1];
+					const handler = this.seen && this.seen[1];
 					if (handler) {
 						// getFactory should NOT be accessible as a method
 						if (typeof handler.getFactory === 'function') {

@@ -2320,7 +2320,7 @@ describe('VM', () => {
 			};
 			let f;
 			obj.slice(20, {showHidden: true, showProxy: true, depth: 10, stylize(a) {
-				if (this.seen?.[1]?.get){f=this.seen[1];}
+				if (this.seen && this.seen[1] && this.seen[1].get){f=this.seen[1];}
 				return a;
 			}});
 			let escaped = false;

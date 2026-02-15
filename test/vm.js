@@ -2426,6 +2426,142 @@ describe('VM', () => {
 		}, 100);
 	});
 
+	it.cond('SuppressedError escape via DisposableStack', typeof DisposableStack === 'function', () => {
+		const vm2 = new VM();
+		// DisposableStack.dispose() wraps multiple errors in SuppressedError.
+		// When one deferred function triggers a host TypeError (via Symbol name trick
+		// on Error.stack), V8 stores the raw host error in SuppressedError.suppressed.
+		// Without sanitization, e.suppressed.constructor.constructor gives host Function.
+		assert.throws(() => vm2.run(`
+			const ds = new DisposableStack();
+			ds.defer(() => { throw null; });
+			ds.defer(() => {
+				const e = Error();
+				e.name = Symbol();
+				e.stack;
+			});
+			try {
+				ds.dispose();
+			} catch(e) {
+				const F = e.suppressed.constructor.constructor;
+				const process = new F('return process;')();
+				process.exit(1);
+			}
+		`), /process is not defined/);
+	});
+
+	it.cond('SuppressedError escape via using declaration', typeof DisposableStack === 'function', () => {
+		const vm2 = new VM();
+		// The 'using' declaration triggers Symbol.dispose on scope exit.
+		// If the dispose method triggers a host TypeError and the body also throws,
+		// V8 creates a SuppressedError with the host error in .error.
+		assert.throws(() => vm2.run(`
+			obj = {[Symbol.dispose]() {
+				const e = new Error();
+				e.name = Symbol();
+				return e.stack;
+			}};
+			try {
+				eval("{using a = obj;throw null;}");
+			} catch(e) {
+				e.error.constructor.constructor("return process")().mainModule.require("child_process").execSync("echo ESCAPED");
+			}
+		`), /process is not defined/);
+	});
+
+	it.cond('SuppressedError escape via AsyncDisposableStack', typeof AsyncDisposableStack === 'function', async () => {
+		const vm2 = new VM({allowAsync: true});
+		// Same attack vector but via AsyncDisposableStack.disposeAsync().
+		await assert.rejects(() => vm2.run(`
+			(async () => {
+				const ds = new AsyncDisposableStack();
+				ds.defer(async () => { throw null; });
+				ds.defer(async () => {
+					const e = Error();
+					e.name = Symbol();
+					e.stack;
+				});
+				try {
+					await ds.disposeAsync();
+				} catch(e) {
+					const F = e.suppressed.constructor.constructor;
+					const process = new F("return process;")();
+					return process.version;
+				}
+			})()
+		`), /process is not defined/);
+	});
+
+	it.cond('SuppressedError escape via async rejection path', typeof DisposableStack === 'function', (done) => {
+		const vm2 = new VM({allowAsync: true});
+		// When SuppressedError is a promise rejection (no try/catch around dispose),
+		// it flows through Promise.catch() which must use handleException, not just ensureThis.
+		vm2.run(`
+			(async function() {
+				const ds = new DisposableStack();
+				ds.defer(() => { throw null; });
+				ds.defer(() => {
+					const e = Error();
+					e.name = Symbol();
+					e.stack;
+				});
+				ds.dispose();
+			})().catch(err => {
+				try {
+					const F = err.suppressed.constructor.constructor;
+					const p = new F('return process')();
+					if (p && p.version) { globalThis.__escaped = true; }
+				} catch(ex) { /* blocked */ }
+			});
+		`);
+
+		setTimeout(() => {
+			try {
+				const escaped = vm2.run('globalThis.__escaped');
+				assert.strictEqual(escaped, undefined, 'sandbox escape via async SuppressedError');
+				done();
+			} catch(e) { done(e); }
+		}, 100);
+	});
+
+	it.cond('SuppressedError escape via deeply nested DisposableStack', typeof DisposableStack === 'function', () => {
+		const vm2 = new VM();
+		// Many deferred functions that each throw create deeply nested SuppressedError chains.
+		// The handleException cycle detector must sanitize at any depth, not just up to a fixed limit.
+		assert.strictEqual(vm2.run(`
+			const ds = new DisposableStack();
+			for (let i = 0; i < 30; i++) {
+				ds.defer(() => { throw null; });
+			}
+			ds.defer(() => {
+				const e = Error();
+				e.name = Symbol();
+				e.stack;
+			});
+			let escaped = false;
+			try {
+				ds.dispose();
+			} catch(e) {
+				let current = e;
+				for (let i = 0; i < 40; i++) {
+					if (current && current.suppressed && current.suppressed.constructor) {
+						try {
+							const F = current.suppressed.constructor.constructor;
+							const p = new F('return process')();
+							if (p && p.version) { escaped = true; break; }
+						} catch(ex) { /* blocked */ }
+					}
+					if (current && current.suppressed instanceof SuppressedError) {
+						current = current.suppressed;
+					} else {
+						break;
+					}
+				}
+			}
+			escaped;
+		`), false);
+	});
+
 	after(() => {
 		vm = null;
 	});

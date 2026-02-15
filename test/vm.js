@@ -1276,6 +1276,411 @@ describe('VM', () => {
 		`), /constructor is not a function/);
 	});
 
+	it('getOwnPropertyDescriptor Function constructor bypass attack', () => {
+		// This attack bypasses the direct constructor access protection by using
+		// Object.getOwnPropertyDescriptor to get the constructor property descriptor
+		// instead of direct property access. The attack chain:
+		// 1. Use __lookupGetter__ with Buffer to get the __proto__ getter
+		// 2. Call the getter with host's apply function to get Function.prototype
+		// 3. Use getOwnPropertyDescriptor to bypass the get trap protection
+		// 4. Access the host's Function constructor via descriptor.value
+		const vm2 = new VM();
+		assert.throws(() => vm2.run(`
+			const getter = ({}).__lookupGetter__;
+			const apply = Buffer.apply;
+			const protoGetter = apply.apply(getter, [Buffer, ['__proto__']]);
+			const hostFuncProto = protoGetter.call(apply);
+			const desc = Object.getOwnPropertyDescriptor(hostFuncProto, 'constructor');
+			desc.value('return process')();
+		`), /Cannot read properties of undefined|Cannot read property 'value' of undefined/);
+	});
+
+	it('getOwnPropertyDescriptor via Object method call bypass attack', () => {
+		// This attack bypasses the proxy's getOwnPropertyDescriptor trap by calling
+		// Object.getOwnPropertyDescriptor as a method through the apply trap.
+		// The descriptor is returned as a proxied object, and accessing .value
+		// goes through the get trap with key='value' (not 'constructor'),
+		// bypassing the constructor name check.
+		const vm2 = new VM();
+		assert.throws(() => vm2.run(`
+			const g = ({}).__lookupGetter__;
+			const a = Buffer.apply;
+			const p = a.apply(g, [Buffer, ['__proto__']]);
+			const fp = p.call(a);
+			const op = p.call(fp);
+			const ho = op.constructor;
+			ho.getOwnPropertyDescriptor(fp,'constructor').value('return process')().mainModule.require('child_process').execSync('echo ESCAPED');
+		`), /not a function|Cannot read properties/);
+	});
+
+	it('getOwnPropertyDescriptor Function extraction via Object.entries attack', () => {
+		// This attack extracts the Function constructor from a property descriptor
+		// using Object.entries() to bypass direct property access protections.
+		// The descriptor is returned as a proxied object, but Object.entries()
+		// extracts all key-value pairs including the raw Function constructor.
+		// Attack chain:
+		// 1. Get Function.prototype via __lookupGetter__ and prototype traversal
+		// 2. Get descriptor for 'constructor' property via Object.getOwnPropertyDescriptor
+		// 3. Use Object.entries() to extract [['value', Function], ...] array
+		// 4. Extract Function from array and use it to evaluate code
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+		const vm2 = new VM();
+		try {
+			vm2.run(`
+				const g = ({}).__lookupGetter__;
+				const a = Buffer.apply;
+				const p = a.apply(g, [Buffer, ['__proto__']]);
+				const fp = p.call(a);
+				const op = p.call(fp);
+				const ho = op.constructor;
+				const cd = ho.getOwnPropertyDescriptor(fp,'constructor');
+				const e = ho.entries(cd).find(v=>v[0]==='value');
+				e.shift();
+				e.push([undefined,['escapeMarker()']]);
+				a.apply(a, e)();
+			`);
+		} catch (e) {
+			// Expected to throw
+		}
+		delete global.escapeMarker;
+		assert.strictEqual(escaped, false, 'Sandbox escape via Object.entries on descriptor should be prevented');
+	});
+
+	it('getOwnPropertyDescriptor Function extraction via nested entries attack', () => {
+		// Similar to Object.entries attack but accesses the inner array's second
+		// element (the Function) by index without type checking, demonstrating
+		// that the vulnerability is in how arrays cross the bridge, not in
+		// direct element access.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+		const vm2 = new VM();
+		try {
+			vm2.run(`
+				const g = ({}).__lookupGetter__;
+				const a = Buffer.apply;
+				const p = a.apply(g, [Buffer, ['__proto__']]);
+				const fp = p.call(a);
+				const op = p.call(fp);
+				const ho = op.constructor;
+				const cd = ho.getOwnPropertyDescriptor(fp,'constructor');
+				// Get entries array: [['value', Function], ['writable', true], ...]
+				const allEntries = ho.entries(cd);
+				// Find the 'value' entry by checking only the key (index 0), not the value
+				let valueEntry;
+				for (let i = 0; i < allEntries.length; i++) {
+					const entry = allEntries[i];
+					if (entry[0] === 'value') {
+						valueEntry = entry;
+						break;
+					}
+				}
+				// Mutate the entry array for apply.apply pattern
+				valueEntry.shift(); // Remove 'value', leaving [Function]
+				valueEntry.push([undefined, ['escapeMarker()']]);
+				// valueEntry is now [Function, [undefined, ['escapeMarker()']]]
+				a.apply(a, valueEntry)();
+			`);
+		} catch (e) {
+			// Expected to throw
+		}
+		delete global.escapeMarker;
+		assert.strictEqual(escaped, false, 'Sandbox escape via nested entries should be prevented');
+	});
+
+	it('getOwnPropertyDescriptor Function extraction via direct value access attack', () => {
+		// Attempts to extract Function constructor by accessing .value directly
+		// and using array mutation pattern to bypass proxy element access.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+		const vm2 = new VM();
+		try {
+			vm2.run(`
+				const g = ({}).__lookupGetter__;
+				const a = Buffer.apply;
+				const p = a.apply(g, [Buffer, ['__proto__']]);
+				const fp = p.call(a);
+				const op = p.call(fp);
+				const ho = op.constructor;
+				const cd = ho.getOwnPropertyDescriptor(fp,'constructor');
+				// Create array with descriptor, extract value via entries to avoid proxy
+				const e = ho.entries(cd).find(v=>v[0]==='value');
+				// Mutate array: remove 'value' key, add args for apply
+				e.shift();
+				e.push([undefined, ['escapeMarker()']]);
+				// e is now [Function, [undefined, ['escapeMarker()']]]
+				a.apply(a, e)();
+			`);
+		} catch (e) {
+			// Expected to throw
+		}
+		delete global.escapeMarker;
+		assert.strictEqual(escaped, false, 'Sandbox escape via direct value access should be prevented');
+	});
+
+	it('getOwnPropertyDescriptors (plural) Function extraction attack', () => {
+		// Uses Object.getOwnPropertyDescriptors to get all descriptors at once,
+		// then extracts Function constructor using entries and array mutation.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+		const vm2 = new VM();
+		try {
+			vm2.run(`
+				const g = ({}).__lookupGetter__;
+				const a = Buffer.apply;
+				const p = a.apply(g, [Buffer, ['__proto__']]);
+				const fp = p.call(a);
+				const op = p.call(fp);
+				const ho = op.constructor;
+				const descs = ho.getOwnPropertyDescriptors(fp);
+				// Extract Function from constructor descriptor's value via entries
+				const ctorDesc = descs.constructor;
+				const e = ho.entries(ctorDesc).find(v=>v[0]==='value');
+				// Mutate array for apply.apply pattern
+				e.shift();
+				e.push([undefined, ['escapeMarker()']]);
+				a.apply(a, e)();
+			`);
+		} catch (e) {
+			// Expected to throw
+		}
+		delete global.escapeMarker;
+		assert.strictEqual(escaped, false, 'Sandbox escape via getOwnPropertyDescriptors should be prevented');
+	});
+
+	it('getOwnPropertyDescriptor on getOwnPropertyDescriptors result (nested descriptor attack)', () => {
+		// GHSA: Uses getOwnPropertyDescriptor on the result of getOwnPropertyDescriptors.
+		// This creates a nested descriptor: {value: {value: Function, ...}, ...}
+		// The attack then uses Object.entries twice to extract Function.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+		const vm2 = new VM();
+		try {
+			vm2.run(`
+				const g = ({}).__lookupGetter__;
+				const a = Buffer.apply;
+				const p = a.apply(g, [Buffer, ['__proto__']]);
+				const fp = p.call(a);
+				const op = p.call(fp);
+				const ho = op.constructor;
+				// Get all descriptors of Function.prototype
+				const descriptors = ho.getOwnPropertyDescriptors(fp);
+				// Get descriptor of 'constructor' key on descriptors object
+				// This returns {value: {value: Function, ...}, ...}
+				const cd = ho.getOwnPropertyDescriptor(descriptors, 'constructor');
+				// Extract inner descriptor via Object.entries
+				const ee = ho.entries(cd).find(v=>v[0]==='value');
+				ee.shift();
+				// Extract Function from inner descriptor
+				const e = ho.entries.apply(null, ee).find(v=>v[0]==='value');
+				e.shift();
+				e.push([undefined, ['escapeMarker()']]);
+				a.apply(a, e)();
+			`);
+		} catch (e) {
+			// Expected to throw
+		}
+		delete global.escapeMarker;
+		assert.strictEqual(escaped, false, 'Sandbox escape via nested getOwnPropertyDescriptor should be prevented');
+	});
+
+	it('triple-nested getOwnPropertyDescriptors attack (3 levels)', () => {
+		// Tests that 3-level nesting is still protected even though sanitization
+		// only checks 2 levels. This works because each property access through
+		// the proxy triggers independent sanitization.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+		const vm2 = new VM();
+		try {
+			vm2.run(`
+				const g = ({}).__lookupGetter__;
+				const a = Buffer.apply;
+				const p = a.apply(g, [Buffer, ['__proto__']]);
+				const fp = p.call(a);
+				const op = p.call(fp);
+				const ho = op.constructor;
+				// Build 3-level nesting: {value: {value: {value: Function}}}
+				let d = ho.getOwnPropertyDescriptors(fp);
+				d = ho.getOwnPropertyDescriptors(d);
+				const cd = ho.getOwnPropertyDescriptor(d, 'constructor');
+				// Try to extract Function via Object.entries (3 levels deep)
+				const e1 = ho.entries(cd).find(v => v[0] === 'value');
+				e1.shift();
+				const e2 = ho.entries.apply(null, e1).find(v => v[0] === 'value');
+				e2.shift();
+				const e3 = ho.entries.apply(null, e2).find(v => v[0] === 'value');
+				e3.shift();
+				e3.push([undefined, ['escapeMarker()']]);
+				a.apply(a, e3)();
+			`);
+		} catch (e) {
+			// Expected to throw
+		}
+		delete global.escapeMarker;
+		assert.strictEqual(escaped, false, 'Sandbox escape via 3-level nested descriptor should be prevented');
+	});
+
+	it('Function constructor extraction via Object.entries on getOwnPropertyDescriptors result', () => {
+		// Object.getOwnPropertyDescriptors(Function.prototype) returns
+		// {constructor: {value: Function, ...}, ...}. The Function is under the
+		// 'constructor' key, not under 'value'. Object.entries() extracts it
+		// into arrays, bypassing per-property proxy sanitization.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+		const vm2 = new VM();
+		try {
+			vm2.run(`
+				const g = ({}).__lookupGetter__;
+				const a = Buffer.apply;
+				const p = a.apply(g, [Buffer, ['__proto__']]);
+				const fp = p.call(a);
+				const op = p.call(fp);
+				const ho = op.constructor;
+				const cd = ho.getOwnPropertyDescriptors(fp,'constructor');
+				const ee = ho.entries(cd).find(v=>v[0]==='constructor');
+				ee.shift();
+				const e = ho.entries.apply(null, ee).find(v=>v[0]==='value')
+				e.shift();
+				e.push([undefined, ['escapeMarker()']]);
+				a.apply(a, e)();
+			`);
+		} catch (e) {
+			// Expected to throw
+		}
+		delete global.escapeMarker;
+		assert.strictEqual(escaped, false, 'Sandbox escape via Object.entries on getOwnPropertyDescriptors should be prevented');
+	});
+
+	it('Function constructor extraction and code execution', () => {
+		// Verifies that the Function constructor cannot be used for code execution
+		// even if somehow extracted. This is a defense-in-depth test.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+		const vm2 = new VM();
+		try {
+			vm2.run(`
+				const g = ({}).__lookupGetter__;
+				const a = Buffer.apply;
+				const p = a.apply(g, [Buffer, ['__proto__']]);
+				const fp = p.call(a);
+				const op = p.call(fp);
+				const ho = op.constructor;
+				const cd = ho.getOwnPropertyDescriptor(fp,'constructor');
+				const e = ho.entries(cd).find(v=>v[0]==='value');
+				e.shift();
+				e.push([undefined, ['escapeMarker()']]);
+				a.apply(a, e)();
+			`);
+		} catch (e) {
+			// Expected to throw
+		}
+		delete global.escapeMarker;
+		assert.strictEqual(escaped, false, 'Sandbox escape via Function constructor should be prevented');
+	});
+
+	it('AsyncFunction constructor extraction and code execution', () => {
+		// Verifies that AsyncFunction constructor is blocked when extracted from
+		// a host-provided async function. AsyncFunction can eval code.
+		// We pass a host async function to the sandbox, then extract its constructor.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+		const vm2 = new VM({
+			sandbox: {
+				hostAsyncFn: async function() {}
+			}
+		});
+		try {
+			vm2.run(`
+				const g = ({}).__lookupGetter__;
+				const a = Buffer.apply;
+				const p = a.apply(g, [Buffer, ['__proto__']]);  // p is __proto__ getter
+				const fp = p.call(a);   // fp = Function.prototype
+				const op = p.call(fp);  // op = Object.prototype
+				const ho = op.constructor;  // ho = Object
+				// Get AsyncFunction.prototype from the host-provided async function
+				// p is the __proto__ getter, so p.call(hostAsyncFn) gets hostAsyncFn.__proto__
+				const hostAsyncProto = p.call(hostAsyncFn);  // AsyncFunction.prototype
+				const cd = ho.getOwnPropertyDescriptor(hostAsyncProto,'constructor');
+				const e = ho.entries(cd).find(v=>v[0]==='value');
+				e.shift();
+				e.push([undefined, ['escapeMarker()']]);
+				a.apply(a, e)();
+			`);
+		} catch (e) {
+			// Expected to throw
+		}
+		delete global.escapeMarker;
+		assert.strictEqual(escaped, false, 'Sandbox escape via AsyncFunction constructor should be prevented');
+	});
+
+	it('GeneratorFunction constructor extraction and code execution', () => {
+		// Verifies that GeneratorFunction constructor is blocked when extracted from
+		// a host-provided generator function. GeneratorFunction can eval code.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+		const vm2 = new VM({
+			sandbox: {
+				hostGenFn: function*() {}
+			}
+		});
+		try {
+			vm2.run(`
+				const g = ({}).__lookupGetter__;
+				const a = Buffer.apply;
+				const p = a.apply(g, [Buffer, ['__proto__']]);  // p is __proto__ getter
+				const fp = p.call(a);   // fp = Function.prototype
+				const op = p.call(fp);  // op = Object.prototype
+				const ho = op.constructor;  // ho = Object
+				// Get GeneratorFunction.prototype from the host-provided generator function
+				const hostGenProto = p.call(hostGenFn);  // GeneratorFunction.prototype
+				const cd = ho.getOwnPropertyDescriptor(hostGenProto,'constructor');
+				const e = ho.entries(cd).find(v=>v[0]==='value');
+				e.shift();
+				e.push([undefined, ['escapeMarker()']]);
+				a.apply(a, e)();
+			`);
+		} catch (e) {
+			// Expected to throw
+		}
+		delete global.escapeMarker;
+		assert.strictEqual(escaped, false, 'Sandbox escape via GeneratorFunction constructor should be prevented');
+	});
+
+	// Async generator functions (async function*) require Node 10+
+	// Use eval() to avoid syntax error on older Node versions
+	it.cond('AsyncGeneratorFunction constructor extraction and code execution', NODE_VERSION >= 10, () => {
+		// Verifies that AsyncGeneratorFunction constructor is blocked when extracted from
+		// a host-provided async generator function. AsyncGeneratorFunction can eval code.
+		let escaped = false;
+		global.escapeMarker = () => { escaped = true; };
+		const vm2 = new VM({
+			sandbox: {
+				hostAsyncGenFn: eval('(async function*() {})')
+			}
+		});
+		try {
+			vm2.run(`
+				const g = ({}).__lookupGetter__;
+				const a = Buffer.apply;
+				const p = a.apply(g, [Buffer, ['__proto__']]);  // p is __proto__ getter
+				const fp = p.call(a);   // fp = Function.prototype
+				const op = p.call(fp);  // op = Object.prototype
+				const ho = op.constructor;  // ho = Object
+				// Get AsyncGeneratorFunction.prototype from the host-provided async generator function
+				const hostAsyncGenProto = p.call(hostAsyncGenFn);  // AsyncGeneratorFunction.prototype
+				const cd = ho.getOwnPropertyDescriptor(hostAsyncGenProto,'constructor');
+				const e = ho.entries(cd).find(v=>v[0]==='value');
+				e.shift();
+				e.push([undefined, ['escapeMarker()']]);
+				a.apply(a, e)();
+			`);
+		} catch (e) {
+			// Expected to throw
+		}
+		delete global.escapeMarker;
+		assert.strictEqual(escaped, false, 'Sandbox escape via AsyncGeneratorFunction constructor should be prevented');
+	});
+
 	it('Promise.prototype.then/catch callback sanitization bypass', async () => {
 		const vm2 = new VM();
 		// This attack uses an Error with a Symbol name to trigger a host error

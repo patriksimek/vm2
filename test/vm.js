@@ -2299,6 +2299,45 @@ describe('VM', () => {
 		assert.strictEqual(attackResult, false, 'getFactory should not be accessible on handler');
 	});
 
+	it('Handler get() direct call with forged target leaking host Function constructor', () => {
+		// This attack uses showProxy to obtain a handler reference, then calls
+		// handler.get() directly via a host-side reduce chain with a raw host
+		// function as the target argument. The 'constructor' case falls through
+		// to thisReflectGetPrototypeOf(target) → Function.prototype.constructor,
+		// leaking the raw host Function constructor.
+		// The fix adds isThisDangerousFunctionConstructor check on the return value.
+		const vm2 = new VM();
+		const attackResult = vm2.run(`
+			const g = ({}).__lookupGetter__;
+			const a = Buffer.apply;
+			const p = a.apply(g, [Buffer, ['__proto__']]);
+			const op = p.call(p.call(p.call(p.call(Buffer.of()))));
+			const ho = op.constructor;
+			const obj = {
+				subarray: Buffer.prototype.inspect,
+				slice: Buffer.prototype.slice,
+				hexSlice:()=>''
+			};
+			let f;
+			obj.slice(20, {showHidden: true, showProxy: true, depth: 10, stylize(a) {
+				if (this.seen?.[1]?.get){f=this.seen[1];}
+				return a;
+			}});
+			let escaped = false;
+			try {
+				const b = ho.entries({});
+				b[0] = [f, [obj.slice, 'constructor']];
+				b[1] = [undefined, ["return process"]];
+				const proc = b.reduce(a.apply(a.bind, [a, [a]]), f.get)();
+				if (proc && typeof proc === 'object') escaped = true;
+			} catch (e) {
+				// Expected: fails because {} is returned instead of Function
+			}
+			escaped;
+		`);
+		assert.strictEqual(attackResult, false, 'Handler get() should not leak host Function constructor via forged target');
+	});
+
 	// Promise.try is available in Node.js 24+
 	// This is the ONLY Promise static method that is actually vulnerable because:
 	// - Promise.try catches errors thrown by the callback INSIDE V8's Promise executor

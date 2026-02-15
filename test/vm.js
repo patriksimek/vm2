@@ -2319,10 +2319,14 @@ describe('VM', () => {
 				hexSlice:()=>''
 			};
 			let f;
-			obj.slice(20, {showHidden: true, showProxy: true, depth: 10, stylize(a) {
-				if (this.seen && this.seen[1] && this.seen[1].get){f=this.seen[1];}
-				return a;
-			}});
+			try {
+				obj.slice(20, {showHidden: true, showProxy: true, depth: 10, stylize(a) {
+					if (this.seen && this.seen[1] && this.seen[1].get){f=this.seen[1];}
+					return a;
+				}});
+			} catch (e) {
+				// Expected: Buffer.prototype.slice may throw when this is not a Buffer
+			}
 			let escaped = false;
 			try {
 				const b = ho.entries({});

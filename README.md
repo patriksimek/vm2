@@ -140,7 +140,7 @@ VM is a simple sandbox to synchronously run untrusted code without the `require`
 -   `sandbox` - VM's global object.
 -   `compiler` - `javascript` (default), `typescript`, `coffeescript` or custom compiler function. The library expects you to have compiler pre-installed if the value is set to `typescript` or `coffeescript`.
 -   `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
--   `wasm` - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
+-   `wasm` - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`). Note: `WebAssembly.JSTag` is removed inside the sandbox for security reasons, so wasm code cannot catch JavaScript exceptions.
 -   `allowAsync` - If set to `false` any attempt to run code using `async` will throw a `VMError` (default: `true`).
 
 **IMPORTANT**: Timeout is only effective on synchronous code that you run through `run`. Timeout does **NOT** work on any method returned by VM. There are some situations when timeout doesn't work - see [#244](https://github.com/patriksimek/vm2/pull/244).
@@ -175,7 +175,7 @@ Unlike `VM`, `NodeVM` allows you to require modules in the same way that you wou
 -   `sandbox` - VM's global object.
 -   `compiler` - `javascript` (default), `typescript`, `coffeescript` or custom compiler function (which receives the code, and it's file path). The library expects you to have compiler pre-installed if the value is set to `typescript` or `coffeescript`.
 -   `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
--   `wasm` - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`).
+-   `wasm` - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`). Note: `WebAssembly.JSTag` is removed inside the sandbox for security reasons, so wasm code cannot catch JavaScript exceptions.
 -   `sourceExtensions` - Array of file extensions to treat as source code (default: `['js']`).
 -   `require` - `true`, an object or a Resolver to enable `require` method (default: `false`).
 -   `require.external` - Values can be `true`, an array of allowed external modules, or an object (default: `false`). All paths matching `/node_modules/${any_allowed_external_module}/(?!/node_modules/)` are allowed to be required.

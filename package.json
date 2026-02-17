@@ -13,13 +13,13 @@
 		"alcatraz",
 		"contextify"
 	],
-	"version": "3.10.4",
+	"version": "3.10.5",
 	"main": "index.js",
 	"sideEffects": false,
 	"repository": "github:patriksimek/vm2",
 	"license": "MIT",
 	"dependencies": {
-		"acorn": "^8.14.1",
+		"acorn": "^8.15.0",
 		"acorn-walk": "^8.3.4"
 	},
 	"devDependencies": {

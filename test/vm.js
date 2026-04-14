@@ -2648,6 +2648,125 @@ describe('VM', () => {
 	});
 });
 
+describe('missing sandbox defenses (issue #562)', () => {
+	it('Array species self-return attack via constructor manipulation', () => {
+		const vm2 = new VM();
+		// Setting constructor on a host array to a species-returning function
+		// should be intercepted by the proxy set trap and stored locally,
+		// not on the underlying host array.
+		const result = vm2.run(`
+			const arr = Buffer.from([1,2,3]);
+			arr.constructor = function x() { return arr; };
+			// Even if constructor was set, map should produce a normal array
+			const mapped = arr.map(x => x * 2);
+			// Verify map didn't store into the original array (species self-return)
+			mapped !== arr;
+		`);
+		assert.strictEqual(result, true);
+	});
+
+	it('Array constructor write via defineProperty is intercepted', () => {
+		const vm2 = new VM();
+		// Object.defineProperty for constructor on host arrays should be
+		// intercepted and stored locally on the proxy target.
+		const result = vm2.run(`
+			const arr = Buffer.from([1,2,3]);
+			Object.defineProperty(arr, 'constructor', {
+				value: function x() { return arr; },
+				writable: true,
+				configurable: true
+			});
+			const mapped = arr.map(x => x * 2);
+			mapped !== arr;
+		`);
+		assert.strictEqual(result, true);
+	});
+
+	it('Error.prepareStackTrace safe default prevents host fallback', () => {
+		const vm2 = new VM();
+		// When user sets Error.prepareStackTrace = undefined, V8 should NOT
+		// fall back to the host's prepareStackTraceCallback. Instead, a safe
+		// default should be used. Verify setting to undefined doesn't crash
+		// and still produces valid stack traces.
+		const result = vm2.run(`
+			Error.prepareStackTrace = undefined;
+			const e = new Error('test');
+			typeof e.stack === 'string' && e.stack.includes('test');
+		`);
+		assert.strictEqual(result, true);
+	});
+
+	it('Error.prepareStackTrace safe default handles Symbol names without throwing', () => {
+		const vm2 = new VM();
+		// After clearing prepareStackTrace, accessing .stack with a Symbol name
+		// should NOT throw a host TypeError (which would be a host-realm error).
+		// The safe default should handle it gracefully.
+		const result = vm2.run(`
+			Error.prepareStackTrace = undefined;
+			const e = new Error('msg');
+			e.name = Symbol('test');
+			let threw = false;
+			try {
+				const s = e.stack;
+				// Stack should be a string containing the Symbol name
+				threw = typeof s !== 'string';
+			} catch(ex) {
+				threw = true;
+			}
+			threw;
+		`);
+		assert.strictEqual(result, false);
+	});
+
+	it('Error.prepareStackTrace = undefined does not enable host escape', () => {
+		const vm2 = new VM({allowAsync: true});
+		// The Category 19 attack: clear prepareStackTrace, use Symbol name trick
+		// to generate host TypeError, catch via host promise. With the safe default,
+		// no host error should be generated.
+		assert.strictEqual(vm2.run(`
+			Error.prepareStackTrace = undefined;
+			const e = new Error();
+			e.name = Symbol();
+			let hostError = false;
+			try {
+				const s = e.stack;
+			} catch(ex) {
+				// If we get here, check if it's a host error
+				try {
+					const F = ex.constructor.constructor;
+					const p = F('return process')();
+					if (p && p.version) hostError = true;
+				} catch(inner) {}
+			}
+			hostError;
+		`), false);
+	});
+
+	it('neutralizeArraySpecies prevents species attack in apply trap', () => {
+		const vm2 = new VM();
+		// Host function calls through the apply trap should neutralize
+		// array species by setting constructor = undefined on host arrays
+		// passed as arguments. Use Object.entries to get a host array.
+		const result = vm2.run(`
+			const g = ({}).__lookupGetter__;
+			const a = Buffer.apply;
+			const p = a.apply(g, [Buffer, ['__proto__']]);
+			const op = p.call(p.call(p.call(p.call(Buffer.of()))));
+			const ho = op.constructor;
+			// ho.entries({}) creates a host array
+			const arr = ho.entries({a: 1, b: 2});
+			// Setting constructor for species should be blocked
+			function x() { return arr; }
+			x[Symbol.species] = x;
+			arr.constructor = x;
+			const mapped = arr.map(v => v);
+			// If species was neutralized, mapped should be a different array
+			mapped !== arr;
+		`);
+		assert.strictEqual(result, true);
+	});
+});
+
 describe('precompiled scripts', () => {
 	it('VM', () => {
 		const vm = new VM();

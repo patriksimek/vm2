@@ -1283,11 +1283,14 @@ The `Object.assign` bypass is particularly insidious: the sandbox proxy's `set` 
 
 ### Mitigation
 
-Three-layer defense in `bridge.js`:
+Two-layer defense in `lib/bridge.js`:
 
-1. **Proxy `set` trap**: Intercepts direct `constructor` writes and stores locally on proxy target.
-2. **Proxy `defineProperty` trap**: Same interception for `Object.defineProperty` from sandbox code.
-3. **Apply trap species neutralization**: Before and after every host function call, sets `constructor = undefined` as own property on host arrays (context and args). This shadows both own and prototype-inherited constructors. `ArraySpeciesCreate` treats `constructor = undefined` as "use default Array constructor". Non-configurable constructors detected by `Reflect.deleteProperty` returning false, blocked via VMError. Non-extensible arrays detected by `Reflect.defineProperty` returning false, blocked via VMError. `Array.isArray` works cross-realm to identify host arrays.
+1. **Proxy `get` trap — cached `Array` ctor for host arrays**: When sandbox code reads `.constructor` on a host-array-backed proxy, the trap returns a module-load-time-captured `thisArrayCtor = Array` reference. This bypass of the normal property read neutralises any attacker-installed `constructor` (direct `r.constructor = x`, `Object.defineProperty`, `Object.assign`, prototype-chain injection via `Object.setPrototypeOf`) and is immune to prototype pollution of `Array.prototype.constructor`. Only defends sandbox-side reads; does not cover V8-internal reads issued from the host realm.
+2. **Apply/construct trap neutralize-and-restore**: Before every `otherReflectApply(object, context, args)` and `otherReflectConstruct(object, args)` — i.e. every sandbox→host function invocation — the bridge walks `context` and each top-level argument. For every host array found (`Array.isArray` is cross-realm safe), it installs `constructor = undefined` as a data own property (shadowing both own and inherited constructors; the ES2024 spec explicitly maps `constructor === undefined` to `%Array%` in ArraySpeciesCreate). After the host call returns — in a `finally` — the prior descriptor is restored (or the shadow deleted if none existed). This covers V8-internal reads issued from the host realm during the call.
+
+Both layers reject un-neutralisable arrays with `VMError`: a pre-installed non-configurable `constructor` whose value is anything other than `undefined`, or a non-extensible array without an own `constructor` slot, cannot be safely shadowed or restored and is treated as an attack.
+
+The neutralize-on-entry/restore-on-exit pattern mirrors `resetPromiseSpecies` in `setup-sandbox.js`, which closes the equivalent V8-internal-bypass class for Promise.
 
 ### Detection Rules
 

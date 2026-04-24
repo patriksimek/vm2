@@ -1375,16 +1375,23 @@ The second critical component is the host promise from `Array.fromAsync`. The sa
 
 ### Mitigation
 
-Sandbox always provides a `defaultSandboxPrepareStackTrace` function so V8 never falls back to host's `prepareStackTraceCallback`. The default function safely handles Symbol names, Proxy objects, and other exotic types without throwing. When user clears `Error.prepareStackTrace`, it resets to the safe default instead of `undefined`.
+Three-layer defense:
+
+1. **`defaultSandboxPrepareStackTrace`** — sandbox always provides a safe `prepareStackTrace`, so V8 never falls back to host's `prepareStackTraceCallback`. The default function safely handles Symbol names, Proxy objects, and other exotic types without throwing. When user clears `Error.prepareStackTrace`, it resets to the safe default instead of `undefined`.
+2. **Prototype-walked host `Array` constructor replaced with sandbox `Array`** (GHSA-grj5-jjm8-h35p fix, commit `7352f11`). The bridge proxy's `get` trap for `.constructor` on host arrays now returns the cached sandbox `Array`, so `ho.entries({}).constructor` resolves to sandbox `Array`. `ha.fromAsync(...)` is therefore sandbox `Array.fromAsync` returning a sandbox Promise — routing through the existing sandbox `.then`/`.catch` overrides with `handleException`. This is the primary, load-bearing closure for the canonical PoC.
+3. **`handleException` recurses into `AggregateError.errors[]`** (GHSA-55hx-c926-fr95 supplementary fix). Mirrors the existing `SuppressedError.error` / `.suppressed` recursion. Closes a small gap where a `Promise.any` rejection delivers an `AggregateError` whose `.errors[i]` is a host-realm error; prior to this fix, only the `AggregateError` itself was sanitized, not its element array.
+
+A bridge-level Promise-boundary sanitizer (intercepting host `Promise.prototype.then/catch` in the bridge apply trap) was considered but deliberately not shipped for this class — the canonical PoC is closed by layer 2, and the underlying Promise-boundary invariant is better addressed in GHSA-mpf8-4hx2-7cjg (host-deliberate-exposure case) rather than as speculative defense-in-depth here.
 
 ### Detection Rules
 
-- **`Array.fromAsync`** called on a host `Array` constructor -- returns host promises.
-- **Host promise `.catch()`** or `.then()` -- callbacks receive unsanitized values.
+- **`Array.fromAsync`** called on a host `Array` constructor (now neutered by layer 2 — walking to host `Array` returns sandbox `Array`).
+- **Host promise `.catch()`** or `.then()` -- callbacks receive unsanitized values (residual risk; address per-class if a new gadget appears).
 - **`Error.prepareStackTrace = undefined`** or **`delete Error.prepareStackTrace`** -- triggers host fallback.
 - **`error.name = Symbol()` + `error.stack`** -- Error Generation Primitive targeting host formatter.
 - **`using` declaration inside `eval()`** -- SuppressedError + transformer bypass.
-- **Prototype chain walking** (`__lookupGetter__`, `Buffer.apply`) to obtain host `Array` constructor.
+- **Prototype chain walking** (`__lookupGetter__`, `Buffer.apply`) to obtain host `Array` constructor (now neutered by layer 2).
+- **`Promise.any` producing AggregateError** -- `.errors[]` now recursively sanitized.
 
 ---
 

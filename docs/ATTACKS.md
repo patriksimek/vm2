@@ -1584,6 +1584,62 @@ The fix preserves the native semantics for non-callable executors (`new Promise(
 
 ---
 
+## Attack Category 24: Unbounded `Buffer.alloc(N)` — Host Heap DoS
+
+### Description
+
+`Buffer.alloc(N)`, `Buffer.allocUnsafe(N)`, `Buffer.allocUnsafeSlow(N)`, and the deprecated `Buffer(N)` / `new Buffer(N)` forms all execute as a single synchronous host C++ allocation. V8's `timeout` mechanism is an interrupt watchdog that runs *between bytecodes*, so it cannot preempt a single native allocation that is already in flight. An attacker controlling the size argument can therefore amplify a small (≤ 200-byte) sandbox payload into a hundreds-of-megabyte host RSS jump in a single call, bypassing the configured `timeout` entirely. In memory-constrained environments (Docker memory limits, Kubernetes pods, AWS Lambda) this exceeds the container memory budget and triggers `FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory`, killing the host process. CVSS reported as High (DoS).
+
+### Attack Flow
+
+1. Attacker submits a small request that runs sandbox code containing `Buffer.alloc(LARGE_N)` (or any of its variants above).
+2. The sandbox-side `Buffer.alloc` is exposed by vm2 via the bridge; the call routes through `BaseHandler.apply` to host `Buffer.alloc`.
+3. Host `Buffer.alloc(LARGE_N)` runs synchronously in C++; V8's timeout cannot interrupt it.
+4. RSS jumps by `LARGE_N` bytes; if `LARGE_N` exceeds the container's available memory, the process OOMs.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-6785-pvv7-mvg7)
+new VM({ timeout: 5000 }).run(`Buffer.alloc(1024*1024*100).length`);
+// Returns 104857600. RSS jumps ~770 MB. timeout: 5000 has no effect — the
+// allocation completes in one synchronous C++ call.
+```
+
+### Why It Works
+
+vm2's primary DoS guard is the `timeout` option, which uses Node's `vm.runInContext` interrupt mechanism. That mechanism only fires between bytecodes, so any single host call that runs entirely in native code (allocation, regex matching with catastrophic backtracking, sync filesystem syscalls, etc.) bypasses it. The Buffer.alloc family is the most weaponizable example: small input, predictable amplification, deterministic crash on memory-constrained hosts.
+
+### Mitigation
+
+New `bufferAllocLimit` option on the `VM` (and inheriting `NodeVM`) constructor, default **32 MiB** (`32 * 1024 * 1024`). The option is plumbed from the host into `setup-sandbox.js` via the existing `data` channel and captured into a closure-scoped const so sandbox-side prototype pollution cannot mutate it. Every entry point to host Buffer allocation is wrapped:
+
+- `Buffer.alloc(size, fill, encoding)` — sandbox-side wrapper checks size, then delegates to the cached host allocator via `Reflect.apply`. Registered with `connect()` so the bridge surfaces this wrapper as the canonical sandbox `Buffer.alloc`.
+- `Buffer.allocUnsafe(size)` / `Buffer.allocUnsafeSlow(size)` — same pattern, defense-in-depth (also covered transitively because they delegate to the now-capped `Buffer.alloc`).
+- Deprecated `Buffer(N)` / `new Buffer(N)` — `BufferHandler.apply` / `construct` traps already special-case numeric first arg; the cap is added there too.
+
+Oversized requests throw `RangeError('Buffer allocation size N exceeds bufferAllocLimit M')` synchronously with no host allocation — RSS delta drops from hundreds of megabytes to ~2 MB (just the error object).
+
+The default 32 MiB is generous for legitimate workloads (image processing, JSON parsing, CSV transformation typically stay under 16 MiB per buffer) but tiny compared to typical container memory budgets (256 MB - 1 GB). Callers can tighten with `bufferAllocLimit: smaller_number` or opt out with `bufferAllocLimit: Infinity`.
+
+### Detection Rules
+
+- **`Buffer.alloc(N)` / `Buffer.allocUnsafe(N)` / `Buffer.allocUnsafeSlow(N)`** with attacker-controlled N inside sandbox code.
+- **`Buffer(N)` / `new Buffer(N)`** — deprecated forms still work and are equivalent.
+- **`Buffer.from(largeString)`** — partially capped via byteLength on the source string, but still a residual surface (see below).
+
+### Considered Attack Surfaces
+
+- **`new Uint8Array(N)`, `new ArrayBuffer(N)`, `new SharedArrayBuffer(N)` and other typed-array constructors**: same primitive class — synchronous native allocation by attacker-controlled size. **Not capped by this fix.** A determined attacker can substitute `new Uint8Array(100*1024*1024)` for `Buffer.alloc(100*1024*1024)` and reproduce the DoS. Closing this fully requires wrapping each TypedArray constructor (and `ArrayBuffer` / `SharedArrayBuffer`) — significantly more invasive (Proxy wrappers, `instanceof` preservation, `prototype.constructor` pinning to prevent constructor-walk recovery). Tracked for follow-up.
+- **`String.prototype.repeat(N)`**: produces a sandbox-realm string of size `len * N` bytes, similar primitive. Not capped here.
+- **`Buffer.from(largeArray)` / `Buffer.from(iterable)`**: bounded by source array size which had to be allocated through some other path first; iteration runs in JS-land and is interruptible by `timeout`. Lower priority.
+- **Repeated allocations under the cap** (e.g., 32 × `Buffer.alloc(32 MiB)`): an aggregate per-run budget would close this but would require tracking allocation totals across the bridge. Out of scope for the canonical advisory.
+- **WebAssembly `memory.grow`**: governed by wasm `maximum` declaration at instantiation; not currently wrapped.
+
+The fix closes the canonical reported DoS (Buffer.alloc family) and provides the mechanism (`bufferAllocLimit` option, `checkBufferAllocLimit` helper) that future fixes for typed-array constructors and `String.repeat` can reuse.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.

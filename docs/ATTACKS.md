@@ -1524,6 +1524,66 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 
 ---
 
+## Attack Category 23: Promise Executor Unhandled Rejection — Host Process DoS
+
+### Description
+
+Sandbox code constructs a `Promise` whose executor synchronously triggers a host-realm error. The canonical primitive is `e.name = Symbol(); e.stack` — V8's internal `FormatStackTrace` runs while it's still *inside* the executor and coerces the Symbol-named `name` to a string, throwing a host-realm `TypeError`. Because no `.catch()` is attached, the rejection propagates as an **unhandled rejection** to the host process. Node 15+ default behaviour terminates the process on any unhandled rejection. A single ~150-byte sandbox payload crashes the entire host service serving all users.
+
+`allowAsync: false` makes the situation *worse*: the sandbox-side `.catch` is blocked, so any rejection from the executor is *guaranteed* to be unhandled — there is no path for sandbox code to consume it.
+
+This is purely a denial-of-service primitive (no host code execution), but the impact is severe in production: under container orchestration with restart policies (Docker, Kubernetes, PM2), a repeating attacker request can crash the process faster than it can come back, creating a continuous service-unavailable loop.
+
+### Attack Flow
+
+1. Sandbox calls `new Promise(executor)`.
+2. Inside the executor, sandbox constructs an Error with a Symbol-named `.name` and accesses `.stack` — V8's stack formatter throws a host TypeError synchronously.
+3. The Promise constructor's spec-mandated executor try/catch catches the throw and sets the Promise to rejected with the raw host TypeError.
+4. No `.catch()` is attached.
+5. After microtask drain, host fires `unhandledRejection` with the raw host TypeError.
+6. Node 15+ default behaviour: terminate the host process.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-hw58-p9xv-2mjh)
+new VM({ allowAsync: false }).run(`
+  new Promise(function(r, j) {
+    var e = new Error();
+    e.name = Symbol();
+    e.stack;  // V8 stack formatter throws host TypeError here
+  });
+`);
+// Host process dies on next microtask tick.
+```
+
+### Why It Works
+
+The vm2 sandbox-side `globalPromise.prototype.then`/`catch` overrides do sanitise rejection callback values via `handleException`, but they only fire when sandbox code attaches a `.then`/`.catch`. The PoC attaches neither. The Promise's rejection path bypasses every sanitisation layer the sandbox has, lands directly in V8's microtask queue, and propagates to the host's `unhandledRejection` event with the original host-realm error.
+
+### Mitigation
+
+`localPromise` (the sandbox's Promise replacement, declared in `lib/setup-sandbox.js`) is given a constructor that does two things:
+
+1. **Wraps the user-supplied executor in try/catch.** Any synchronous throw — including V8-internal throws produced *inside* the executor by `FormatStackTrace` — is caught and routed through `handleException` (the existing SuppressedError/AggregateError-recursive sanitiser), then `reject`ed. A sandbox-side `.catch()` handler will see a sandbox-realm value rather than a raw host TypeError.
+2. **Attaches a benign swallow tail** (`then(undefined, noop)`) to every sandbox-constructed Promise. Even when no user `.catch()` is attached, this internal handler consumes the rejection so the host's `unhandledRejection` event never fires. The tail uses the cached host `then` (captured before vm2's `then` override is installed) to avoid recursing through the sandbox's own override; a re-entrancy flag (`localPromiseInSwallowTail`) prevents the species-protocol from constructing infinitely many swallow-wrapped Promises.
+
+The fix preserves the native semantics for non-callable executors (`new Promise(undefined)` still throws `TypeError` synchronously) and does not affect the resolved-path `.then(onFulfilled)` chain.
+
+### Detection Rules
+
+- **`new Promise((r, j) => { ... })`** with executor body that triggers V8-internal throws (Symbol-named errors, stack-trace formatting issues, recursive proxy traps).
+- **`allowAsync: false`** combined with any Promise construction — historically *more* dangerous because `.catch` was blocked, guaranteeing unhandled. Now both modes are equally safe.
+- Hostile patterns: `new Promise(() => { throw hostError; })`, `Promise.reject(hostError)` without `.catch()`, async function bodies that throw without try/catch.
+
+### Considered Attack Surfaces
+
+- **`async function() { throw e; }()` direct invocation**: this produces a rejecting Promise without going through `new Promise(executor)` — V8 implements async functions with internal Promise creation that may bypass the user-level constructor. **Residual risk**: an attacker who can write `async function() { throw hostError }()` in the sandbox without a `.catch()` may still produce a host-side unhandled rejection. The sandbox's transformer instruments `try/catch` blocks but not implicit async-function rejections. Considered an acceptable residual: the canonical reported DoS via `new Promise(executor)` is closed, and the async-function path requires the attacker to also produce a host-realm error inside the async body — which has the same prerequisites as the constructor case but a different bypass. Tracked for follow-up if exploited.
+- **`Promise.reject(hostError)` directly**: routes through `localPromise` (because `Promise.reject` delegates to `new this(...)`) and gains the swallow tail. Covered.
+- **Silent-failure trade-off**: sandbox developers can no longer use Node's host-side `unhandledRejection` log to surface their own debug rejections. They must explicitly attach `.catch()` for visibility. Acceptable trade-off given the DoS severity; documented for users.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.

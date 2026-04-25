@@ -1458,6 +1458,72 @@ The protected set is captured *before* any sandbox code runs, and is keyed on ra
 
 ---
 
+## Attack Category 21: NodeVM Builtin Allowlist Bypass via Host-Passthrough Builtins
+
+### Description
+
+NodeVM's `require.builtin` allowlist defends sandbox code from reaching dangerous Node modules (`child_process`, `fs`, etc.). The allowlist is enforced by `lib/builtin.js` — when sandbox code calls `require(name)`, the resolver consults the allowlist and only loads modules the user opted in to. **However**, several Node builtins themselves expose primitives whose primary capability is "reach host code regardless of the sandbox boundary". When such a builtin is on the allowlist (or, more commonly, included by the `'*'` wildcard), it becomes a single-line allowlist bypass:
+
+- `module` exposes `Module._load(name)`, `Module._resolveFilename`, `Module._cache`, `createRequire` — all of which load any host builtin or external module ignoring vm2's allowlist.
+- `worker_threads` exposes `new Worker(src, {eval: true})` — runs arbitrary JS in a fresh thread that has no vm2 sandbox at all.
+- `cluster` exposes `cluster.fork()` — spawns a host child process running attacker-controlled code.
+- `vm` exposes `vm.runInThisContext` — evaluates code directly in the host realm, bypassing every bridge proxy.
+- `repl` exposes `repl.start({eval, input, output})` — constructs an interactive evaluator attached to host streams.
+- `inspector` exposes the inspector protocol — attaches a debugger to the host process.
+
+### Attack Flow
+
+1. **Allowlist includes a host-passthrough builtin** (most commonly because the user wrote `builtin: ['*', '-child_process']` and `'*'` expanded to include `'module'`).
+2. **Sandbox calls `require('module')`**. NodeVM's resolver finds `'module'` in `BUILTIN_MODULES`, calls `addDefaultBuiltin` which loads it via `vm.readonly(hostRequire('module'))`. The `ReadOnlyHandler` proxy blocks mutation traps but *not* `apply`/`get` — calling methods on the proxy still forwards them to the host realm.
+3. **Sandbox calls `Module._load('child_process')`**. The bridge `apply` trap forwards to host `Module._load`, which loads `child_process` natively in the host with no vm2 check.
+4. **`child_process.execSync(...)`** → host RCE.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-947f-4v7f-x2v8)
+const vm = new NodeVM({
+  require: { builtin: ['*', '-child_process'], external: false }
+});
+vm.run(`
+  const Module = require('module');
+  const cp = Module._load('child_process');  // bypasses '-child_process' exclusion
+  module.exports = cp.execSync('id').toString();
+`, 'poc.js');
+```
+
+### Why It Works
+
+The user's mental model of `['*', '-child_process']` is "every builtin except `child_process`". That model assumes every builtin is either fully sandboxed or fully blocked — but `module` (and its peers above) are neither. They're *meta-builtins* that load other builtins by name. The generic `vm.readonly()` wrapper cannot make them safe because the sandbox-bypass primitive is the very thing the user is calling.
+
+### Mitigation
+
+Two-layer denylist enforcement in `lib/builtin.js`:
+
+1. **`DANGEROUS_BUILTINS` Set** at module load — `['module', 'worker_threads', 'cluster', 'vm', 'repl', 'inspector']`.
+2. **Filter from `BUILTIN_MODULES`** — closes the `'*'` wildcard expansion path. `'*'` will never auto-allow these names regardless of the user's exclusion list.
+3. **Reject in `addDefaultBuiltin`** — closes the explicit-allowlist path (`builtin: ['module']`) and the lower-level `makeBuiltins(['module'])` API used by custom resolvers. The `SPECIAL_MODULES` escape hatch is preserved: a future safe wrapper (e.g., a `module` shim that exposes only `builtinModules` metadata) can be registered there if a real consumer needs it.
+
+The fix does not affect the `mocks` / `overrides` escape hatches — users who genuinely need a stub for one of these names can register a sandbox-safe replacement.
+
+### Detection Rules
+
+- **`builtin: ['*']` or `['*', '-X']`** in NodeVM config — historically allowed `module`/`worker_threads`/`cluster`/`vm`/`repl`/`inspector`, now safely filtered.
+- **`require('module')._load(...)`** — the canonical bypass primitive.
+- **`new Worker(src, {eval:true})`** — out-of-band code execution.
+- **`cluster.fork()`** — host process spawn.
+- **`vm.runInThisContext(...)`** — host-realm `eval`.
+- **`repl.start({eval, ...})`** — host-realm REPL evaluator.
+- **`inspector.open()`** — debugger attachment to host process.
+
+### Considered Attack Surfaces
+
+- **`async_hooks`** exposes context tracing but not host-code-loading primitives. Allowed under `'*'`.
+- **`child_process`** is the canonical "user knows to exclude this" builtin — not on the auto-denylist because users may legitimately want it for trusted scripts. The `'*'` wildcard with no exclusion still allows it.
+- **`fs`** is allowed under `'*'` because file-system access can be a legitimate sandbox capability for many use cases (e.g., user-script template engines reading templates). Users who want filesystem isolation use `VMFileSystem` or exclude `fs` explicitly.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.

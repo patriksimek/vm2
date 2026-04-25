@@ -1403,6 +1403,61 @@ A fourth layer was added in GHSA-55hx-c926-fr95: the **bridge-level Promise-boun
 
 ---
 
+## Attack Category 20: Host Intrinsic Prototype Pollution via Bridge Write Traps
+
+### Description
+
+`BaseHandler.set` and `BaseHandler.defineProperty` historically forwarded every sandbox write directly into the wrapped host object via `otherReflectSet` / `otherReflectDefineProperty`. For ordinary host instances (a Buffer, a host-provided config object) this is intentional and correct — sandbox code should be able to mutate state the host explicitly handed it. For host-realm **intrinsic prototypes** (Object.prototype, Array.prototype, Function.prototype, Error.prototype, etc.) it is catastrophic: the mutation is globally observable to every host-side consumer of those prototypes, enabling prototype pollution that crosses the sandbox boundary in the most damaging direction. `deleteProperty` and `preventExtensions` had analogous gaps — sandbox code could `delete Object.prototype.hasOwnProperty` from the host realm, or freeze host prototypes to durably break unrelated host code.
+
+### Attack Flow
+
+1. **Reach a host intrinsic prototype.** Walk the prototype chain via `({}).__lookupGetter__('__proto__')` composed with `Buffer.apply`, ending at host `Object.prototype` (or `Array.prototype`, `Function.prototype`, etc.). Several earlier advisories (GHSA-grj5, GHSA-47x8, …) provided this walk; the same primitive lands here.
+2. **Write through the bridge.** With the bridge proxy wrapping host `Object.prototype` in hand, any of the following sandbox writes lands in the host realm:
+   - `hostProto.x = v` → `set` trap → `otherReflectSet(hostObjectPrototype, 'x', v)`.
+   - `Object.defineProperty(hostProto, 'x', {value: v})` → `defineProperty` trap → `otherReflectDefineProperty(...)`.
+   - `Reflect.set(hostProto, 'x', v)` / `Reflect.defineProperty(hostProto, ...)` — same traps.
+   - `delete hostProto.someProp` → `deleteProperty` trap → `otherReflectDeleteProperty(...)`.
+   - `Object.preventExtensions(hostProto)` → `preventExtensions` trap → host prototype frozen forever.
+3. **Observe pollution from host code.** Any host-side code that subsequently reads from objects of the affected class sees the attacker's value.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-vwrp-x96c-mhwq)
+const g = ({}).__lookupGetter__;
+const a = Buffer.apply;
+const p = a.apply(g, [Buffer, ['__proto__']]);
+const hostObjectProto = p.call(p.call(p.call(p.call(Buffer.of()))));
+hostObjectProto.vm2EscapeMarker = 'polluted-object-prototype';
+// Host-side: ({}).vm2EscapeMarker === 'polluted-object-prototype' — global pollution.
+```
+
+### Why It Works
+
+The bridge's design separated sandbox-realm reasoning from host-realm reasoning at the proxy boundary, but the four write traps (`set`, `defineProperty`, `deleteProperty`, `preventExtensions`) were unconditionally pass-through. Most host objects exposed to the sandbox are values the host *intends* to make mutable — so a blanket "no writes to host objects" rule would break legitimate API contracts. The actual invariant being violated is narrower: "host-realm objects whose state is observed by host code outside the sandbox must be read-only from the sandbox's perspective." Intrinsic prototypes are the canonical example of such objects.
+
+### Mitigation
+
+`createBridge()` builds a closure-scoped `WeakMap` of "protected host objects" at bridge init, populated with every entry in `otherGlobalPrototypes` (the cached intrinsic prototypes — Object, Array, Function, Error and subclasses, RegExp, Promise, Number/String/Boolean wrappers, Date, Map, Set, WeakMap, WeakSet, AsyncFunction, GeneratorFunction, AsyncGeneratorFunction, SuppressedError, AggregateError, VMError) plus each prototype's `.constructor` value (so the host `Object`/`Array`/`Function` constructors themselves are also protected). The four write traps in `BaseHandler` — `set`, `defineProperty`, `deleteProperty`, `preventExtensions` — now check `isProtectedHostObject(object)` before any `otherReflect*` mutation call and throw `VMError(OPNA)` on hit. The check fires only when `!isHost` (sandbox-originated writes); host-side embedder code writing to its own intrinsics through other paths is unaffected.
+
+The protected set is captured *before* any sandbox code runs, and is keyed on raw host-realm object identity — so prototype-pollution attempts that try to subvert the check itself (e.g., `Array.prototype.constructor = attackerFn`) fail because the WeakMap holds the original references.
+
+### Detection Rules
+
+- **`hostProto.x = v`** — direct assignment to a bridge proxy of an intrinsic prototype.
+- **`Object.defineProperty(hostProto, ...)`** / **`Reflect.defineProperty(...)`** — descriptor-based pollution.
+- **`Reflect.set(hostProto, k, v)`** — reflective assignment.
+- **`delete hostProto.x`** — sandbox-side property deletion on host intrinsic.
+- **`Object.assign(hostProto, src)`** — bulk pollution via host-side `[[Set]]` calls.
+- **`Object.preventExtensions(hostProto)`** / **`Object.freeze(hostProto)`** — durable host DoS.
+
+### Considered Attack Surfaces
+
+- **Non-intrinsic host objects** (Buffer instances, host-config objects, modules exposed via NodeVM externals) remain mutable from the sandbox. This is intentional — the host explicitly chose to expose them. The vulnerability class is specifically about *implicit* mutability of cross-cutting host invariants.
+- **Future Node intrinsics** (e.g., `Iterator.prototype`, `AsyncIterator.prototype`, `Temporal.*`) are not yet in `otherGlobalPrototypes`. Adding them to the cached list automatically extends protection. Tracked as a future-risk item — see "Future Risks" below.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.

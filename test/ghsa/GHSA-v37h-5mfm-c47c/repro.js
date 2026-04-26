@@ -49,6 +49,15 @@ const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
 // Shared prelude: harvest the BaseHandler instance `p` via util.inspect showProxy.
+//
+// IMPORTANT: prefer `p.getPrototypeOf(p)` over `Object.getPrototypeOf(p)`.
+// `Object.getPrototypeOf` goes through bridge sanitization and returns
+// a sandbox-side `Object.prototype` (whose `.constructor` is `Object`). The
+// proxy-method form `p.getPrototypeOf(p)` invokes the handler's own
+// `getPrototypeOf` trap, which returns the *real* `BaseHandler.prototype`
+// with `.set`/`.get`/`.constructor` as live host functions — that is the
+// path the latest advisory PoC takes. Tests using the sanitized form pass
+// for the wrong reason against an unfixed binary.
 const PRELUDE = `
 	const obj = {
 		subarray: Buffer.prototype.inspect,
@@ -61,7 +70,7 @@ const PRELUDE = `
 		return a;
 	}});
 	if (!p) throw new Error('PRELUDE_NO_HANDLER');
-	const pp = Object.getPrototypeOf(p); // BaseHandler.prototype
+	const pp = p.getPrototypeOf(p); // real BaseHandler.prototype (NOT sanitized)
 `;
 
 function runBlocked(label, body) {
@@ -306,7 +315,9 @@ describe('GHSA-v37h-5mfm-c47c (handler class reconstruction escape)', () => {
 						if (this.seen?.[1]?.get){p=this.seen[1];}
 						return a;
 					}});
-					const pp = Object.getPrototypeOf(p);
+					// Use the proxy-method form (NOT Object.getPrototypeOf) to match
+					// the verbatim advisory PoC and bypass bridge sanitization.
+					const pp = p.getPrototypeOf(p);
 					const s = {__proto__: null};
 					new pp.constructor(s).set(null, 'obj', s);
 					s.obj.x = obj.slice;

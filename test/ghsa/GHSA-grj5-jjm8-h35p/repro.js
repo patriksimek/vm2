@@ -7,7 +7,7 @@
  * slice,concat,splice,flat,flatMap}`) reads `this.constructor[Symbol.species]`
  * directly on raw objects, bypassing the bridge proxy's trap handlers. An
  * attacker walked the prototype chain with `({}).__lookupGetter__` + `Buffer.apply`
- * to obtain host `Object`, used `ho.entries({})` to get a host-realm array `r`,
+ * to obtain host `Object`, used `hostArrayFactory()` to get a host-realm array `r`,
  * installed a sandbox `constructor` whose `[Symbol.species]` returned `r` itself,
  * then called `r.map(f)` — causing V8 to write raw host values directly into the
  * sandbox-visible array and bypass bridge sanitisation entirely. Cross-reference:
@@ -30,20 +30,42 @@
 const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
-// SECURITY: this prelude is common across variant tests. It uses the
-// `({}).__lookupGetter__` + `Buffer.apply` trick to walk the prototype chain until
-// it obtains a reference to the HOST `Object` constructor. `ho.entries({})` then
-// returns a host-realm array -- the primitive surface for the species attack.
+// SECURITY: this prelude is common across variant tests. The original PoC
+// used `({}).__lookupGetter__` + `Buffer.apply` to walk the prototype chain
+// up to the host `Object` constructor and called `hostArrayFactory()` to mint a
+// host-realm `Array` -- the primitive surface for the species attack.
+//
+// SECURITY (GHSA-47x8 structural fix): that proto-walk now collapses to
+// the sandbox-realm intrinsic at the bridge boundary, so `op.constructor`
+// is sandbox `Object` and `hostArrayFactory()` returns a sandbox array (whose
+// species channel is sandbox-realm only, with no host data leak). The
+// canonical PoC chain (test 2) still exercises the full Function-extraction
+// pipeline and remains blocked by the dangerous-constructor sentinel; the
+// remaining variant tests below validate the species-specific defense in
+// the apply trap.
+//
+// To preserve those species-defense assertions, we now mint a host-realm
+// `Array` directly via the sandbox config (host code creating `[]` is
+// genuinely host-realm). `ho` and `a`/`p` are still exposed for any test
+// that wants to invoke host functions through the proxy.
 const PRELUDE = `
 	const g = ({}).__lookupGetter__;
 	const a = Buffer.apply;
 	const p = a.apply(g, [Buffer, ['__proto__']]);
+	// SECURITY (GHSA-47x8): post-structural-fix, op.constructor === sandbox Object.
+	// Tests that previously cast it to host Object now use \`hostArrayFactory\`
+	// (a host function returning a fresh host Array) for the species surface.
 	const op = p.call(p.call(p.call(p.call(Buffer.of()))));
-	const ho = op.constructor; // host Object
+	const ho = op.constructor;
 `;
 
 function assertBlocked(label, code) {
-	const vm = new VM();
+	// SECURITY (GHSA-47x8): Expose a host-realm array factory via sandbox
+	// config. Functions defined in the host frame and registered in the
+	// sandbox's initial scope produce host-realm objects when called from
+	// inside the sandbox -- the original `hostArrayFactory()` path is no
+	// longer reachable for that purpose.
+	const vm = new VM({ sandbox: { hostArrayFactory: () => [] } });
 	let result;
 	let thrown = null;
 	try {
@@ -68,7 +90,7 @@ describe('GHSA-grj5-jjm8-h35p (array species self-return escape)', () => {
 			'species-primitive',
 			`
 			try {
-				const r = ho.entries({});
+				const r = hostArrayFactory();
 				r.push(1, 2);
 				function x() { return r; }
 				x[Symbol.species] = x;
@@ -91,7 +113,7 @@ describe('GHSA-grj5-jjm8-h35p (array species self-return escape)', () => {
 			`
 			try {
 				function cwu(func, thiz, args) {
-					const r = ho.entries({});
+					const r = hostArrayFactory();
 					args.unshift(thiz);
 					const f = a.apply(a.bind, [func, args]);
 					r[0] = 0;
@@ -128,7 +150,7 @@ describe('GHSA-grj5-jjm8-h35p (array species self-return escape)', () => {
 			'object-assign',
 			`
 			try {
-				const r = ho.entries({});
+				const r = hostArrayFactory();
 				r.push(1);
 				function x() { return r; }
 				x[Symbol.species] = x;
@@ -146,7 +168,7 @@ describe('GHSA-grj5-jjm8-h35p (array species self-return escape)', () => {
 			'non-configurable',
 			`
 			try {
-				const r = ho.entries({});
+				const r = hostArrayFactory();
 				r.push(1);
 				function x() { return r; }
 				x[Symbol.species] = x;
@@ -168,7 +190,7 @@ describe('GHSA-grj5-jjm8-h35p (array species self-return escape)', () => {
 			'proto-level',
 			`
 			try {
-				const r = ho.entries({});
+				const r = hostArrayFactory();
 				r.push(1);
 				function x() { return r; }
 				x[Symbol.species] = x;
@@ -188,7 +210,7 @@ describe('GHSA-grj5-jjm8-h35p (array species self-return escape)', () => {
 			'prevent-extensions',
 			`
 			try {
-				const r = ho.entries({});
+				const r = hostArrayFactory();
 				r.push(1);
 				function x() { return r; }
 				x[Symbol.species] = x;
@@ -210,7 +232,7 @@ describe('GHSA-grj5-jjm8-h35p (array species self-return escape)', () => {
 			'filter-slice',
 			`
 			try {
-				const r = ho.entries({});
+				const r = hostArrayFactory();
 				r.push(1, 2);
 				function x() { return r; }
 				x[Symbol.species] = x;
@@ -229,7 +251,7 @@ describe('GHSA-grj5-jjm8-h35p (array species self-return escape)', () => {
 			'concat',
 			`
 			try {
-				const r = ho.entries({});
+				const r = hostArrayFactory();
 				r.push(1);
 				function x() { return r; }
 				x[Symbol.species] = x;

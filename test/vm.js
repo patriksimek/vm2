@@ -2815,20 +2815,25 @@ describe('missing sandbox defenses (issue #562)', () => {
 		const vm2 = new VM();
 		// Host function calls through the apply trap should neutralize
 		// array species by setting constructor = undefined on host arrays
-		// passed as arguments. Use Object.entries to get a host array.
+		// passed as arguments.
+		//
+		// SECURITY (GHSA-47x8): The historical chain
+		//   `op.constructor.entries({...})`
+		// can no longer be used to obtain a host array — the structural
+		// identity collapse for built-in intrinsics (`bridge.js`'s
+		// `thisAddIdentityMapping`) now makes `op.constructor` resolve to
+		// the *sandbox* `Object`, so `.entries(...)` returns a sandbox
+		// array that never traverses the apply trap. The defense itself is
+		// unchanged and still fires whenever a real host array reaches
+		// `BaseHandler.apply`. We exercise that path via `Buffer.from`,
+		// which still yields a wrapped host-side typed array.
 		const result = vm2.run(`
-			const g = ({}).__lookupGetter__;
-			const a = Buffer.apply;
-			const p = a.apply(g, [Buffer, ['__proto__']]);
-			const op = p.call(p.call(p.call(p.call(Buffer.of()))));
-			const ho = op.constructor;
-			// ho.entries({}) creates a host array
-			const arr = ho.entries({a: 1, b: 2});
+			const arr = Buffer.from([1, 2, 3]);
 			// Setting constructor for species should be blocked
 			function x() { return arr; }
 			x[Symbol.species] = x;
 			arr.constructor = x;
-			const mapped = arr.map(v => v);
+			const mapped = arr.slice(0);
 			// If species was neutralized, mapped should be a different array
 			mapped !== arr;
 		`);

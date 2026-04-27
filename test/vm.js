@@ -408,6 +408,46 @@ describe('contextify', () => {
 		assert.doesNotThrow(() => vm.run('(o) => o.arguments')({arguments: 1}));
 	});
 
+	it('cross-referenced object graph (issue #564)', () => {
+		// Regression test for #564: when a host library returns objects whose
+		// own properties cross-reference each other (e.g. DOM nodes pointing
+		// back to ownerDocument), bridge crossings must not walk the entire
+		// reachable object graph. The recursive scan in containsDangerousConstructor
+		// caused ~175x slowdown for these workloads. This test builds a graph of
+		// 1000 nodes where every node references every other node, and verifies
+		// it crosses the bridge in a reasonable time. Reference timings:
+		// shallow scan (fixed): ~10ms, recursive scan (regression): ~8000ms.
+		const NODE_COUNT = 1000;
+		const nodes = [];
+		for (let i = 0; i < NODE_COUNT; i++) {
+			nodes.push({id: i, label: 'node-' + i, payload: {kind: 'data', index: i}});
+		}
+		// Cross-reference: every node sees every other node (worst case for
+		// recursive scanning, easy case for shallow scanning).
+		for (let i = 0; i < NODE_COUNT; i++) {
+			nodes[i].siblings = nodes;
+			nodes[i].self = nodes[i];
+			nodes[i].first = nodes[0];
+			nodes[i].last = nodes[NODE_COUNT - 1];
+		}
+		const sandbox = {graph: nodes};
+		const localVm = new VM({sandbox});
+		const start = Date.now();
+		// Touch every node so each one crosses the bridge at least once.
+		const visited = localVm.run(`
+			let count = 0;
+			for (const n of graph) {
+				if (n.label && n.payload.kind === 'data') count++;
+			}
+			count;
+		`);
+		const elapsed = Date.now() - start;
+		assert.strictEqual(visited, NODE_COUNT);
+		// Generous bound — on a developer machine this completes in <100ms;
+		// the unfixed bug would push it to several seconds for this graph.
+		assert.ok(elapsed < 2000, `bridge crossing too slow: ${elapsed}ms (regression of #564)`);
+	});
+
 	after(() => {
 		vm = null;
 	});

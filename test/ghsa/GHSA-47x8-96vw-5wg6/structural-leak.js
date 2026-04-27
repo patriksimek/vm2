@@ -27,10 +27,9 @@
 'use strict';
 
 const assert = require('assert');
-const {VM} = require('../../../lib/main.js');
+const { VM } = require('../../../lib/main.js');
 
 describe('GHSA-47x8-96vw-5wg6 (structural leak: host Object reachable in sandbox)', function () {
-
 	it('proto-walk via __lookupGetter__ + Buffer.apply terminates at sandbox Object', function () {
 		const vm = new VM();
 		const result = vm.run(`
@@ -44,12 +43,17 @@ describe('GHSA-47x8-96vw-5wg6 (structural leak: host Object reachable in sandbox
 				ctorIsSandboxFunction: o.constructor.constructor === Function
 			});
 		`);
-		assert.strictEqual(result.oIsObjectProto, true,
-			'walked proto must be sandbox Object.prototype');
-		assert.strictEqual(result.ctorIsSandboxObject, true,
-			'host Object must NOT leak as a wrapped proxy: o.constructor !== sandbox Object');
-		assert.strictEqual(result.ctorIsSandboxFunction, true,
-			'host Function must NOT leak via Object.constructor.constructor');
+		assert.strictEqual(result.oIsObjectProto, true, 'walked proto must be sandbox Object.prototype');
+		assert.strictEqual(
+			result.ctorIsSandboxObject,
+			true,
+			'host Object must NOT leak as a wrapped proxy: o.constructor !== sandbox Object',
+		);
+		assert.strictEqual(
+			result.ctorIsSandboxFunction,
+			true,
+			'host Function must NOT leak via Object.constructor.constructor',
+		);
 	});
 
 	it('proto-walk to host Array.prototype terminates at sandbox Array', function () {
@@ -67,8 +71,7 @@ describe('GHSA-47x8-96vw-5wg6 (structural leak: host Object reachable in sandbox
 				ctorIsSandboxArray: ap === Array.prototype || ap.constructor === Array
 			});
 		`);
-		assert.strictEqual(result.ctorIsSandboxArray, true,
-			'host Array constructor must not leak as a wrapped proxy');
+		assert.strictEqual(result.ctorIsSandboxArray, true, 'host Array constructor must not leak as a wrapped proxy');
 	});
 
 	it('host Object.prototype.constructor returns sandbox Object', function () {
@@ -161,7 +164,6 @@ describe('GHSA-47x8-96vw-5wg6 (structural leak: host Object reachable in sandbox
 				}
 			})();
 		`);
-		assert.strictEqual(result.leaked, undefined,
-			'Function constructor must not produce a callable function');
+		assert.strictEqual(result.leaked, undefined, 'Function constructor must not produce a callable function');
 	});
 });

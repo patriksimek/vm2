@@ -599,6 +599,8 @@ Methods that are NOT vulnerable:
 
 All Promise static methods (`.all`, `.race`, `.any`, `.allSettled`, `.resolve`, `.reject`, `.try`, `.withResolvers`) are wrapped to always use `localPromise` as constructor, ignoring `this`. Species is reset unconditionally via `Reflect.defineProperty` (data property, not accessor) before every `.then()`/`.catch()`, eliminating TOCTOU. `globalPromise` and `globalPromise.prototype` are frozen. The `Reflect.construct` instanceof bypass is blocked because `resetPromiseSpecies` sets constructor on any object, not just `instanceof globalPromise`.
 
+A separate structural defense closes the **host-Promise rejection callback** class (GHSA-55hx-c926-fr95): when sandbox code calls `.then` / `.catch` / `.finally` on a host-realm Promise (returned from an embedder-exposed async function or a sync function that returns a host promise), the bridge `apply` trap on the sandbox side recognizes the host Promise method by identity (cached references to `otherGlobalPrototypes.Promise.{then,catch,finally}`) and wraps every supplied callback with a sandbox-realm closure that runs `handleException` (rejection) or `ensureThis` (fulfillment) on its argument before invoking the user callback. This routes raw host rejection values through the same recursive sanitizer used for sandbox-realm promises, restoring the invariant that **no callback the sandbox supplies to a Promise -- regardless of which realm the Promise was constructed in -- ever sees an unsanitized argument**.
+
 ### Detection Rules
 
 - **Override of `Function.prototype.call`**, `.apply`, or `.bind` -- intercepting internal method dispatch.
@@ -611,6 +613,7 @@ All Promise static methods (`.all`, `.race`, `.any`, `.allSettled`, `.resolve`, 
 - **`FakeConstructor.all = Promise.all`** (or `.race`, `.any`, `.allSettled`, `.resolve`, `.try`) -- stealing Promise static methods.
 - **`Reflect.construct(Promise, [...], FakeNewTarget)`** -- creates real Promise with `FakeNewTarget.prototype`, bypassing `instanceof` checks.
 - **Async functions that deliberately trigger errors** during string conversion or property access.
+- **Embedder-exposed `async () => {}` host function** chained with `.finally(() => /* throw */).catch(handler)` -- now intercepted at the bridge `apply` trap with callback sanitization.
 
 ---
 
@@ -1170,7 +1173,11 @@ Note: `Error.cause` is a related concern -- it can carry host references -- but 
 
 ### Mitigation
 
-`handleException` (catch-block sanitizer) detects `SuppressedError` instances by prototype check and recursively sanitizes `.error` and `.suppressed` properties via `ensureThis`. `SuppressedError` is also added to `errorsList` in `bridge.js`. Depth limit of 16 prevents infinite recursion from circular chains.
+Three layers, structurally:
+
+1. **`handleException` recursion**: detects `SuppressedError` / `AggregateError` instances by prototype check and recursively sanitizes `.error` / `.suppressed` / `.errors[]` via `ensureThis`. `SuppressedError` is also added to `errorsList` in `bridge.js`. Cycle detection via WeakMap prevents infinite recursion.
+2. **Sandbox-side `Promise.prototype.then` / `.catch` overrides** route every callback through `handleException` for sandbox-realm promises (lines 199-228 of `setup-sandbox.js`).
+3. **Bridge-level host-Promise interception** (GHSA-55hx supplementary fix): when sandbox code invokes a host-realm `Promise.prototype.then` / `.catch` / `.finally` (for example, via an embedder-exposed `async () => {}` whose returned promise is host-realm), the bridge `apply` trap recognizes the call (identity check against cached `otherGlobalPrototypes.Promise` methods) and wraps each sandbox-supplied callback with a sanitizing closure that pipes its argument through `handleException` (rejection) or `ensureThis` (fulfillment) before the user code runs. This closes the structural class where host machinery (PromiseReactionJob / PromiseResolveThenableJob) schedules sandbox callbacks against raw host rejection values, bypassing the sandbox-side override entirely. Setup is one-shot via `bridge.setHostPromiseSanitizers(handleException, ensureThis)` from `setup-sandbox.js`.
 
 ### Detection Rules
 
@@ -1179,6 +1186,7 @@ Note: `Error.cause` is a related concern -- it can carry host references -- but 
 - **`await using` declarations** -- triggers `Symbol.asyncDispose`.
 - **`e.suppressed.constructor`** or **`e.error.constructor`** in catch blocks.
 - **`SuppressedError`** combined with `e.name = Symbol()`.
+- **Host-realm async function exposed via `{sandbox: {f: async () => {}}}`** chained with `.finally` / `.catch` to deliver SuppressedError -- now sanitized at the bridge boundary.
 
 ---
 
@@ -1381,12 +1389,12 @@ Three-layer defense:
 2. **Prototype-walked host `Array` constructor replaced with sandbox `Array`** (GHSA-grj5-jjm8-h35p fix, commit `7352f11`). The bridge proxy's `get` trap for `.constructor` on host arrays now returns the cached sandbox `Array`, so `ho.entries({}).constructor` resolves to sandbox `Array`. `ha.fromAsync(...)` is therefore sandbox `Array.fromAsync` returning a sandbox Promise — routing through the existing sandbox `.then`/`.catch` overrides with `handleException`. This is the primary, load-bearing closure for the canonical PoC.
 3. **`handleException` recurses into `AggregateError.errors[]`** (GHSA-55hx-c926-fr95 supplementary fix). Mirrors the existing `SuppressedError.error` / `.suppressed` recursion. Closes a small gap where a `Promise.any` rejection delivers an `AggregateError` whose `.errors[i]` is a host-realm error; prior to this fix, only the `AggregateError` itself was sanitized, not its element array.
 
-A bridge-level Promise-boundary sanitizer (intercepting host `Promise.prototype.then/catch` in the bridge apply trap) was considered but deliberately not shipped for this class — the canonical PoC is closed by layer 2, and the underlying Promise-boundary invariant is better addressed in GHSA-mpf8-4hx2-7cjg (host-deliberate-exposure case) rather than as speculative defense-in-depth here.
+A fourth layer was added in GHSA-55hx-c926-fr95: the **bridge-level Promise-boundary sanitizer**. The bridge `apply` trap recognizes calls to host `Promise.prototype.{then,catch,finally}` by identity (cached at bridge construction time) and wraps every sandbox-supplied callback with a sanitizing closure that pipes its argument through `handleException` (rejection) or `ensureThis` (fulfillment) before invoking the user callback. This closes the structural class where an embedder exposes a host async function (e.g. `{sandbox: {f: async () => {}}}`) and sandbox code chains `.then` / `.catch` / `.finally` on its returned host-realm promise -- the host PromiseReactionJob would otherwise schedule the sandbox callback against a raw host SuppressedError whose `.error.constructor.constructor` is host `Function`. See Category 16 for full details.
 
 ### Detection Rules
 
 - **`Array.fromAsync`** called on a host `Array` constructor (now neutered by layer 2 — walking to host `Array` returns sandbox `Array`).
-- **Host promise `.catch()`** or `.then()` -- callbacks receive unsanitized values (residual risk; address per-class if a new gadget appears).
+- **Host promise `.catch()`** or `.then()` -- callbacks now sanitized at the bridge boundary via the GHSA-55hx supplementary fix.
 - **`Error.prepareStackTrace = undefined`** or **`delete Error.prepareStackTrace`** -- triggers host fallback.
 - **`error.name = Symbol()` + `error.stack`** -- Error Generation Primitive targeting host formatter.
 - **`using` declaration inside `eval()`** -- SuppressedError + transformer bypass.

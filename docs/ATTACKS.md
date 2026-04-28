@@ -1612,7 +1612,7 @@ vm2's primary DoS guard is the `timeout` option, which uses Node's `vm.runInCont
 
 ### Mitigation
 
-New `bufferAllocLimit` option on the `VM` (and inheriting `NodeVM`) constructor, default **32 MiB** (`32 * 1024 * 1024`). The option is plumbed from the host into `setup-sandbox.js` via the existing `data` channel and captured into a closure-scoped const so sandbox-side prototype pollution cannot mutate it. Every entry point to host Buffer allocation is wrapped:
+New `bufferAllocLimit` option on the `VM` (and inheriting `NodeVM`) constructor, default **`Infinity`** (no cap, preserves prior behaviour for non-breaking semver). Callers who care about the DoS class opt in with a finite byte count (e.g. `bufferAllocLimit: 32 * 1024 * 1024`). The option is plumbed from the host into `setup-sandbox.js` via the existing `data` channel and captured into a closure-scoped const so sandbox-side prototype pollution cannot mutate it. Every entry point to host Buffer allocation is wrapped:
 
 - `Buffer.alloc(size, fill, encoding)` — sandbox-side wrapper checks size, then delegates to the cached host allocator via `Reflect.apply`. Registered with `connect()` so the bridge surfaces this wrapper as the canonical sandbox `Buffer.alloc`.
 - `Buffer.allocUnsafe(size)` / `Buffer.allocUnsafeSlow(size)` — same pattern, defense-in-depth (also covered transitively because they delegate to the now-capped `Buffer.alloc`).
@@ -1620,7 +1620,7 @@ New `bufferAllocLimit` option on the `VM` (and inheriting `NodeVM`) constructor,
 
 Oversized requests throw `RangeError('Buffer allocation size N exceeds bufferAllocLimit M')` synchronously with no host allocation — RSS delta drops from hundreds of megabytes to ~2 MB (just the error object).
 
-The default 32 MiB is generous for legitimate workloads (image processing, JSON parsing, CSV transformation typically stay under 16 MiB per buffer) but tiny compared to typical container memory budgets (256 MB - 1 GB). Callers can tighten with `bufferAllocLimit: smaller_number` or opt out with `bufferAllocLimit: Infinity`.
+The default `Infinity` keeps 3.10.6 fully backwards-compatible — no existing workload encounters a new `RangeError`. Callers who care about the DoS class set `bufferAllocLimit` to a finite number; 32 MiB is a reasonable starting point (generous for legitimate workloads such as image processing, JSON parsing, CSV transformation, which typically stay under 16 MiB per buffer, but tiny compared to typical container memory budgets of 256 MB – 1 GB). A future major release may flip the default to a finite value.
 
 ### Detection Rules
 

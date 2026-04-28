@@ -48,15 +48,20 @@ function condit(name, fn) {
 	if (HARVEST_REACHABLE) {
 		it(name, fn);
 	} else {
-		it.skip(name + ' [skipped: Node ' + NODE_VERSION + ' lacks optional chaining (Node <14) or blocks the harvest at Buffer.prototype.inspect (Node >=24)]', fn);
+		it.skip(
+			name +
+				' [skipped: Node ' +
+				NODE_VERSION +
+				' lacks optional chaining (Node <14) or blocks the harvest at Buffer.prototype.inspect (Node >=24)]',
+			fn,
+		);
 	}
 }
 
 describe('GHSA-v37h-5mfm-c47c — leak harvest history (PoCs #1–6)', function () {
-
 	condit('PoC #1 (objectWrapper write-back): host process.pid not extractable', function () {
-		const hostMark = {pid: null, err: null};
-		const vm = new VM({sandbox: {hostMark}});
+		const hostMark = { pid: null, err: null };
+		const vm = new VM({ sandbox: { hostMark } });
 		vm.run(`
 			const obj = {
 				subarray: Buffer.prototype.inspect,
@@ -72,13 +77,16 @@ describe('GHSA-v37h-5mfm-c47c — leak harvest history (PoCs #1–6)', function 
 				hostMark.pid = obj.l.x.constructor('return process.pid')();
 			} catch (e) { hostMark.err = e.message; }
 		`);
-		assert.strictEqual(hostMark.pid, null,
-			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid);
+		assert.strictEqual(
+			hostMark.pid,
+			null,
+			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid,
+		);
 	});
 
 	condit('PoC #2 (fromOtherWithContext): host process.pid not extractable', function () {
-		const hostMark = {pid: null, err: null};
-		const vm = new VM({sandbox: {hostMark}});
+		const hostMark = { pid: null, err: null };
+		const vm = new VM({ sandbox: { hostMark } });
 		vm.run(`
 			const obj = {
 				subarray: Buffer.prototype.inspect,
@@ -94,13 +102,16 @@ describe('GHSA-v37h-5mfm-c47c — leak harvest history (PoCs #1–6)', function 
 				hostMark.pid = f.constructor('return process.pid')();
 			} catch (e) { hostMark.err = e.message; }
 		`);
-		assert.strictEqual(hostMark.pid, null,
-			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid);
+		assert.strictEqual(
+			hostMark.pid,
+			null,
+			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid,
+		);
 	});
 
 	condit('PoC #3 (doPreventExtensions): host process.pid not extractable', function () {
-		const hostMark = {pid: null, err: null};
-		const vm = new VM({sandbox: {hostMark}});
+		const hostMark = { pid: null, err: null };
+		const vm = new VM({ sandbox: { hostMark } });
 		vm.run(`
 			const obj = {
 				subarray: Buffer.prototype.inspect,
@@ -122,13 +133,16 @@ describe('GHSA-v37h-5mfm-c47c — leak harvest history (PoCs #1–6)', function 
 				hostMark.pid = f.x.x.constructor('return process.pid')();
 			} catch (e) { hostMark.err = e.message; }
 		`);
-		assert.strictEqual(hostMark.pid, null,
-			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid);
+		assert.strictEqual(
+			hostMark.pid,
+			null,
+			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid,
+		);
 	});
 
 	condit('PoC #4 (getFactory): host process.pid not extractable', function () {
-		const hostMark = {pid: null, err: null};
-		const vm = new VM({sandbox: {hostMark}});
+		const hostMark = { pid: null, err: null };
+		const vm = new VM({ sandbox: { hostMark } });
 		vm.run(`
 			const obj = {
 				subarray: Buffer.prototype.inspect,
@@ -146,13 +160,16 @@ describe('GHSA-v37h-5mfm-c47c — leak harvest history (PoCs #1–6)', function 
 				hostMark.pid = f.x.constructor('return process.pid')();
 			} catch (e) { hostMark.err = e.message; }
 		`);
-		assert.strictEqual(hostMark.pid, null,
-			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid);
+		assert.strictEqual(
+			hostMark.pid,
+			null,
+			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid,
+		);
 	});
 
 	condit('PoC #5 (direct .get): host process.pid not extractable', function () {
-		const hostMark = {pid: null, err: null};
-		const vm = new VM({sandbox: {hostMark}});
+		const hostMark = { pid: null, err: null };
+		const vm = new VM({ sandbox: { hostMark } });
 		vm.run(`
 			const obj = {
 				subarray: Buffer.prototype.inspect,
@@ -168,13 +185,16 @@ describe('GHSA-v37h-5mfm-c47c — leak harvest history (PoCs #1–6)', function 
 				hostMark.pid = f('return process.pid')();
 			} catch (e) { hostMark.err = e.message; }
 		`);
-		assert.strictEqual(hostMark.pid, null,
-			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid);
+		assert.strictEqual(
+			hostMark.pid,
+			null,
+			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid,
+		);
 	});
 
 	condit('PoC #6 (reduce/bind chain): host process.pid not extractable', function () {
-		const hostMark = {pid: null, err: null};
-		const vm = new VM({sandbox: {hostMark}});
+		const hostMark = { pid: null, err: null };
+		const vm = new VM({ sandbox: { hostMark } });
 		vm.run(`
 			const g = ({}).__lookupGetter__;
 			const a = Buffer.apply;
@@ -198,7 +218,10 @@ describe('GHSA-v37h-5mfm-c47c — leak harvest history (PoCs #1–6)', function 
 				hostMark.pid = b.reduce(a.apply(a.bind, [a, [a]]), f.get)();
 			} catch (e) { hostMark.err = e.message; }
 		`);
-		assert.strictEqual(hostMark.pid, null,
-			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid);
+		assert.strictEqual(
+			hostMark.pid,
+			null,
+			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid,
+		);
 	});
 });

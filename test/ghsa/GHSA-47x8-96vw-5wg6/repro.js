@@ -45,6 +45,16 @@
 const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
+const NODE_MAJOR = parseInt(process.versions.node.split('.')[0], 10);
+// Some PoC bodies use Array.prototype.at(), which only landed in Node 16.6+.
+// On older Nodes the call throws TypeError before the security check runs,
+// producing a false-positive "test failure". Gate them.
+const HAS_ARRAY_AT = NODE_MAJOR >= 16;
+
+if (typeof it.cond !== 'function') {
+	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+}
+
 // Host-side sentinel: a successful RCE escape sets this key on `global`.
 // A 300ms tick gives Node's microtask + promise-rejection-unhandled-logging
 // paths time to invoke the host-side util.inspect formatter if it is going to.
@@ -323,7 +333,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 	// ---- Usage-path (B*) bypass variants -----------------------------------------
 
 	// B1: plain assignment `obj[sym] = fn` must not install the host symbol as a key.
-	it('B1 - keyed assignment with extracted symbol becomes string "undefined"', function () {
+	it.cond('B1 - keyed assignment with extracted symbol becomes string "undefined"', HAS_ARRAY_AT, function () {
 		const result = safeRun(`
 			const g = {}.__lookupGetter__;
 			const a = Buffer.apply;
@@ -346,7 +356,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 	});
 
 	// B2: defineProperty with an extracted symbol also must not install it.
-	it('B2 - defineProperty with extracted symbol cannot install dangerous symbol key', function () {
+	it.cond('B2 - defineProperty with extracted symbol cannot install dangerous symbol key', HAS_ARRAY_AT, function () {
 		const result = safeRun(`
 			const g = {}.__lookupGetter__;
 			const a = Buffer.apply;
@@ -366,7 +376,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 	});
 
 	// B3: computed key in an object literal `{[sym]: fn}`.
-	it('B3 - object literal computed key with extracted symbol cannot install', function () {
+	it.cond('B3 - object literal computed key with extracted symbol cannot install', HAS_ARRAY_AT, function () {
 		const result = safeRun(`
 			const g = {}.__lookupGetter__;
 			const a = Buffer.apply;
@@ -385,7 +395,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 	});
 
 	// B4: Reflect.set with an extracted symbol.
-	it('B4 - Reflect.set with extracted symbol cannot install dangerous key', function () {
+	it.cond('B4 - Reflect.set with extracted symbol cannot install dangerous key', HAS_ARRAY_AT, function () {
 		const result = safeRun(`
 			const g = {}.__lookupGetter__;
 			const a = Buffer.apply;

@@ -46,14 +46,19 @@ const HAS_FROM_ASYNC = typeof Array.fromAsync === 'function';
 // regression file is loaded standalone (mocha file-order is undefined), fall
 // back to a local shim so the cond gating still works.
 if (typeof it.cond !== 'function') {
-	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+	it.cond = function (name, cond, fn) {
+		return cond ? it(name, fn) : it.skip(name, fn);
+	};
 }
 
 describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', function () {
 	// ---- Pre-existing defense (a6cd917): SuppressedError recursion -------------
 
-	it.cond('blocks DisposableStack variant: F is sandbox Function, process unreachable', HAS_DISPOSABLE_STACK, function () {
-		const r = new VM().run(`
+	it.cond(
+		'blocks DisposableStack variant: F is sandbox Function, process unreachable',
+		HAS_DISPOSABLE_STACK,
+		function () {
+			const r = new VM().run(`
 			const ds = new DisposableStack();
 			ds.defer(() => { throw null; });
 			ds.defer(() => {
@@ -71,8 +76,9 @@ describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', 
 			}
 			out;
 		`);
-		assert.ok(r.startsWith('blocked:'), 'Expected escape to be blocked, got: ' + r);
-	});
+			assert.ok(r.startsWith('blocked:'), 'Expected escape to be blocked, got: ' + r);
+		},
+	);
 
 	it('blocks using+eval variant', function () {
 		const r = new VM().run(`

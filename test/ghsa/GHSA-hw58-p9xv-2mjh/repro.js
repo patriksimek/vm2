@@ -58,33 +58,39 @@ const NODE_MAJOR = parseInt(process.versions.node.split('.')[0], 10);
 const HW58_RUNS = NODE_MAJOR >= 12;
 
 if (typeof it.cond !== 'function') {
-	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+	it.cond = function (name, cond, fn) {
+		return cond ? it(name, fn) : it.skip(name, fn);
+	};
 }
 
 describe('GHSA-hw58-p9xv-2mjh (Promise executor unhandled rejection DoS)', function () {
-	it.cond('canonical PoC: Symbol-named Error stack throw inside executor produces no host unhandled rejection', HW58_RUNS, function (done) {
-		const captured = [];
-		function handler(reason) {
-			captured.push(reason);
-		}
-		process.on('unhandledRejection', handler);
-		new VM({ timeout: 5000, allowAsync: false }).run(`
+	it.cond(
+		'canonical PoC: Symbol-named Error stack throw inside executor produces no host unhandled rejection',
+		HW58_RUNS,
+		function (done) {
+			const captured = [];
+			function handler(reason) {
+				captured.push(reason);
+			}
+			process.on('unhandledRejection', handler);
+			new VM({ timeout: 5000, allowAsync: false }).run(`
 			new Promise(function(r, j) {
 				var e = new Error();
 				e.name = Symbol();
 				e.stack;
 			});
 		`);
-		setImmediate(function () {
-			process.removeListener('unhandledRejection', handler);
-			assert.strictEqual(
-				captured.length,
-				0,
-				'host should not see unhandled rejection; got: ' + (captured[0] && captured[0].message),
-			);
-			done();
-		});
-	});
+			setImmediate(function () {
+				process.removeListener('unhandledRejection', handler);
+				assert.strictEqual(
+					captured.length,
+					0,
+					'host should not see unhandled rejection; got: ' + (captured[0] && captured[0].message),
+				);
+				done();
+			});
+		},
+	);
 
 	it.cond('plain executor throw is also swallowed', HW58_RUNS, function (done) {
 		const captured = [];

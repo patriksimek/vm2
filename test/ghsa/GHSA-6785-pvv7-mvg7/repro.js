@@ -31,7 +31,9 @@ const NODE_MAJOR = parseInt(process.versions.node.split('.')[0], 10);
 const LARGE_ALLOC_RUNS = NODE_MAJOR >= 12;
 
 if (typeof it.cond !== 'function') {
-	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+	it.cond = function (name, cond, fn) {
+		return cond ? it(name, fn) : it.skip(name, fn);
+	};
 }
 
 describe('GHSA-6785-pvv7-mvg7 (Buffer.alloc DoS)', function () {
@@ -72,12 +74,16 @@ describe('GHSA-6785-pvv7-mvg7 (Buffer.alloc DoS)', function () {
 		}, /Buffer allocation size \d+ exceeds bufferAllocLimit/);
 	});
 
-	it.cond('default is permissive (Infinity): large allocations are allowed without an explicit cap', LARGE_ALLOC_RUNS, function () {
-		this.timeout(10000);
-		// Sanity: with no option, sandbox can allocate above what would have been the old default cap.
-		const r = new VM().run('Buffer.alloc(64 * 1024 * 1024).length');
-		assert.strictEqual(r, 64 * 1024 * 1024);
-	});
+	it.cond(
+		'default is permissive (Infinity): large allocations are allowed without an explicit cap',
+		LARGE_ALLOC_RUNS,
+		function () {
+			this.timeout(10000);
+			// Sanity: with no option, sandbox can allocate above what would have been the old default cap.
+			const r = new VM().run('Buffer.alloc(64 * 1024 * 1024).length');
+			assert.strictEqual(r, 64 * 1024 * 1024);
+		},
+	);
 
 	it('legitimate small Buffer.alloc still works', function () {
 		const r = new VM().run('Buffer.alloc(1024).length');

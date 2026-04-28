@@ -46,7 +46,9 @@ const NODE_MAJOR = parseInt(process.versions.node.split('.')[0], 10);
 const V27G_RUNS = NODE_MAJOR >= 14;
 
 if (typeof it.cond !== 'function') {
-	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+	it.cond = function (name, cond, fn) {
+		return cond ? it(name, fn) : it.skip(name, fn);
+	};
 }
 
 describe('GHSA-v27g-jcqj-v8rw (CallSite path leak via prepareStackTrace)', function () {

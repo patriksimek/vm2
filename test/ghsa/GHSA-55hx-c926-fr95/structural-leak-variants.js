@@ -23,6 +23,17 @@
 const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
+const NODE_MAJOR = parseInt(process.versions.node.split('.')[0], 10);
+// v4's Promise.any path with a deliberately-rejecting host async function
+// produces unhandledRejection events on Node 12 that bleed into later tests
+// in the suite. Node 14+ has stable Promise rejection handling for this
+// pattern. Gate v4 on Node ≥ 14.
+const PROMISE_ANY_STABLE = NODE_MAJOR >= 14;
+
+if (typeof it.cond !== 'function') {
+	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+}
+
 function escapeAttempt(setupAndPayload, sandbox = {}) {
 	const sentinelKey = '__GHSA_55HX_PWNED_' + Math.random().toString(36).slice(2);
 	global[sentinelKey] = false;
@@ -122,7 +133,7 @@ describe('GHSA-55hx-c926-fr95 (structural-leak variant attack patterns)', functi
 			'v3: await on a host promise inside a sandbox async function must sanitize');
 	});
 
-	it('v4: AggregateError contributing entry that is itself host-tainted', async function () {
+	it.cond('v4: AggregateError contributing entry that is itself host-tainted', PROMISE_ANY_STABLE, async function () {
 		const escaped = await escapeAttempt(`
 			Promise.any([
 				f().finally(() => {

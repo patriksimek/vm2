@@ -7,18 +7,22 @@ global.describe = (name, fn) => {
 	// flattens it — each describe gets its own group in the order they appear.
 	const previous = currentGroup;
 	const qualifiedName = previous ? previous.name + ' › ' + name : name;
-	const group = currentGroup = {
+	const group = (currentGroup = {
 		name: qualifiedName,
 		tests: [],
 		before: null,
 		after: null,
 		timeoutMs: 2000,
-	};
+	});
 	stack.push(group);
 	// Mocha exposes `this.timeout(ms)` inside describe/it bodies. We honour
 	// the value (clamped against an internal default) but do not enforce
 	// real timeouts in the legacy runner.
-	fn.call({timeout(ms) { group.timeoutMs = ms; }});
+	fn.call({
+		timeout(ms) {
+			group.timeoutMs = ms;
+		},
+	});
 	currentGroup = previous;
 };
 global.it = (name, fn) => {
@@ -132,7 +136,11 @@ function next() {
 
 	// Mocha exposes `this.timeout(ms)` inside it() callbacks too. Provide a
 	// stub so tests don't blow up; we don't enforce real timeouts here.
-	const ctx = {timeout(ms) { currentTest.timeoutMs = ms; }};
+	const ctx = {
+		timeout(ms) {
+			currentTest.timeoutMs = ms;
+		},
+	};
 	try {
 		if (currentGroup.beforeEach) {
 			for (let i = 0; i < currentGroup.beforeEach.length; i++) {

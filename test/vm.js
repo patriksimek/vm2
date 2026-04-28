@@ -1379,7 +1379,7 @@ describe('VM', () => {
 			const op = p.call(fp);
 			const ho = op.constructor;
 			ho.getOwnPropertyDescriptor(fp,'constructor').value('return process')().mainModule.require('child_process').execSync('echo ESCAPED');
-		`), /not a function|Cannot read properties/);
+		`), /not a function|Cannot read propert(y|ies)/);
 	});
 
 	it('getOwnPropertyDescriptor Function extraction via Object.entries attack', () => {

@@ -45,14 +45,15 @@ const HAS_DISPOSABLE_STACK = typeof DisposableStack === 'function';
 const HAS_FROM_ASYNC = typeof Array.fromAsync === 'function';
 
 if (typeof it.cond !== 'function') {
-	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+	it.cond = function (name, cond, fn) {
+		return cond ? it(name, fn) : it.skip(name, fn);
+	};
 }
 
 describe('GHSA-grj5-jjm8-h35p — regression from GHSA-55hx-c926-fr95', function () {
-
 	it.cond('DisposableStack PoC: host process.pid not extractable', HAS_DISPOSABLE_STACK, function () {
-		const hostMark = {pid: null, err: null};
-		const vm = new VM({sandbox: {hostMark}});
+		const hostMark = { pid: null, err: null };
+		const vm = new VM({ sandbox: { hostMark } });
 		vm.run(`
 			const ds = new DisposableStack();
 			ds.defer(() => { throw null; });
@@ -69,13 +70,16 @@ describe('GHSA-grj5-jjm8-h35p — regression from GHSA-55hx-c926-fr95', function
 				} catch (ex) { hostMark.err = ex.message; }
 			}
 		`);
-		assert.strictEqual(hostMark.pid, null,
-			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid);
+		assert.strictEqual(
+			hostMark.pid,
+			null,
+			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid,
+		);
 	});
 
 	it('using+eval PoC: host process.pid not extractable', function () {
-		const hostMark = {pid: null, err: null};
-		const vm = new VM({sandbox: {hostMark}});
+		const hostMark = { pid: null, err: null };
+		const vm = new VM({ sandbox: { hostMark } });
 		vm.run(`
 			obj = {[Symbol.dispose]() {
 				const e = new Error();
@@ -90,15 +94,21 @@ describe('GHSA-grj5-jjm8-h35p — regression from GHSA-55hx-c926-fr95', function
 				} catch (ex) { hostMark.err = ex.message; }
 			}
 		`);
-		assert.strictEqual(hostMark.pid, null,
-			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid);
+		assert.strictEqual(
+			hostMark.pid,
+			null,
+			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid,
+		);
 	});
 
-	it.cond('fromAsync chain (load-bearing for GHSA-grj5): host process.pid not extractable', HAS_FROM_ASYNC, function () {
-		return new Promise(function (resolve) {
-			const hostMark = {pid: null, err: null};
-			const vm = new VM({sandbox: {hostMark}});
-			vm.run(`
+	it.cond(
+		'fromAsync chain (load-bearing for GHSA-grj5): host process.pid not extractable',
+		HAS_FROM_ASYNC,
+		function () {
+			return new Promise(function (resolve) {
+				const hostMark = { pid: null, err: null };
+				const vm = new VM({ sandbox: { hostMark } });
+				vm.run(`
 				const g = ({}).__lookupGetter__;
 				const a = Buffer.apply;
 				const p = a.apply(g, [Buffer, ['__proto__']]);
@@ -119,13 +129,17 @@ describe('GHSA-grj5-jjm8-h35p — regression from GHSA-55hx-c926-fr95', function
 					} catch (ex) { hostMark.err = ex.message; }
 				});
 			`);
-			setTimeout(function () {
-				assert.strictEqual(hostMark.pid, null,
-					'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid);
-				resolve();
-			}, 250);
-		});
-	});
+				setTimeout(function () {
+					assert.strictEqual(
+						hostMark.pid,
+						null,
+						'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid,
+					);
+					resolve();
+				}, 250);
+			});
+		},
+	);
 
 	it('ha === Array probe: prototype walk lands on sandbox Array (class E invariant)', function () {
 		const r = new VM().run(`

@@ -130,19 +130,22 @@ function next() {
 		process.nextTick(next);
 	};
 
+	// Mocha exposes `this.timeout(ms)` inside it() callbacks too. Provide a
+	// stub so tests don't blow up; we don't enforce real timeouts here.
+	const ctx = {timeout(ms) { currentTest.timeoutMs = ms; }};
 	try {
 		if (currentGroup.beforeEach) {
 			for (let i = 0; i < currentGroup.beforeEach.length; i++) {
-				currentGroup.beforeEach[i]();
+				currentGroup.beforeEach[i].call(ctx);
 			}
 		}
 		if (currentTest.fn.length) {
 			// Async test
-			currentTest.fn(error => {
+			currentTest.fn.call(ctx, error => {
 				if (!error && currentGroup.afterEach) {
 					try {
 						for (let i = 0; i < currentGroup.afterEach.length; i++) {
-							currentGroup.afterEach[i]();
+							currentGroup.afterEach[i].call(ctx);
 						}
 					} catch (e) {
 						return testCompleted(e);
@@ -152,10 +155,10 @@ function next() {
 			});
 		} else {
 			// Sync test
-			currentTest.fn();
+			currentTest.fn.call(ctx);
 			if (currentGroup.afterEach) {
 				for (let i = 0; i < currentGroup.afterEach.length; i++) {
-					currentGroup.afterEach[i]();
+					currentGroup.afterEach[i].call(ctx);
 				}
 			}
 			testCompleted();

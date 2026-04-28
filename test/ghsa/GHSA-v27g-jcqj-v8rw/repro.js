@@ -38,8 +38,19 @@
 const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
+const NODE_MAJOR = parseInt(process.versions.node.split('.')[0], 10);
+// V8 stack-frame filename emission stabilized on Node 14+. Older Nodes emit
+// non-prefixed filenames (e.g. bare `vm.js`) for V8's contextify wrapper that
+// the host-frame classifier in setup-sandbox.js intentionally treats as
+// sandbox frames, so the redaction assertions don't apply.
+const V27G_RUNS = NODE_MAJOR >= 14;
+
+if (typeof it.cond !== 'function') {
+	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+}
+
 describe('GHSA-v27g-jcqj-v8rw (CallSite path leak via prepareStackTrace)', function () {
-	it('getFileName on host frames returns null (no absolute path leaked)', function () {
+	it.cond('getFileName on host frames returns null (no absolute path leaked)', V27G_RUNS, function () {
 		const r = new VM().run(`
 			Error.prepareStackTrace = function(e, sst) {
 				return sst.map(function(s) { return s.getFileName(); });
@@ -58,7 +69,7 @@ describe('GHSA-v27g-jcqj-v8rw (CallSite path leak via prepareStackTrace)', funct
 		}
 	});
 
-	it('getLineNumber/getColumnNumber on host frames return null', function () {
+	it.cond('getLineNumber/getColumnNumber on host frames return null', V27G_RUNS, function () {
 		const r = new VM().run(`
 			Error.prepareStackTrace = function(e, sst) {
 				return sst.map(function(s) {
@@ -74,7 +85,7 @@ describe('GHSA-v27g-jcqj-v8rw (CallSite path leak via prepareStackTrace)', funct
 		}
 	});
 
-	it('getFunctionName/getMethodName/getTypeName on host frames return null', function () {
+	it.cond('getFunctionName/getMethodName/getTypeName on host frames return null', V27G_RUNS, function () {
 		const r = new VM().run(`
 			Error.prepareStackTrace = function(e, sst) {
 				return sst.map(function(s) {

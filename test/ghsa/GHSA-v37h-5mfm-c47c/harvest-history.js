@@ -39,13 +39,16 @@ const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
 const NODE_VERSION = parseInt(process.versions.node.split('.')[0], 10);
-const HARVEST_REACHABLE = NODE_VERSION <= 22;
+// PoC bodies use optional chaining (`?.`) inside vm.run scripts, which the
+// V8 parser only accepts on Node 14+. Node 24+ tightens argument validation
+// on Buffer.prototype.inspect so the harvest never fires regardless of fix.
+const HARVEST_REACHABLE = NODE_VERSION >= 14 && NODE_VERSION <= 22;
 
 function condit(name, fn) {
 	if (HARVEST_REACHABLE) {
 		it(name, fn);
 	} else {
-		it.skip(name + ' [skipped: Node ' + NODE_VERSION + ' blocks the harvest at Buffer.prototype.inspect]', fn);
+		it.skip(name + ' [skipped: Node ' + NODE_VERSION + ' lacks optional chaining (Node <14) or blocks the harvest at Buffer.prototype.inspect (Node >=24)]', fn);
 	}
 }
 

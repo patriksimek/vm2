@@ -38,10 +38,21 @@
 const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
+const HAS_DISPOSABLE_STACK = typeof DisposableStack === 'function';
+const HAS_SUPPRESSED_ERROR = typeof SuppressedError === 'function';
+const HAS_FROM_ASYNC = typeof Array.fromAsync === 'function';
+
+// it.cond is set up by test/vm.js when the main suite runs first; if the GHSA
+// regression file is loaded standalone (mocha file-order is undefined), fall
+// back to a local shim so the cond gating still works.
+if (typeof it.cond !== 'function') {
+	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+}
+
 describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', function () {
 	// ---- Pre-existing defense (a6cd917): SuppressedError recursion -------------
 
-	it('blocks DisposableStack variant: F is sandbox Function, process unreachable', function () {
+	it.cond('blocks DisposableStack variant: F is sandbox Function, process unreachable', HAS_DISPOSABLE_STACK, function () {
 		const r = new VM().run(`
 			const ds = new DisposableStack();
 			ds.defer(() => { throw null; });
@@ -101,7 +112,7 @@ describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', 
 		assert.strictEqual(r, true, 'class E trap expected to force ha === sandbox Array');
 	});
 
-	it('(transitive, class E) terminal fromAsync PoC cannot reach host Function', function () {
+	it.cond('(transitive, class E) terminal fromAsync PoC cannot reach host Function', HAS_FROM_ASYNC, function () {
 		return new Promise(function (resolve) {
 			const vm = new VM();
 			vm.run(`
@@ -140,7 +151,7 @@ describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', 
 
 	// ---- Minimal supplementary fix in THIS commit: AggregateError.errors[] -----
 
-	it('handleException recurses into AggregateError.errors[] entries', function () {
+	it.cond('handleException recurses into AggregateError.errors[] entries', HAS_SUPPRESSED_ERROR, function () {
 		return new Promise(function (resolve) {
 			const vm = new VM();
 			// A SuppressedError whose .error is Symbol-named would historically

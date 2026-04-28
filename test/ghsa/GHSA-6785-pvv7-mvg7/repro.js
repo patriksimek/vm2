@@ -25,6 +25,15 @@
 const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
+const NODE_MAJOR = parseInt(process.versions.node.split('.')[0], 10);
+// Tests that allocate real ≥64 MB buffers crash older Node runtimes whose
+// default heap is tighter; gate them to Node 12+.
+const LARGE_ALLOC_RUNS = NODE_MAJOR >= 12;
+
+if (typeof it.cond !== 'function') {
+	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+}
+
 describe('GHSA-6785-pvv7-mvg7 (Buffer.alloc DoS)', function () {
 	const CAP = 32 * 1024 * 1024;
 
@@ -63,7 +72,7 @@ describe('GHSA-6785-pvv7-mvg7 (Buffer.alloc DoS)', function () {
 		}, /Buffer allocation size \d+ exceeds bufferAllocLimit/);
 	});
 
-	it('default is permissive (Infinity): large allocations are allowed without an explicit cap', function () {
+	it.cond('default is permissive (Infinity): large allocations are allowed without an explicit cap', LARGE_ALLOC_RUNS, function () {
 		this.timeout(10000);
 		// Sanity: with no option, sandbox can allocate above what would have been the old default cap.
 		const r = new VM().run('Buffer.alloc(64 * 1024 * 1024).length');
@@ -87,13 +96,13 @@ describe('GHSA-6785-pvv7-mvg7 (Buffer.alloc DoS)', function () {
 		}, /Buffer allocation size 2048 exceeds bufferAllocLimit 1024/);
 	});
 
-	it('bufferAllocLimit option is configurable (16 MB cap allows 8 MB)', function () {
+	it.cond('bufferAllocLimit option is configurable (16 MB cap allows 8 MB)', LARGE_ALLOC_RUNS, function () {
 		this.timeout(10000);
 		const r = new VM({ bufferAllocLimit: 16 * 1024 * 1024 }).run('Buffer.alloc(8 * 1024 * 1024).length');
 		assert.strictEqual(r, 8 * 1024 * 1024);
 	});
 
-	it('bufferAllocLimit: Infinity disables the cap', function () {
+	it.cond('bufferAllocLimit: Infinity disables the cap', LARGE_ALLOC_RUNS, function () {
 		this.timeout(10000);
 		// Use a small (but > default cap) size to avoid actually allocating
 		// hundreds of MB during the test run.

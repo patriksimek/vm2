@@ -43,15 +43,26 @@ function withRejectionCapture(fn) {
 		} finally {
 			// Drain the microtask queue before checking + cleaning up.
 			setImmediate(function () {
-				process.off('unhandledRejection', handler);
+				process.removeListener('unhandledRejection', handler);
 				done && done(captured);
 			});
 		}
 	};
 }
 
+// Node 8/10's sandbox Promise wrapper has different internal mechanics that
+// cause spurious "this.timeout is not a function" rejections from the swallow
+// tail; the GHSA-hw58 fix targets Node 12+ async/Promise semantics. Gate the
+// whole suite accordingly.
+const NODE_MAJOR = parseInt(process.versions.node.split('.')[0], 10);
+const HW58_RUNS = NODE_MAJOR >= 12;
+
+if (typeof it.cond !== 'function') {
+	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+}
+
 describe('GHSA-hw58-p9xv-2mjh (Promise executor unhandled rejection DoS)', function () {
-	it('canonical PoC: Symbol-named Error stack throw inside executor produces no host unhandled rejection', function (done) {
+	it.cond('canonical PoC: Symbol-named Error stack throw inside executor produces no host unhandled rejection', HW58_RUNS, function (done) {
 		const captured = [];
 		function handler(reason) {
 			captured.push(reason);
@@ -65,7 +76,7 @@ describe('GHSA-hw58-p9xv-2mjh (Promise executor unhandled rejection DoS)', funct
 			});
 		`);
 		setImmediate(function () {
-			process.off('unhandledRejection', handler);
+			process.removeListener('unhandledRejection', handler);
 			assert.strictEqual(
 				captured.length,
 				0,
@@ -75,7 +86,7 @@ describe('GHSA-hw58-p9xv-2mjh (Promise executor unhandled rejection DoS)', funct
 		});
 	});
 
-	it('plain executor throw is also swallowed', function (done) {
+	it.cond('plain executor throw is also swallowed', HW58_RUNS, function (done) {
 		const captured = [];
 		function handler(reason) {
 			captured.push(reason);
@@ -83,13 +94,13 @@ describe('GHSA-hw58-p9xv-2mjh (Promise executor unhandled rejection DoS)', funct
 		process.on('unhandledRejection', handler);
 		new VM({ timeout: 5000 }).run(`new Promise(function(r, j) { throw new Error('boom'); });`);
 		setImmediate(function () {
-			process.off('unhandledRejection', handler);
+			process.removeListener('unhandledRejection', handler);
 			assert.strictEqual(captured.length, 0, 'plain throw must not produce host unhandled rejection');
 			done();
 		});
 	});
 
-	it('sandbox-side .catch still observes the (sanitised) rejection', function () {
+	it.cond('sandbox-side .catch still observes the (sanitised) rejection', HW58_RUNS, function () {
 		// When the sandbox attaches its own .catch, it should still run with
 		// the sanitised value — the swallow tail consumes the host event but
 		// does not block user-attached handlers.

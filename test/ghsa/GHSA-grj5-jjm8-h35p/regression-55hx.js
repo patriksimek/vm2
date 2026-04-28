@@ -41,9 +41,16 @@
 const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
+const HAS_DISPOSABLE_STACK = typeof DisposableStack === 'function';
+const HAS_FROM_ASYNC = typeof Array.fromAsync === 'function';
+
+if (typeof it.cond !== 'function') {
+	it.cond = function (name, cond, fn) { return cond ? it(name, fn) : it.skip(name, fn); };
+}
+
 describe('GHSA-grj5-jjm8-h35p — regression from GHSA-55hx-c926-fr95', function () {
 
-	it('@R31K4G3 DisposableStack PoC: host process.pid not extractable', function () {
+	it.cond('DisposableStack PoC: host process.pid not extractable', HAS_DISPOSABLE_STACK, function () {
 		const hostMark = {pid: null, err: null};
 		const vm = new VM({sandbox: {hostMark}});
 		vm.run(`
@@ -87,7 +94,7 @@ describe('GHSA-grj5-jjm8-h35p — regression from GHSA-55hx-c926-fr95', function
 			'host process.pid was extracted: hostMark.pid=' + hostMark.pid + ', host pid=' + process.pid);
 	});
 
-	it('fromAsync chain (load-bearing for GHSA-grj5): host process.pid not extractable', function () {
+	it.cond('fromAsync chain (load-bearing for GHSA-grj5): host process.pid not extractable', HAS_FROM_ASYNC, function () {
 		return new Promise(function (resolve) {
 			const hostMark = {pid: null, err: null};
 			const vm = new VM({sandbox: {hostMark}});

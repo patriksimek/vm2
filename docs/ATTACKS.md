@@ -1524,7 +1524,7 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 
 ---
 
-## Attack Category 23: Promise Executor Unhandled Rejection — Host Process DoS
+## Attack Category 22: Promise Executor Unhandled Rejection — Host Process DoS
 
 ### Description
 
@@ -1584,7 +1584,7 @@ The fix preserves the native semantics for non-callable executors (`new Promise(
 
 ---
 
-## Attack Category 24: Unbounded `Buffer.alloc(N)` — Host Heap DoS
+## Attack Category 23: Unbounded `Buffer.alloc(N)` — Host Heap DoS
 
 ### Description
 

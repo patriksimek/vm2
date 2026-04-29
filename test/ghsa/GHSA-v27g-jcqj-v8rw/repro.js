@@ -24,15 +24,15 @@
  * default `vm.js`, or VMScript filenames without separators) are still
  * exposed so sandbox developers can debug their own code.
  *
- * NOTE: this fix covers the programmatic `prepareStackTrace`-based path
- * (the report's "Path B"). The default `error.stack` string emitted by V8
- * when `Error.prepareStackTrace` is `undefined` still includes host paths;
- * a sandbox default formatter that closes that path was attempted but
- * regressed SuppressedError handling (V8 calls prepareStackTrace during
- * SuppressedError construction, and the custom default interfered with
- * `.error` / `.suppressed` propagation). Closing Path A is tracked as a
- * follow-up that requires careful coexistence with the existing exception
- * sanitisation layer.
+ * Hardening (post-validation): two follow-ups landed alongside this advisory.
+ *  - Path A residual closed: the sandbox now installs
+ *    `defaultSandboxPrepareStackTrace` as the initial value for
+ *    `Error.prepareStackTrace`, so V8 never falls through to Node's host
+ *    formatter (which leaks absolute host paths and throws on
+ *    Symbol-named errors).
+ *  - `getEvalOrigin()` now redacts unconditionally (not just for host
+ *    frames). Sandbox eval frames previously leaked an embedded host
+ *    path inside the eval-origin string ("eval at FUNC (HOSTPATH:L:C)").
  */
 
 const assert = require('assert');
@@ -116,5 +116,57 @@ describe('GHSA-v27g-jcqj-v8rw (CallSite path leak via prepareStackTrace)', funct
 			r.length > 0 && !/^\//.test(r) && !/^node:/.test(r),
 			'sandbox frame filename should be exposed; got: ' + r,
 		);
+	});
+
+	// SECURITY (post-GHSA-v27g hardening): getEvalOrigin returns a string of
+	// the form "eval at FUNC (FILENAME:LINE:COL)" whose embedded FILENAME
+	// may be a host path. Frame-level host classification doesn't inspect
+	// the nested path, so sandbox eval frames leaked host paths via this
+	// getter. Now redacted unconditionally.
+	it.cond('getEvalOrigin returns null on every frame (no embedded host path leaks)', V27G_RUNS, function () {
+		const r = new VM().run(`
+			Error.prepareStackTrace = function(e, sst) {
+				return sst.map(function(s) { return s.getEvalOrigin(); });
+			};
+			eval('new Error().stack');
+		`);
+		assert.ok(Array.isArray(r), 'expected array, got: ' + typeof r);
+		for (let i = 0; i < r.length; i++) {
+			assert.strictEqual(
+				r[i],
+				null,
+				'frame ' + i + ' leaked eval origin (may contain host path): ' + r[i],
+			);
+		}
+	});
+
+	// SECURITY (post-GHSA-v27g Path A residual closed): when sandbox code
+	// reads error.stack WITHOUT first assigning to Error.prepareStackTrace,
+	// V8 used to fall back to Node's host formatter — which emits absolute
+	// host paths and (worse) throws host-realm TypeError on Symbol-named
+	// errors. The sandbox now installs defaultSandboxPrepareStackTrace at
+	// init so the default formatter is always sandbox-realm.
+	it('default error.stack does not leak absolute host paths', function () {
+		const stack = new VM().run(`
+			(function(){ try { null.x; } catch(e) { return e.stack; } })()
+		`);
+		assert.strictEqual(typeof stack, 'string');
+		assert.ok(
+			!/\/Users\//.test(stack) && !/\/home\//.test(stack) && !/node:/.test(stack),
+			'default error.stack leaked host path: ' + stack,
+		);
+	});
+
+	it('Symbol-named error reads safely (host formatter never invoked)', function () {
+		// Pre-fix: e.name = Symbol() + e.stack triggers V8 fallback to host
+		// formatter, which throws "Cannot convert a Symbol value to a string"
+		// in host realm. Confirms Path A default formatter handles Symbol names.
+		assert.doesNotThrow(function () {
+			new VM().run(`
+				var e = new Error('x');
+				e.name = Symbol('s');
+				e.stack;
+			`);
+		});
 	});
 });

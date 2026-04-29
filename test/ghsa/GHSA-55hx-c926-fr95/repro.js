@@ -58,6 +58,12 @@ describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', 
 		'blocks DisposableStack variant: F is sandbox Function, process unreachable',
 		HAS_DISPOSABLE_STACK,
 		function () {
+			// Post-Path-A: e.stack on a Symbol-named Error no longer throws a
+			// host TypeError (the safe sandbox formatter handles Symbol names),
+			// so the SuppressedError-wrapping precondition for this attack
+			// chain may not fire. The fundamental assertion ("no escape to
+			// host process") is robust to either outcome — sanitised
+			// SuppressedError, or no SuppressedError at all.
 			const r = new VM().run(`
 			const ds = new DisposableStack();
 			ds.defer(() => { throw null; });
@@ -68,11 +74,17 @@ describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', 
 			});
 			let out = 'no-catch';
 			try { ds.dispose(); } catch (e) {
-				const F = e.suppressed && e.suppressed.constructor && e.suppressed.constructor.constructor;
-				try {
-					const p = F('return process;')();
-					out = 'ESCAPED typeof=' + typeof p + ' pid=' + (p && p.pid);
-				} catch (err) { out = 'blocked:' + err.message; }
+				if (e == null) { out = 'blocked:precondition-closed'; }
+				else {
+					const F = e.suppressed && e.suppressed.constructor && e.suppressed.constructor.constructor;
+					if (typeof F !== 'function') { out = 'blocked:no-suppressed-chain'; }
+					else {
+						try {
+							const p = F('return process;')();
+							out = 'ESCAPED typeof=' + typeof p + ' pid=' + (p && p.pid);
+						} catch (err) { out = 'blocked:' + err.message; }
+					}
+				}
 			}
 			out;
 		`);
@@ -81,6 +93,7 @@ describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', 
 	);
 
 	it('blocks using+eval variant', function () {
+		// Same post-Path-A consideration as DisposableStack variant above.
 		const r = new VM().run(`
 			obj = {[Symbol.dispose]() {
 				const e = new Error();
@@ -91,11 +104,17 @@ describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', 
 			try {
 				eval("{using a = obj; throw null;}");
 			} catch (e) {
-				const F = e.error && e.error.constructor && e.error.constructor.constructor;
-				try {
-					const p = F('return process;')();
-					out = 'ESCAPED typeof=' + typeof p + ' pid=' + (p && p.pid);
-				} catch (err) { out = 'blocked:' + err.message; }
+				if (e == null) { out = 'blocked:precondition-closed'; }
+				else {
+					const F = e.error && e.error.constructor && e.error.constructor.constructor;
+					if (typeof F !== 'function') { out = 'blocked:no-error-chain'; }
+					else {
+						try {
+							const p = F('return process;')();
+							out = 'ESCAPED typeof=' + typeof p + ' pid=' + (p && p.pid);
+						} catch (err) { out = 'blocked:' + err.message; }
+					}
+				}
 			}
 			out;
 		`);

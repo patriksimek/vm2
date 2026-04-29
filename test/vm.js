@@ -1758,23 +1758,35 @@ describe('VM', () => {
 		// If the error is not sanitized, e.constructor.constructor would be the
 		// host's Function which can access 'process'. If sanitized, it's the
 		// sandbox's Function where 'process' is not defined.
-		await assert.rejects(() => vm2.run(`
-			new Promise((resolve, reject) => {
+		//
+		// Post-Path-A note: the safe sandbox default formatter no longer
+		// throws on Symbol-named Errors, so `error.stack` no longer rejects
+		// the async function. The attack chain can no longer be reached via
+		// this primitive — the test now resolves with a status string and
+		// asserts the chain didn't escape, regardless of which path closed.
+		const r = await vm2.run(`
+			new Promise((resolve) => {
 				const error = new Error();
 				error.name = Symbol();
 				const f = async () => error.stack;
+				let settled = false;
 				f().catch(e => {
+					settled = true;
 					try {
 						const Error = e.constructor;
 						const Function = Error.constructor;
 						const p = Function('return process')();
-						resolve(p);
+						resolve('ESCAPED:' + (p && typeof p.pid));
 					} catch (err) {
-						reject(err);
+						resolve('blocked:' + (err && err.message));
 					}
+				}).then(() => {
+					if (!settled) resolve('blocked:precondition-closed');
 				});
 			});
-		`), /process is not defined/);
+		`);
+		assert.ok(typeof r === 'string' && r.startsWith('blocked:'),
+			'Expected escape to be blocked, got: ' + r);
 	});
 
 	it('Symbol.for dangerous Node.js symbols isolation', () => {
@@ -2538,6 +2550,16 @@ describe('VM', () => {
 		}, 100);
 	});
 
+	// Post-Path-A note (GHSA-v27g hardening): the SuppressedError-wrapping
+	// precondition for these attacks was a host TypeError thrown by `e.stack`
+	// on a Symbol-named Error. With the safe sandbox default formatter
+	// installed at init, that host TypeError no longer fires — only the
+	// `throw null` propagates, so `catch(e)` receives null and reading
+	// `e.suppressed` / `e.error` itself throws. The defense is upgraded
+	// (precondition closed); the outer assertion accepts either
+	// `process is not defined` (chain ran, host Function blocked) or
+	// `properties of null` (precondition closed).
+	const SUPPRESSED_ERROR_BLOCKED = /process is not defined|properties of null/;
 	it.cond('SuppressedError escape via DisposableStack', typeof DisposableStack === 'function', () => {
 		const vm2 = new VM();
 		// DisposableStack.dispose() wraps multiple errors in SuppressedError.
@@ -2559,7 +2581,7 @@ describe('VM', () => {
 				const process = new F('return process;')();
 				process.exit(1);
 			}
-		`), /process is not defined/);
+		`), SUPPRESSED_ERROR_BLOCKED);
 	});
 
 	it.cond('SuppressedError escape via using declaration', typeof DisposableStack === 'function', () => {
@@ -2578,7 +2600,7 @@ describe('VM', () => {
 			} catch(e) {
 				e.error.constructor.constructor("return process")().mainModule.require("child_process").execSync("echo ESCAPED");
 			}
-		`), /process is not defined/);
+		`), SUPPRESSED_ERROR_BLOCKED);
 	});
 
 	it.cond('SuppressedError escape via AsyncDisposableStack', typeof AsyncDisposableStack === 'function', async () => {
@@ -2601,7 +2623,7 @@ describe('VM', () => {
 					return process.version;
 				}
 			})()
-		`), /process is not defined/);
+		`), SUPPRESSED_ERROR_BLOCKED);
 	});
 
 	it.cond('SuppressedError escape via async rejection path', typeof DisposableStack === 'function', (done) => {

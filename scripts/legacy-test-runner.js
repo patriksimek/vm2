@@ -122,7 +122,10 @@ function next() {
 	}
 
 	const testCompleted = error => {
-		if (error) {
+		if (error === SKIP_SENTINEL) {
+			console.log('    - ' + currentTest.name);
+			counterPending++;
+		} else if (error) {
 			console.log('    ✘ ' + currentTest.name);
 			hasError = true;
 			counterFailed++;
@@ -136,9 +139,16 @@ function next() {
 
 	// Mocha exposes `this.timeout(ms)` inside it() callbacks too. Provide a
 	// stub so tests don't blow up; we don't enforce real timeouts here.
+	// Mocha exposes `this.skip()` inside it() callbacks for runtime-conditional
+	// skipping. Throw a sentinel that we recognize as "skip" rather than a
+	// real failure.
+	const SKIP_SENTINEL = {};
 	const ctx = {
 		timeout(ms) {
 			currentTest.timeoutMs = ms;
+		},
+		skip() {
+			throw SKIP_SENTINEL;
 		},
 	};
 	try {
@@ -148,7 +158,7 @@ function next() {
 			}
 		}
 		if (currentTest.fn.length) {
-			// Async test
+			// Async test (done-callback style)
 			currentTest.fn.call(ctx, error => {
 				if (!error && currentGroup.afterEach) {
 					try {
@@ -162,14 +172,33 @@ function next() {
 				testCompleted(error);
 			});
 		} else {
-			// Sync test
-			currentTest.fn.call(ctx);
-			if (currentGroup.afterEach) {
-				for (let i = 0; i < currentGroup.afterEach.length; i++) {
-					currentGroup.afterEach[i].call(ctx);
+			// Sync test or Promise-returning async test
+			const ret = currentTest.fn.call(ctx);
+			if (ret && typeof ret.then === 'function') {
+				// Promise-returning test (e.g. async function ()).
+				ret.then(
+					() => {
+						if (currentGroup.afterEach) {
+							try {
+								for (let i = 0; i < currentGroup.afterEach.length; i++) {
+									currentGroup.afterEach[i].call(ctx);
+								}
+							} catch (e) {
+								return testCompleted(e);
+							}
+						}
+						testCompleted();
+					},
+					err => testCompleted(err),
+				);
+			} else {
+				if (currentGroup.afterEach) {
+					for (let i = 0; i < currentGroup.afterEach.length; i++) {
+						currentGroup.afterEach[i].call(ctx);
+					}
 				}
+				testCompleted();
 			}
-			testCompleted();
 		}
 	} catch (error) {
 		testCompleted(error);

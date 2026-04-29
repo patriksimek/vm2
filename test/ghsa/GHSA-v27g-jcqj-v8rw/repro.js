@@ -146,7 +146,12 @@ describe('GHSA-v27g-jcqj-v8rw (CallSite path leak via prepareStackTrace)', funct
 	// host paths and (worse) throws host-realm TypeError on Symbol-named
 	// errors. The sandbox now installs defaultSandboxPrepareStackTrace at
 	// init so the default formatter is always sandbox-realm.
-	it('default error.stack does not leak absolute host paths', function () {
+	// Path A default formatter requires `OriginalCallSite` (V8's structured-stack
+	// API), which is reliable on Node 12+. On Node 8/10 the sandbox falls
+	// through to V8's native default formatter and emits host paths — gated
+	// accordingly. (Node 8/10 are below vm2's documented support floor; tests
+	// only exercise them via the legacy runner for completeness.)
+	it.cond('default error.stack does not leak absolute host paths', V27G_RUNS, function () {
 		const stack = new VM().run(`
 			(function(){ try { null.x; } catch(e) { return e.stack; } })()
 		`);

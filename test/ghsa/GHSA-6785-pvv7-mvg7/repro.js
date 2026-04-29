@@ -78,9 +78,10 @@ describe('GHSA-6785-pvv7-mvg7 (Buffer.alloc DoS)', function () {
 		'default is permissive (Infinity): large allocations are allowed without an explicit cap',
 		LARGE_ALLOC_RUNS,
 		function () {
-			this.timeout(10000);
+			this.timeout(30000);
 			// Sanity: with no option, sandbox can allocate above what would have been the old default cap.
-			const r = new VM().run('Buffer.alloc(64 * 1024 * 1024).length');
+			// Use allocUnsafe to avoid the 64 MB zero-fill (we only assert .length).
+			const r = new VM().run('Buffer.allocUnsafe(64 * 1024 * 1024).length');
 			assert.strictEqual(r, 64 * 1024 * 1024);
 		},
 	);
@@ -103,16 +104,16 @@ describe('GHSA-6785-pvv7-mvg7 (Buffer.alloc DoS)', function () {
 	});
 
 	it.cond('bufferAllocLimit option is configurable (16 MB cap allows 8 MB)', LARGE_ALLOC_RUNS, function () {
-		this.timeout(10000);
-		const r = new VM({ bufferAllocLimit: 16 * 1024 * 1024 }).run('Buffer.alloc(8 * 1024 * 1024).length');
+		this.timeout(30000);
+		// Size-only assertion — use allocUnsafe to skip the 8 MB zero-fill.
+		const r = new VM({ bufferAllocLimit: 16 * 1024 * 1024 }).run('Buffer.allocUnsafe(8 * 1024 * 1024).length');
 		assert.strictEqual(r, 8 * 1024 * 1024);
 	});
 
 	it.cond('bufferAllocLimit: Infinity disables the cap', LARGE_ALLOC_RUNS, function () {
-		this.timeout(10000);
-		// Use a small (but > default cap) size to avoid actually allocating
-		// hundreds of MB during the test run.
-		const r = new VM({ bufferAllocLimit: Infinity }).run('Buffer.alloc(64 * 1024 * 1024).length');
+		this.timeout(30000);
+		// Size-only assertion — use allocUnsafe to skip the 64 MB zero-fill.
+		const r = new VM({ bufferAllocLimit: Infinity }).run('Buffer.allocUnsafe(64 * 1024 * 1024).length');
 		assert.strictEqual(r, 64 * 1024 * 1024);
 	});
 

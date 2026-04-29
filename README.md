@@ -142,6 +142,7 @@ VM is a simple sandbox to synchronously run untrusted code without the `require`
 -   `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
 -   `wasm` - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`). Note: `WebAssembly.JSTag` is removed inside the sandbox for security reasons, so wasm code cannot catch JavaScript exceptions.
 -   `allowAsync` - If set to `false` any attempt to run code using `async` will throw a `VMError` (default: `true`).
+-   `bufferAllocLimit` - Maximum size in bytes for a single `Buffer.alloc` / `Buffer.allocUnsafe` / `Buffer.allocUnsafeSlow` / `Buffer(N)` / `new Buffer(N)` request from inside the sandbox. Requests that exceed this cap throw a `RangeError` synchronously without performing the host allocation. Default: `Infinity` (no cap, fully backwards-compatible). Embedders running untrusted code in memory-constrained environments (Docker / Kubernetes / Lambda / serverless) should opt into a finite cap (e.g. `32 * 1024 * 1024`) as part of layered DoS defense, the same way they opt into `timeout`. See [Hardening recommendations](#hardening-recommendations) below.
 
 **IMPORTANT**: Timeout is only effective on synchronous code that you run through `run`. Timeout does **NOT** work on any method returned by VM. There are some situations when timeout doesn't work - see [#244](https://github.com/patriksimek/vm2/pull/244).
 
@@ -176,6 +177,7 @@ Unlike `VM`, `NodeVM` allows you to require modules in the same way that you wou
 -   `compiler` - `javascript` (default), `typescript`, `coffeescript` or custom compiler function (which receives the code, and it's file path). The library expects you to have compiler pre-installed if the value is set to `typescript` or `coffeescript`.
 -   `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
 -   `wasm` - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`). Note: `WebAssembly.JSTag` is removed inside the sandbox for security reasons, so wasm code cannot catch JavaScript exceptions.
+-   `bufferAllocLimit` - Same semantics as on `VM` — maximum size in bytes for a single `Buffer.alloc` family request from inside the sandbox. Default: `Infinity`. See [Hardening recommendations](#hardening-recommendations).
 -   `sourceExtensions` - Array of file extensions to treat as source code (default: `['js']`).
 -   `require` - `true`, an object or a Resolver to enable `require` method (default: `false`).
 -   `require.external` - Values can be `true`, an array of allowed external modules, or an object (default: `false`). All paths matching `/node_modules/${any_allowed_external_module}/(?!/node_modules/)` are allowed to be required.
@@ -443,13 +445,70 @@ Before you can use vm2 in the command line, install it globally with `npm instal
 vm2 ./script.js
 ```
 
+## Hardening recommendations
+
+vm2 prevents sandbox escapes (untrusted code obtaining host realm access). It does **not**, by itself, prevent every form of resource exhaustion or denial-of-service. Embedders running untrusted code should add the following layered defenses around the sandbox.
+
+### 1. Cap memory allocation with `bufferAllocLimit`
+
+A single `Buffer.alloc(N)` call with attacker-controlled `N` runs as one synchronous host C++ allocation that V8's `timeout` cannot interrupt. In memory-constrained environments a ~100-byte sandbox payload can drive a 100 MB+ host RSS jump and crash the host process via OOM. Set `bufferAllocLimit` (e.g. `32 * 1024 * 1024`) to cap individual allocations:
+
+```js
+const vm = new VM({
+	timeout: 1000,
+	bufferAllocLimit: 32 * 1024 * 1024,
+	allowAsync: false,
+});
+```
+
+The cap also applies to the deprecated `Buffer(N)` and `new Buffer(N)` paths. Note that aggregate exhaustion (many small allocations, `Buffer.concat`, `Uint8Array`, `String.repeat`, `Array(n).fill()`, etc.) is **not** covered by this cap — combine with a host-side memory limit (`--max-old-space-size`, container limit, cgroup) for full coverage.
+
+### 2. Install a host-side `unhandledRejection` handler
+
+A class of host-process abort DoS exists where sandbox code creates an `async function`, `async function*`, or `await using` whose body throws a value that triggers a host-realm error during stack formatting (e.g. `e.name = Symbol(); e.stack`). V8 creates the rejection promise via the realm's intrinsic Promise, which bypasses vm2's `Promise` subclass wrap, so the rejection escapes to the host as `unhandledRejection`. On Node 15+ the default behavior is to terminate the process.
+
+Closing this requires changing observable host behavior, so vm2 does not ship a fix by default. Embedders should install a process-level handler that swallows (or logs) sandbox-originating rejections:
+
+```js
+// Recommended: filter rejections that originated inside vm2 and swallow them,
+// while letting your own host-side rejections propagate.
+process.on('unhandledRejection', (reason, promise) => {
+	// Heuristic: rejections from the sandbox frequently surface as values
+	// without proper Error semantics, or with stacks pointing at vm.js.
+	// Adjust the predicate to match your application.
+	if (looksLikeSandboxOrigin(reason)) {
+		return; // swallow — don't terminate the process
+	}
+	// Otherwise: handle (or rethrow) as normal for your host code.
+	yourLogger.error('unhandled rejection', reason);
+});
+```
+
+If your application has no other source of unhandled rejections, a blanket swallow + log is acceptable:
+
+```js
+process.on('unhandledRejection', reason => {
+	yourLogger.warn('swallowed sandbox rejection', reason);
+});
+```
+
+A scoped fix may ship behind an opt-in `swallowSandboxUnhandledRejections` flag in a future minor release; until then, the host-side handler is the recommended mitigation.
+
+### 3. Run with a process-level memory cap
+
+Even with `bufferAllocLimit` set, run the host process with `--max-old-space-size` (or an equivalent container memory limit) sized for the workload. The cap protects against the single-allocation primitive; the OS-level limit protects against aggregate exhaustion and against any future allocation primitive vm2 hasn't yet capped.
+
+### 4. Treat `require.builtin: ['*']` as a non-sandbox configuration
+
+The `'*'` wildcard expands to most Node built-ins, including `child_process`, `fs`, `dgram`, `net`, `http`, and `dns`. These are full host-capability primitives — `require('child_process').execSync('id')` is reachable from the sandbox under `'*'`. vm2's `'*'` semantics are intentional (some embedders run trusted-but-isolated code), but it should not be used as a default for untrusted code. Prefer an explicit allowlist of the smallest set of modules your sandbox actually needs.
+
 ## Known Issues
 
 -   It is not possible to define a class that extends a proxied class. This includes using a proxied class in `Object.create`.
 -   Direct eval does not work.
 -   Logging sandbox arrays will repeat the array part in the properties.
 -   Source code transformations can result a different source string for a function.
--   There are ways to crash the node process from inside the sandbox.
+-   There are ways to crash the node process from inside the sandbox. See [Hardening recommendations](#hardening-recommendations).
 
 [npm-image]: https://img.shields.io/npm/v/vm2.svg
 [npm-url]: https://www.npmjs.com/package/vm2

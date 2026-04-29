@@ -297,6 +297,43 @@ describe('GHSA-947f-4v7f-x2v8 -- builtin allowlist bypass via dangerous builtins
 			assert.strictEqual(map.has('repl'), false);
 			assert.strictEqual(map.has('inspector'), false);
 		});
+
+		// SECURITY (post-GHSA-947f hardening): trace_events was found during
+		// pre-tag red-team to abort the host process when createTracing is
+		// called with a sandbox-Proxy array (C++ IsArray() assertion fails).
+		// Added to the denylist so builtin: ['*'] no longer surfaces it.
+		it("makeBuiltins(['trace_events']) does not register trace_events", () => {
+			const map = makeBuiltins(['trace_events'], require);
+			assert.strictEqual(map.has('trace_events'), false);
+		});
+	});
+
+	describe('trace_events host-process abort DoS', () => {
+		it("trace_events is denied under builtin: ['*']", () => {
+			expectBuiltinBlocked(
+				'trace_events-wildcard',
+				{ builtin: ['*'] },
+				`
+				try {
+					require('trace_events');
+					module.exports = 'ESCAPED';
+				} catch (e) { module.exports = 'BLOCKED'; }
+			`,
+			);
+		});
+
+		it("trace_events is denied under explicit ['trace_events']", () => {
+			expectBuiltinBlocked(
+				'trace_events-explicit',
+				{ builtin: ['trace_events'] },
+				`
+				try {
+					require('trace_events');
+					module.exports = 'ESCAPED';
+				} catch (e) { module.exports = 'BLOCKED'; }
+			`,
+			);
+		});
 	});
 
 	describe('non-dangerous builtins still load', () => {

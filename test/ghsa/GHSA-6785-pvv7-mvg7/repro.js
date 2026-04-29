@@ -23,7 +23,7 @@
  */
 
 const assert = require('assert');
-const { VM } = require('../../../lib/main.js');
+const { VM, NodeVM } = require('../../../lib/main.js');
 
 const NODE_MAJOR = parseInt(process.versions.node.split('.')[0], 10);
 // Tests that allocate real ≥64 MB buffers crash older Node runtimes whose
@@ -126,5 +126,43 @@ describe('GHSA-6785-pvv7-mvg7 (Buffer.alloc DoS)', function () {
 		assert.throws(function () {
 			new VM({ bufferAllocLimit: 'big' });
 		}, /bufferAllocLimit must be a non-negative number/);
+	});
+
+	// SECURITY (GHSA-6785-pvv7-mvg7): NodeVM must forward bufferAllocLimit
+	// to its parent VM. Pre-fix, lib/nodevm.js super() dropped the option
+	// silently and embedders using NodeVM (the common module-loading form)
+	// got no protection even with an explicit cap.
+	describe('NodeVM forwards bufferAllocLimit to parent VM', function () {
+		it('NodeVM enforces bufferAllocLimit on Buffer.alloc', function () {
+			const vm = new NodeVM({ bufferAllocLimit: 1024 });
+			assert.throws(function () {
+				vm.run('module.exports = Buffer.alloc(2048).length');
+			}, /Buffer allocation size 2048 exceeds bufferAllocLimit 1024/);
+		});
+
+		it('NodeVM enforces bufferAllocLimit on Buffer.allocUnsafe', function () {
+			const vm = new NodeVM({ bufferAllocLimit: 1024 });
+			assert.throws(function () {
+				vm.run('module.exports = Buffer.allocUnsafe(2048).length');
+			}, /Buffer allocation size 2048 exceeds bufferAllocLimit 1024/);
+		});
+
+		it('NodeVM enforces bufferAllocLimit on deprecated new Buffer(N)', function () {
+			const vm = new NodeVM({ bufferAllocLimit: 1024 });
+			assert.throws(function () {
+				vm.run('module.exports = new Buffer(2048).length');
+			}, /Buffer allocation size 2048 exceeds bufferAllocLimit 1024/);
+		});
+
+		it('NodeVM bufferAllocLimit default is Infinity (non-breaking)', function () {
+			const r = new NodeVM().run('module.exports = Buffer.alloc(1024).length');
+			assert.strictEqual(r, 1024);
+		});
+
+		it('NodeVM rejects non-numeric bufferAllocLimit at construction', function () {
+			assert.throws(function () {
+				new NodeVM({ bufferAllocLimit: 'big' });
+			}, /bufferAllocLimit must be a non-negative number/);
+		});
 	});
 });

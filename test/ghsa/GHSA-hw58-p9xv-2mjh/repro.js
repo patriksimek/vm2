@@ -25,6 +25,23 @@
  * never fires. The tail uses the cached host `then` (captured before the
  * sandbox-side then override is installed) and a re-entrancy guard prevents
  * infinite species-protocol recursion.
+ *
+ * ## Known residual (NOT yet fixed in v3.10.6)
+ * V8 creates async-function and async-generator promises via the realm's
+ * intrinsic `globalPromise`, NOT our `localPromise` subclass — so the
+ * executor wrap above is bypassed. Three working DoS variants confirmed
+ * during pre-tag red-team:
+ *
+ *   1. `(async function(){ var e = new Error(); e.name = Symbol(); e.stack; })()`
+ *   2. `(async function*(){ throw e })().next()`
+ *   3. `await using x = { [Symbol.asyncDispose]() { throw Symbol() } };`
+ *
+ * Each ~50–80 bytes, each terminates the host process on Node 15+. Closing
+ * this requires either a process-level `unhandledRejection` filter scoped
+ * to sandbox-realm errors, or rebinding the realm's intrinsic Promise
+ * inside `vm.runInContext` — both architectural changes deferred past
+ * v3.10.6. The `it.skip` blocks below pin the residuals so any future
+ * regression is visible.
  */
 
 const assert = require('assert');
@@ -140,6 +157,34 @@ describe('GHSA-hw58-p9xv-2mjh (Promise executor unhandled rejection DoS)', funct
 		`);
 		return r.then(function (v) {
 			assert.strictEqual(v, 43);
+		});
+	});
+
+	// SECURITY (KNOWN RESIDUAL — NOT YET FIXED): async-function / async-generator
+	// / AsyncDisposableStack paths bypass the localPromise executor wrap because
+	// V8 creates their rejection promises via the realm's intrinsic Promise.
+	// These three DoS variants are skipped (would crash the test runner) but
+	// kept here so the residual is visible and any future fix is testable.
+	// See ATTACKS.md Category 22 "Known Residual".
+	describe('async-fn host-process abort (known residual; pinned for visibility)', function () {
+		it.skip('async function with Symbol-named Error.stack throw (kills host)', function () {
+			// Running this would terminate the test process. The fix needs a
+			// process-level unhandledRejection filter or a realm-Promise rebind.
+			// new VM({ allowAsync: false }).run(`
+			//   (async function(){ var e=new Error(); e.name=Symbol(); e.stack; })();
+			// `);
+		});
+
+		it.skip('async generator throw on .next() (kills host)', function () {
+			// new VM({ allowAsync: false }).run(`
+			//   (async function*(){ throw new Error('boom') })().next();
+			// `);
+		});
+
+		it.skip('AsyncDisposableStack with throwing Symbol.asyncDispose (kills host)', function () {
+			// new VM({ allowAsync: false }).run(`
+			//   await using x = { [Symbol.asyncDispose]() { throw Symbol() } };
+			// `);
 		});
 	});
 });

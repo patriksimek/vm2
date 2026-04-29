@@ -318,7 +318,7 @@ V8's `Error.prepareStackTrace` API provides access to CallSite objects that refe
 
 ### Mitigation
 
-`Error.prepareStackTrace` is always set to a safe `defaultSandboxPrepareStackTrace` function in `setup-sandbox.js` that handles Symbol names, Proxy objects, and other exotic types without throwing. When user code sets `Error.prepareStackTrace = undefined`, the setter resets to the safe default instead of allowing `undefined` (which would trigger V8's fallback to the host's `prepareStackTraceCallback`). CallSite `getThis()` is sanitized. `SuppressedError` is also added to `errorsList` in `bridge.js`.
+`Error.prepareStackTrace` is initialised to `defaultSandboxPrepareStackTrace` at sandbox bootstrap (post-GHSA-v27g hardening) and the property descriptor's setter substitutes the safe default whenever sandbox code assigns a non-function value (`undefined`, `null`, etc.). V8 therefore never falls through to Node's host-side `prepareStackTraceCallback` (which throws on Symbol-named errors and emits absolute host paths). `defaultSandboxPrepareStackTrace` itself handles Symbol names, Proxy objects, and other exotic types without throwing. CallSite metadata getters (`getFileName`, `getLineNumber`, `getFunctionName`, etc.) redact host frames; `getEvalOrigin` redacts unconditionally because its return string can embed a host path. CallSite `getThis()` and `getFunction()` always return `undefined`. `SuppressedError` and `AggregateError` are in `errorsList` in `bridge.js` so their prototypes are proto-mapped and their bridge-crossing instances structurally-collapsed.
 
 ### Detection Rules
 
@@ -785,13 +785,14 @@ After the closure-scoped WeakMap migration (`a6cd917`), handler instances no lon
 
 ### Mitigation
 
-Wrapped objects stored in closure-scoped WeakMap (`handlerToObject`), accessed only via closure-scoped `getHandlerObject()` function. Conversion methods moved to closure-scoped functions. Proxy target is a fresh shell object. Handler `get` trap checks `isThisDangerousFunctionConstructor` on return values. Three additional layers added for GHSA-v37h-5mfm-c47c:
+Wrapped objects stored in closure-scoped WeakMap (`handlerToObject`), accessed only via closure-scoped `getHandlerObject()` function. Conversion methods moved to closure-scoped functions. Proxy target is a fresh shell object. Handler `get` trap checks `isThisDangerousFunctionConstructor` on return values. Four additional layers:
 
-1. **Construction token**: `createBridge()` captures an unforgeable module-local `Symbol('vm2 bridge handler construction')` in closure. Every `BaseHandler`/`ProtectedHandler`/`ReadOnlyHandler`/`ReadOnlyMockHandler` constructor requires this token as its first argument and throws `VMError(OPNA)` otherwise. All legitimate construction sites (`defaultFactory`, `protectedFactory`, `readonlyFactory`, and the closure-scoped `createReadOnlyMockHandler` / `constructSubclassHandler` helpers used by `setup-sandbox.js`) inject the token from closure. Subclass construction via `class X extends pp.constructor { constructor(o){super(o);} }` fails because `super(o)` sees `token = o` rather than the real sentinel. `Reflect.construct(Handler, [s])` and `Reflect.construct(Handler, [s], altNewTarget)` fail identically.
-2. **`getHandlerObject` WeakMap guard**: the closure-scoped `getHandlerObject(handler)` now explicitly checks `handlerToObject.has(handler)` and throws `VMError(OPNA)` if not — so trap methods invoked on a sandbox-forged receiver (`Object.setPrototypeOf({}, pp)`, `pp.set.call(forged, ...)`) refuse to operate rather than returning `undefined` deeper into the trap body.
-3. **Constructor-property sentinel rebind**: the `.constructor` property on every handler prototype (`BaseHandler.prototype`, `ProtectedHandler.prototype`, `ReadOnlyHandler.prototype`, `ReadOnlyMockHandler.prototype`) is replaced with a `blockedHandlerConstructor` function that unconditionally throws `VMError(OPNA)`. Prototype-chain walks from any leaked handler never reach a callable form of the real class.
+1. **Construction token (GHSA-v37h-5mfm-c47c)**: `createBridge()` captures an unforgeable module-local `Symbol('vm2 bridge handler construction')` in closure. Every `BaseHandler`/`ProtectedHandler`/`ReadOnlyHandler`/`ReadOnlyMockHandler` constructor requires this token as its first argument and throws `VMError(OPNA)` otherwise. All legitimate construction sites (`defaultFactory`, `protectedFactory`, `readonlyFactory`, and the closure-scoped `createReadOnlyMockHandler` / `newBufferHandler` helpers used by `setup-sandbox.js`) inject the token from closure. Subclass construction via `class X extends pp.constructor { constructor(o){super(o);} }` fails because `super(o)` sees `token = o` rather than the real sentinel. `Reflect.construct(Handler, [s])` and `Reflect.construct(Handler, [s], altNewTarget)` fail identically.
+2. **`getHandlerObject` WeakMap guard (GHSA-v37h-5mfm-c47c)**: the closure-scoped `getHandlerObject(handler)` now explicitly checks `handlerToObject.has(handler)` and throws `VMError(OPNA)` if not — so trap methods invoked on a sandbox-forged receiver (`Object.setPrototypeOf({}, pp)`, `pp.set.call(forged, ...)`) refuse to operate rather than returning `undefined` deeper into the trap body.
+3. **Constructor-property sentinel rebind (GHSA-v37h-5mfm-c47c)**: the `.constructor` property on every handler prototype (`BaseHandler.prototype`, `ProtectedHandler.prototype`, `ReadOnlyHandler.prototype`, `ReadOnlyMockHandler.prototype`, plus subclasses defined in `setup-sandbox.js` like `BufferHandler` via the `rebindHandlerConstructor` helper) is replaced with a `blockedHandlerConstructor` function that unconditionally throws `VMError(OPNA)`. Prototype-chain walks from any leaked handler never reach a callable form of the real class.
+4. **`validateHandlerTarget` (GHSA-qcp4-v2jj-fjx8)**: a closure-scoped `handlerToTarget` WeakMap pairs every handler with its canonical proxy target at construction time. Every trap method on `BaseHandler` (16), `ProtectedHandler` (2 overrides), `ReadOnlyHandler` (6 overrides), and `ReadOnlyMockHandler` (1 override) calls `validateHandlerTarget(this, target)` at entry, which rejects (a) handlers not in the WeakMap (forged `this`) and (b) trap calls whose `target` argument doesn't strict-equal the canonical target paired with that handler at construction (forged `target`). Both reject with `VMError(OPNA)`. The Proxy machinery always supplies the canonical target, so legitimate dispatch is unchanged. This closes the showProxy `seen[1]` exposure path: a leaked handler invoked directly with attacker-supplied targets (`gP(gP(gP(gP(Buffer))))`) is rejected at the first call.
 
-These defenses are independent: even if one fails (e.g., future WeakMap tampering compromises the `has` check), the other two still block the escape.
+These defenses are independent: even if one fails (e.g., future WeakMap tampering compromises the `has` check), the others still block the escape.
 
 ### Detection Rules
 
@@ -806,6 +807,7 @@ These defenses are independent: even if one fails (e.g., future WeakMap tamperin
 - **`new pp.constructor(...)` / `Reflect.construct(pp.constructor, ...)`** -- attempting to reconstruct a handler from a leaked instance (now blocked via construction token).
 - **`class X extends pp.constructor`** -- subclassing a reachable handler class (now blocked via token propagation).
 - **`pp.set.call(forgedThis, ...)` / `pp.get.call(forgedThis, ...)`** -- method invocation on a forged receiver (now blocked via `getHandlerObject` WeakMap guard).
+- **`handler.getPrototypeOf(Buffer)` / `handler.set(Buffer, key, val)` / any trap with a forged `target`** -- a real registered handler invoked with an attacker-supplied first argument to walk host prototypes (now blocked via `validateHandlerTarget` strict-equality check against `handlerToTarget`, GHSA-qcp4-v2jj-fjx8).
 
 ---
 
@@ -950,15 +952,16 @@ The transformer renames catch clause variables to internal names and wraps them 
 
 ### Mitigation
 
-The transformer validates against internal variable name patterns. `eval` and `new Function` are sandbox-scoped (they cannot access host context directly). However, the `ecmaVersion` limitation remains a known surface -- `using` declarations inside `eval()` bypass catch-block instrumentation entirely.
+The transformer validates against internal variable name patterns. `eval` and `new Function` are sandbox-scoped (they cannot access host context directly). The fast-path bailout at the top of `transformer()` (which skips AST instrumentation for code containing none of the security-relevant keywords) is conservative: it triggers full AST parse for any source containing `catch`, `import`, `async`, `with`, the `INTERNAL_STATE_NAME` substring, or a `\u` escape sequence (GHSA-wp5r-2gw5-m7q7 plus post-fix unicode-escape hardening — identifiers can be written as `VM2_INTERNAL_…` and would slip past a substring check, so any `\u` in source forces the AST walker to decode and inspect actual identifier names). The `ecmaVersion` limitation remains a known surface — `using` declarations (ES2024) inside `eval()` bypass catch-block instrumentation entirely.
 
 ### Detection Rules
 
 - **Variables containing `VM2_INTERNAL`**, `$tmpname`, or similar patterns.
-- **`with` statements** -- security-sensitive and instrumented.
-- **Direct `eval()`** usage -- bypasses transformer.
+- **`with` statements** — security-sensitive and instrumented.
+- **Direct `eval()`** usage — bypasses transformer.
 - **`new Function()`** with dynamically constructed strings.
-- **`using` or `await using`** inside `eval()` -- bypasses transformer's `ecmaVersion: 2022`.
+- **`using` or `await using`** inside `eval()` — bypasses transformer's `ecmaVersion: 2022`.
+- **Identifiers using `\uXXXX` / `\u{...}` escapes** — recognised legitimate JS, but a vector for evading literal-string identifier checks (handled by the fast-path `\u` bailout in `transformer.js`).
 
 ---
 
@@ -1385,7 +1388,7 @@ The second critical component is the host promise from `Array.fromAsync`. The sa
 
 Three-layer defense:
 
-1. **`defaultSandboxPrepareStackTrace`** — sandbox always provides a safe `prepareStackTrace`, so V8 never falls back to host's `prepareStackTraceCallback`. The default function safely handles Symbol names, Proxy objects, and other exotic types without throwing. When user clears `Error.prepareStackTrace`, it resets to the safe default instead of `undefined`.
+1. **`defaultSandboxPrepareStackTrace`** — sandbox always provides a safe `prepareStackTrace`. Post-GHSA-v27g-jcqj-v8rw hardening, the default is installed at bootstrap (so V8 never falls back to Node's host `prepareStackTraceCallback` even before sandbox code first reads `error.stack`), and the property setter substitutes the safe default whenever user code assigns a non-function value (`undefined` / `null` / etc.). The default function safely handles Symbol names, Proxy objects, and other exotic types without throwing. CallSite metadata getters redact host frames (and `getEvalOrigin` redacts unconditionally — see Category 4).
 2. **Prototype-walked host `Array` constructor replaced with sandbox `Array`** (GHSA-grj5-jjm8-h35p fix, commit `7352f11`). The bridge proxy's `get` trap for `.constructor` on host arrays now returns the cached sandbox `Array`, so `ho.entries({}).constructor` resolves to sandbox `Array`. `ha.fromAsync(...)` is therefore sandbox `Array.fromAsync` returning a sandbox Promise — routing through the existing sandbox `.then`/`.catch` overrides with `handleException`. This is the primary, load-bearing closure for the canonical PoC.
 3. **`handleException` recurses into `AggregateError.errors[]`** (GHSA-55hx-c926-fr95 supplementary fix). Mirrors the existing `SuppressedError.error` / `.suppressed` recursion. Closes a small gap where a `Promise.any` rejection delivers an `AggregateError` whose `.errors[i]` is a host-realm error; prior to this fix, only the `AggregateError` itself was sanitized, not its element array.
 
@@ -1500,27 +1503,35 @@ The user's mental model of `['*', '-child_process']` is "every builtin except `c
 
 Two-layer denylist enforcement in `lib/builtin.js`:
 
-1. **`DANGEROUS_BUILTINS` Set** at module load — `['module', 'worker_threads', 'cluster', 'vm', 'repl', 'inspector']`.
+1. **`DANGEROUS_BUILTINS` Set** at module load — `['module', 'worker_threads', 'cluster', 'vm', 'repl', 'inspector', 'trace_events', 'wasi']`.
 2. **Filter from `BUILTIN_MODULES`** — closes the `'*'` wildcard expansion path. `'*'` will never auto-allow these names regardless of the user's exclusion list.
 3. **Reject in `addDefaultBuiltin`** — closes the explicit-allowlist path (`builtin: ['module']`) and the lower-level `makeBuiltins(['module'])` API used by custom resolvers. The `SPECIAL_MODULES` escape hatch is preserved: a future safe wrapper (e.g., a `module` shim that exposes only `builtinModules` metadata) can be registered there if a real consumer needs it.
 
 The fix does not affect the `mocks` / `overrides` escape hatches — users who genuinely need a stub for one of these names can register a sandbox-safe replacement.
 
+`trace_events` and `wasi` were added during pre-tag red-team:
+
+- **`trace_events.createTracing({categories: [...]})`** asserts `args[0]->IsArray()` in V8 C++. The array crosses the bridge as a Proxy, the `IsArray()` check fails, and the entire host process aborts. Reachable as ~150 bytes from sandbox under `builtin: ['*']` — not RCE, but a host-process-DoS primitive of the same severity class as Category 22.
+- **`wasi`** exposes the WebAssembly System Interface preview1 syscall surface (filesystem `preopens`, host clock/random, network if preopened). The API is experimental and broad; even a misconfigured `preopens: {}` exposes the host CWD when sandbox code constructs a WASI module.
+
 ### Detection Rules
 
-- **`builtin: ['*']` or `['*', '-X']`** in NodeVM config — historically allowed `module`/`worker_threads`/`cluster`/`vm`/`repl`/`inspector`, now safely filtered.
+- **`builtin: ['*']` or `['*', '-X']`** in NodeVM config — historically allowed `module`/`worker_threads`/`cluster`/`vm`/`repl`/`inspector`/`trace_events`/`wasi`, now safely filtered. **Note: `'*'` still allows `child_process`, `fs`, `dgram`, `net`, `http`, `dns`, etc. — it is NOT a sandbox-safe default for untrusted code.**
 - **`require('module')._load(...)`** — the canonical bypass primitive.
 - **`new Worker(src, {eval:true})`** — out-of-band code execution.
 - **`cluster.fork()`** — host process spawn.
 - **`vm.runInThisContext(...)`** — host-realm `eval`.
 - **`repl.start({eval, ...})`** — host-realm REPL evaluator.
 - **`inspector.open()`** — debugger attachment to host process.
+- **`trace_events.createTracing({categories: [...]})`** — host process abort via C++ assertion failure.
+- **`new (require('wasi').WASI)({...})`** — preview1 syscall surface.
 
 ### Considered Attack Surfaces
 
 - **`async_hooks`** exposes context tracing but not host-code-loading primitives. Allowed under `'*'`.
-- **`child_process`** is the canonical "user knows to exclude this" builtin — not on the auto-denylist because users may legitimately want it for trusted scripts. The `'*'` wildcard with no exclusion still allows it.
-- **`fs`** is allowed under `'*'` because file-system access can be a legitimate sandbox capability for many use cases (e.g., user-script template engines reading templates). Users who want filesystem isolation use `VMFileSystem` or exclude `fs` explicitly.
+- **`child_process`** is NOT on the auto-denylist because users may legitimately want it for trusted scripts (e.g., dev tooling running known scripts in vm2 for hot-reload isolation). For untrusted code, `child_process` is a full-host-RCE primitive — embedders MUST exclude it explicitly (`['*', '-child_process']`) or, better, use an explicit allowlist of just the modules they need. The README's "Hardening recommendations" section calls this out.
+- **`fs`** is allowed under `'*'` because file-system access can be a legitimate sandbox capability for many use cases (e.g., user-script template engines reading templates). Users who want filesystem isolation use `VMFileSystem` or exclude `fs` explicitly. Same caveat as `child_process` — `'*'` is not sandbox-safe for untrusted code.
+- **`dgram`, `net`, `http`, `https`, `dns`** are network-IO builtins, allowed under `'*'`. Any of them give untrusted code outbound network access from the host. Embedders should explicitly exclude or allowlist.
 
 ---
 
@@ -1576,9 +1587,35 @@ The fix preserves the native semantics for non-callable executors (`new Promise(
 - **`allowAsync: false`** combined with any Promise construction — historically *more* dangerous because `.catch` was blocked, guaranteeing unhandled. Now both modes are equally safe.
 - Hostile patterns: `new Promise(() => { throw hostError; })`, `Promise.reject(hostError)` without `.catch()`, async function bodies that throw without try/catch.
 
+### Known Residual — async function / async generator / `await using`
+
+**Status: not yet fixed in v3.10.6. Confirmed exploitable on Node 15+.** Three working ~50–80 byte sandbox payloads terminate the host process:
+
+```javascript
+// 1. async function with Symbol-named Error.stack
+new VM({ allowAsync: false }).run(`(async function(){
+  var e = new Error(); e.name = Symbol(); e.stack;
+})();`);
+
+// 2. async generator throw on .next()
+new VM({ allowAsync: false }).run(`(async function*(){
+  throw new Error('boom');
+})().next();`);
+
+// 3. AsyncDisposableStack with throwing Symbol.asyncDispose
+new VM({ allowAsync: false }).run(`
+  await using x = { [Symbol.asyncDispose]() { throw Symbol() } };
+`);
+```
+
+V8 creates the rejection promises for `async function`, `async function*`, and `await using` machinery **via the realm's intrinsic Promise (`globalPromise`)** — *not* via `localPromise`. The `localPromise extends globalPromise` constructor and its swallow tail are therefore bypassed entirely. Closing this from inside vm2 requires either (a) a process-level `unhandledRejection` handler scoped to sandbox-realm errors, or (b) rebinding the realm's `%Promise%` intrinsic. Both approaches change observable host behaviour and are deferred past v3.10.6.
+
+**Recommended mitigation for embedders**: install a host-side `process.on('unhandledRejection', ...)` handler that filters or swallows sandbox-originated rejections. See README "Hardening recommendations" for code patterns.
+
+A `it.skip`-marked block in `test/ghsa/GHSA-hw58-p9xv-2mjh/repro.js` pins all three variants so any future fix is testable and so the gap stays visible to maintainers.
+
 ### Considered Attack Surfaces
 
-- **`async function() { throw e; }()` direct invocation**: this produces a rejecting Promise without going through `new Promise(executor)` — V8 implements async functions with internal Promise creation that may bypass the user-level constructor. **Residual risk**: an attacker who can write `async function() { throw hostError }()` in the sandbox without a `.catch()` may still produce a host-side unhandled rejection. The sandbox's transformer instruments `try/catch` blocks but not implicit async-function rejections. Considered an acceptable residual: the canonical reported DoS via `new Promise(executor)` is closed, and the async-function path requires the attacker to also produce a host-realm error inside the async body — which has the same prerequisites as the constructor case but a different bypass. Tracked for follow-up if exploited.
 - **`Promise.reject(hostError)` directly**: routes through `localPromise` (because `Promise.reject` delegates to `new this(...)`) and gains the swallow tail. Covered.
 - **Silent-failure trade-off**: sandbox developers can no longer use Node's host-side `unhandledRejection` log to surface their own debug rejections. They must explicitly attach `.catch()` for visibility. Acceptable trade-off given the DoS severity; documented for users.
 

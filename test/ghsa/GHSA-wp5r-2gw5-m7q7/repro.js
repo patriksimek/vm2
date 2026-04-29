@@ -65,4 +65,37 @@ describe('GHSA-wp5r-2gw5-m7q7 (transformer fast-path bypass)', function () {
 	it('regression: code with catch/import/async still runs unchanged', function () {
 		assert.strictEqual(new VM().run(`try { throw new Error('x'); } catch(e) { e.message }`), 'x');
 	});
+
+	// SECURITY (post-GHSA-wp5r-2gw5-m7q7 hardening): unicode-escape identifier
+	// bypass surfaced during pre-tag red-team. Identifiers can contain
+	// `\uXXXX` escapes; the original fix's substring `indexOf` only matched
+	// the raw form, so `VM2_INTERNAL_STATE_…` slipped past the fast-path
+	// and re-opened the same exposure the GHSA was meant to close. The
+	// fast-path now bails out for any source containing `\u`.
+	describe('unicode-escape identifier bypass', function () {
+		it('rejects \\u0056M2_INTERNAL_STATE_… (single-char unicode escape)', function () {
+			assert.throws(function () {
+				new VM().run(`var x = \\u0056M2_INTERNAL_STATE_DO_NOT_USE_OR_PROGRAM_WILL_FAIL; x;`);
+			}, /Use of internal vm2 state variable/);
+		});
+
+		it('rejects \\u{56}M2_INTERNAL_STATE_… (extended unicode code-point escape)', function () {
+			assert.throws(function () {
+				new VM().run(`var x = \\u{56}M2_INTERNAL_STATE_DO_NOT_USE_OR_PROGRAM_WILL_FAIL; x;`);
+			}, /Use of internal vm2 state variable/);
+		});
+
+		it('rejects fully-escaped identifier', function () {
+			// Every char as \uXXXX: VV -> V, MM -> M, etc. Verify
+			// that even when no raw VM2_… substring appears, AST still rejects.
+			assert.throws(function () {
+				new VM().run(`var x = \\u0056\\u004D2_INTERNAL_STATE_DO_NOT_USE_OR_PROGRAM_WILL_FAIL; x;`);
+			}, /Use of internal vm2 state variable/);
+		});
+
+		it('regression: legitimate \\u escapes in strings still work', function () {
+			// Source contains \u but the AST walker doesn't reject string literals.
+			assert.strictEqual(new VM().run(`'\\u0041\\u0042'`), 'AB');
+		});
+	});
 });

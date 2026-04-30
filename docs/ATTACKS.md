@@ -1677,6 +1677,69 @@ The fix closes the canonical reported DoS (Buffer.alloc family) and provides the
 
 ---
 
+## Attack Category 24: NodeVM `require.root` Symlink Bypass (Path Check/Use TOCTOU)
+
+### Description
+
+`NodeVM`'s `require.root` option restricts sandbox `require()` to a configured filesystem root. The intended invariant is "no code runs from outside the allowed root". The check was implemented as a **lexical** prefix match — `isPathAllowed(filename)` in `lib/resolver-compat.js` verified `filename.startsWith(rootPath)` where `filename` came from `path.resolve()` (no symlink dereference). However, the actual loader is Node's native `require()`, which **does** follow symlinks. A symlink inside the allowed root pointing outside it passes the lexical prefix check, yet the loader follows it and runs code from the symlink's target. CWE-59 (Improper Link Resolution Before File Access).
+
+This is especially severe because:
+- pnpm uses symlinks for *every* `node_modules` entry (canonical `<root>/node_modules/<pkg> → <pnpm-store>/<pkg>` layout).
+- npm workspaces and `npm link` create equivalent symlinks.
+- With `context: 'host'`, the host loader runs the symlinked code with full host privileges — direct RCE.
+
+### Attack Flow
+
+1. **Symlink exists inside the allowed root** pointing outside it. This may be created by an attacker or pre-existing as a side-effect of pnpm/npm-workspaces/`npm link`.
+2. **Sandbox calls `require('./link.js')`** (or `require('safe')` for a directory-level symlink).
+3. **Resolver runs `path.resolve(...)`** producing a path that starts with `rootPath` and passes `isPathAllowed`.
+4. **Loader runs `hostRequire(filename)`** which follows the symlink to outside-root code.
+5. **In `context: 'host'`** the loaded module executes with host privileges → RCE.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-cp6g-6699-wx9c) — file-level symlink
+const root = '/tmp/root';
+fs.symlinkSync('/tmp/outside.js', '/tmp/root/link.js');
+const vm = new NodeVM({ require: { external: true, root, context: 'host' } });
+vm.run("require('./link.js')");
+// /tmp/outside.js runs in HOST context.
+
+// directory-level symlink variant (e.g. pnpm / npm-workspaces / `npm link`)
+fs.symlinkSync(__dirname + '/vm2', '/tmp/root/node_modules/safe');
+vm.run("require('safe')");
+// vm2 itself runs in HOST context, then attacker uses it to escalate.
+```
+
+### Why It Works
+
+The bridge proxy and the bridge's overall threat model are not involved here — this is a filesystem access-control check that runs purely on the host side, and the gap is between two host-side syscalls: `path.resolve()` (lexical) and the kernel's `stat`/`open` chain that follows symlinks. The check and the use operate on different canonical representations of the same path. Classic check/use TOCTOU.
+
+### Mitigation
+
+`fs.realpathSync` is used to canonicalize paths before the prefix check, so the boundary check operates on the same path the loader will follow:
+
+1. **`DefaultFileSystem.realpath()` and `VMFileSystem.realpath()`** (in `lib/filesystem.js`) — new methods on the filesystem abstraction. The default delegates to host `fs.realpathSync`; `VMFileSystem` delegates to the user-supplied `fs.realpathSync`.
+2. **`isPathAllowed` realpaths the candidate** (in `lib/resolver-compat.js`) before the prefix-vs-rootPaths check. If `realpath` throws (file doesn't exist, broken link, custom `fs` without a `realpath` method) the check **denies by default**.
+3. **`rootPaths` are canonicalized at construction time** so a symlinked root configuration (`root: '/tmp/myroot'` where `/tmp/myroot` is itself a symlink) compares the same canonical namespace as the candidate filenames.
+
+The race window between the canonicalization syscall and the subsequent loader syscalls is narrow but not eliminated; full mitigation would require atomic `openat`/`O_NOFOLLOW` APIs Node does not expose to user code. CWE-367 residual risk is documented but considered acceptable.
+
+### Detection Rules
+
+- **Symlink inside `require.root`** pointing outside (file-level or directory-level).
+- **`fs.realpathSync` on the candidate ≠ `path.resolve` on the candidate** — the smoking gun for this class.
+- **pnpm / npm-workspaces / `npm link` layouts** with NodeVM `require.root` configured.
+
+### Considered Attack Surfaces
+
+- **Custom `fs` adapters without `realpath`/`realpathSync`**: existing `VMFileSystem({ fs: customFs })` users whose `customFs` lacks `realpathSync` will hit the deny-by-default path. This is a backwards-compat break that prefers strict security to silent allowance — release notes should advise adding `realpathSync` to custom adapters.
+- **Race between resolver-side realpath and loader-side `require`**: theoretically exploitable on a fast filesystem with attacker-controlled symlinks; not closed structurally because Node does not expose `openat`/`O_NOFOLLOW` to user code. Documented residual risk.
+- **`mocks` / `overrides`** are unaffected — they don't go through the path resolver.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -1793,6 +1856,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | WebAssembly JSTag | `WebAssembly.JSTag` deleted from sandbox |
 | Array species self-return | set/defineProperty traps + neutralizeArraySpecies + SPECIES_ATTACK_SENTINEL |
 | Host prepareStackTrace fallback | Safe default always set; setter resets to safe default instead of `undefined` |
+| NodeVM `require.root` symlink bypass | `isPathAllowed` realpaths candidate before prefix check; `rootPaths` canonicalized at construction; deny-by-default if realpath throws |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

@@ -1,5 +1,5 @@
 /* eslint-env mocha */
-/* eslint-disable no-new-wrappers, max-len */
+ 
 
 'use strict';
 

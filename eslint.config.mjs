@@ -3,17 +3,17 @@ import globals from 'globals';
 export default [
 	{
 		languageOptions: {
-			ecmaVersion: 2017,
-			sourceType: "module",
+			ecmaVersion: 2022,
+			sourceType: 'script',
 			globals: {
-				...globals.node
+				...globals.node,
 			},
 			parserOptions: {
 				ecmaFeatures: {
 					globalReturn: true,
-				}
-			}
+				},
+			},
 		},
-		ignores: ["eslint.config.mjs"],
+		ignores: ['eslint.config.mjs', '.claude/worktrees/**'],
 	},
 ];

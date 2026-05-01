@@ -89,7 +89,10 @@ describe('GHSA-cp6g-6699-wx9c — require.root symlink bypass', () => {
 	it('rejects directory-level symlink (pnpm/npm-link layout)', () => {
 		tmp = mkdtemp();
 		const root = path.join(tmp, 'root');
-		fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
+		// Two explicit mkdirs instead of {recursive: true} for Node 8 compat
+		// (fs.mkdirSync recursive option added in Node 10.12).
+		fs.mkdirSync(root);
+		fs.mkdirSync(path.join(root, 'node_modules'));
 
 		// Outside package: name "safe", payload writes a sentinel.
 		const outsidePkg = path.join(tmp, 'outside-pkg');

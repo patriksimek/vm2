@@ -26,7 +26,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const {NodeVM, VMError} = require('../../../lib/main.js');
+const { NodeVM, VMError } = require('../../../lib/main.js');
 
 // Each test creates its own scratch tree under tmpdir and tears it down in
 // afterEach. We avoid sharing state across cases.
@@ -37,11 +37,14 @@ function mkdtemp() {
 }
 
 function rmrf(p) {
-	try { fs.rmSync(p, {recursive: true, force: true}); } catch (e) { /* ignore */ }
+	try {
+		fs.rmSync(p, { recursive: true, force: true });
+	} catch (e) {
+		/* ignore */
+	}
 }
 
 describe('GHSA-cp6g-6699-wx9c — require.root symlink bypass', () => {
-
 	afterEach(() => {
 		if (tmp) {
 			rmrf(tmp);
@@ -58,18 +61,27 @@ describe('GHSA-cp6g-6699-wx9c — require.root symlink bypass', () => {
 		// Outside payload writes a sentinel file when executed; if the sandbox
 		// boundary holds, the require() must fail and the sentinel must not exist.
 		const sentinel = path.join(tmp, 'pwned');
-		fs.writeFileSync(outside, `require('fs').writeFileSync(${JSON.stringify(sentinel)}, 'pwned'); module.exports = 1;`);
+		fs.writeFileSync(
+			outside,
+			`require('fs').writeFileSync(${JSON.stringify(sentinel)}, 'pwned'); module.exports = 1;`,
+		);
 		fs.symlinkSync(outside, link);
 
-		const vm = new NodeVM({require: {external: true, root, context: 'host'}});
+		const vm = new NodeVM({ require: { external: true, root, context: 'host' } });
 
 		assert.throws(
 			() => vm.run("module.exports = require('./link.js')", path.join(root, 'entry.js')),
 			err => {
 				// Either VMError EDENIED or the resolver's ENOTFOUND is acceptable —
 				// what matters is the require() never executed the outside script.
-				return err && (err.code === 'EDENIED' || err.code === 'ENOTFOUND' || err instanceof VMError || /not allowed|Cannot find module/.test(err.message));
-			}
+				return (
+					err &&
+					(err.code === 'EDENIED' ||
+						err.code === 'ENOTFOUND' ||
+						err instanceof VMError ||
+						/not allowed|Cannot find module/.test(err.message))
+				);
+			},
 		);
 		assert.strictEqual(fs.existsSync(sentinel), false, 'outside payload must not have executed');
 	});
@@ -77,16 +89,16 @@ describe('GHSA-cp6g-6699-wx9c — require.root symlink bypass', () => {
 	it('rejects directory-level symlink (pnpm/npm-link layout)', () => {
 		tmp = mkdtemp();
 		const root = path.join(tmp, 'root');
-		fs.mkdirSync(path.join(root, 'node_modules'), {recursive: true});
+		fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
 
 		// Outside package: name "safe", payload writes a sentinel.
 		const outsidePkg = path.join(tmp, 'outside-pkg');
 		fs.mkdirSync(outsidePkg);
-		fs.writeFileSync(path.join(outsidePkg, 'package.json'), JSON.stringify({name: 'safe', main: 'index.js'}));
+		fs.writeFileSync(path.join(outsidePkg, 'package.json'), JSON.stringify({ name: 'safe', main: 'index.js' }));
 		const sentinel = path.join(tmp, 'pwned');
 		fs.writeFileSync(
 			path.join(outsidePkg, 'index.js'),
-			`require('fs').writeFileSync(${JSON.stringify(sentinel)}, 'pwned'); module.exports = 1;`
+			`require('fs').writeFileSync(${JSON.stringify(sentinel)}, 'pwned'); module.exports = 1;`,
 		);
 
 		// Symlink inside root pointing to the outside package — exactly what
@@ -94,11 +106,16 @@ describe('GHSA-cp6g-6699-wx9c — require.root symlink bypass', () => {
 		const link = path.join(root, 'node_modules', 'safe');
 		fs.symlinkSync(outsidePkg, link, 'dir');
 
-		const vm = new NodeVM({require: {external: ['safe'], root, context: 'host', builtin: []}});
+		const vm = new NodeVM({ require: { external: ['safe'], root, context: 'host', builtin: [] } });
 
 		assert.throws(
 			() => vm.run("module.exports = require('safe')", path.join(root, 'entry.js')),
-			err => err && (err.code === 'EDENIED' || err.code === 'ENOTFOUND' || err instanceof VMError || /not allowed|Cannot find module/.test(err.message))
+			err =>
+				err &&
+				(err.code === 'EDENIED' ||
+					err.code === 'ENOTFOUND' ||
+					err instanceof VMError ||
+					/not allowed|Cannot find module/.test(err.message)),
 		);
 		assert.strictEqual(fs.existsSync(sentinel), false, 'outside package must not have executed');
 	});
@@ -109,7 +126,7 @@ describe('GHSA-cp6g-6699-wx9c — require.root symlink bypass', () => {
 		fs.mkdirSync(root);
 		fs.writeFileSync(path.join(root, 'inside.js'), "module.exports = 'hello-from-root';");
 
-		const vm = new NodeVM({require: {external: true, root, context: 'host'}});
+		const vm = new NodeVM({ require: { external: true, root, context: 'host' } });
 		const out = vm.run("module.exports = require('./inside.js')", path.join(root, 'entry.js'));
 		assert.strictEqual(out, 'hello-from-root');
 	});
@@ -125,9 +142,87 @@ describe('GHSA-cp6g-6699-wx9c — require.root symlink bypass', () => {
 		const symRoot = path.join(tmp, 'sym-root');
 		fs.symlinkSync(realRoot, symRoot, 'dir');
 
-		const vm = new NodeVM({require: {external: true, root: symRoot, context: 'host'}});
+		const vm = new NodeVM({ require: { external: true, root: symRoot, context: 'host' } });
 		const out = vm.run("module.exports = require('./inside.js')", path.join(symRoot, 'entry.js'));
 		assert.strictEqual(out, 'via-symlinked-root');
 	});
 
+	// Eager FileSystem-contract probe at NodeVM construction. The fix added
+	// realpath() to the FileSystem interface; require.root cannot enforce its
+	// boundary without it. Surfacing the contract violation at construction is
+	// a strict UX improvement over silent deny-by-default at every require().
+	describe('FileSystem realpath contract probe at construction', () => {
+		it('throws VMError when require.root is set and adapter omits realpath()', () => {
+			const adapter = {
+				resolve: p => path.resolve(p),
+				isSeparator: c => c === '/' || c === path.sep,
+				isAbsolute: p => path.isAbsolute(p),
+				join: (...p) => path.join(...p),
+				basename: p => path.basename(p),
+				dirname: p => path.dirname(p),
+				statSync: (p, o) => fs.statSync(p, o),
+				readFileSync: (p, o) => fs.readFileSync(p, o),
+				// Intentionally no realpath()
+			};
+
+			tmp = mkdtemp();
+			fs.mkdirSync(path.join(tmp, 'root'));
+
+			assert.throws(
+				() => new NodeVM({ require: { external: true, root: path.join(tmp, 'root'), fs: adapter } }),
+				err =>
+					err instanceof VMError && /realpath/.test(err.message) && /GHSA-cp6g-6699-wx9c/.test(err.message),
+				'construction should fail with a VMError citing realpath and the advisory',
+			);
+		});
+
+		it('throws VMError when adapter has realpath() but underlying fs lacks realpathSync', () => {
+			const { VMFileSystem } = require('../../../lib/main.js');
+			// Custom fs module wired up for read/stat but missing realpathSync —
+			// the realistic VMFileSystem misuse pattern (mocked or virtual fs).
+			const customFs = {
+				readFileSync: fs.readFileSync.bind(fs),
+				statSync: fs.statSync.bind(fs),
+				// Intentionally no realpathSync
+			};
+			const adapter = new VMFileSystem({ fs: customFs });
+
+			tmp = mkdtemp();
+			fs.mkdirSync(path.join(tmp, 'root'));
+
+			assert.throws(
+				() => new NodeVM({ require: { external: true, root: path.join(tmp, 'root'), fs: adapter } }),
+				err =>
+					err instanceof VMError &&
+					/realpath probe failed/.test(err.message) &&
+					/GHSA-cp6g-6699-wx9c/.test(err.message),
+				'construction should fail with a VMError naming the probe and the advisory',
+			);
+		});
+
+		it('does not throw when require.root is unset, even if adapter omits realpath()', () => {
+			// Without require.root the realpath dependency does not apply — the
+			// probe must only fire when the boundary it protects is in use.
+			const adapter = {
+				resolve: p => path.resolve(p),
+				isSeparator: c => c === '/' || c === path.sep,
+				isAbsolute: p => path.isAbsolute(p),
+				join: (...p) => path.join(...p),
+				basename: p => path.basename(p),
+				dirname: p => path.dirname(p),
+				statSync: (p, o) => fs.statSync(p, o),
+				readFileSync: (p, o) => fs.readFileSync(p, o),
+			};
+
+			assert.doesNotThrow(() => new NodeVM({ require: { external: true, fs: adapter } }));
+		});
+
+		it('accepts root paths that do not yet exist (ENOENT is not a contract violation)', () => {
+			// Distinguishes "missing realpath method" (contract bug, throws) from
+			// "realpath ran but the path is missing" (legitimate, falls back).
+			tmp = mkdtemp();
+			const ghostRoot = path.join(tmp, 'not-yet-created');
+			assert.doesNotThrow(() => new NodeVM({ require: { external: true, root: ghostRoot } }));
+		});
+	});
 });

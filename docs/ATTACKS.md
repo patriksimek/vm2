@@ -1775,11 +1775,12 @@ The bridge proxy and the bridge's overall threat model are not involved here —
 
 ### Mitigation
 
-`fs.realpathSync` is used to canonicalize paths before the prefix check, so the boundary check operates on the same path the loader will follow:
+`fs.realpathSync` is used to canonicalize paths before the prefix check, so the boundary check operates on the same path the loader will follow. Enforces [Defense Invariant](#defense-invariants) #1 at the filesystem-resolver layer: the resolver and the loader must operate on the same canonical path namespace.
 
 1. **`DefaultFileSystem.realpath()` and `VMFileSystem.realpath()`** (in `lib/filesystem.js`) — new methods on the filesystem abstraction. The default delegates to host `fs.realpathSync`; `VMFileSystem` delegates to the user-supplied `fs.realpathSync`.
-2. **`isPathAllowed` realpaths the candidate** (in `lib/resolver-compat.js`) before the prefix-vs-rootPaths check. If `realpath` throws (file doesn't exist, broken link, custom `fs` without a `realpath` method) the check **denies by default**.
+2. **`isPathAllowed` realpaths the candidate** (in `lib/resolver-compat.js`) before the prefix-vs-rootPaths check. If `realpath` throws (file doesn't exist, broken link) the check **denies by default**.
 3. **`rootPaths` are canonicalized at construction time** so a symlinked root configuration (`root: '/tmp/myroot'` where `/tmp/myroot` is itself a symlink) compares the same canonical namespace as the candidate filenames.
+4. **Eager FileSystem-contract probe at NodeVM construction** (in `lib/resolver-compat.js`, `makeResolverFromLegacyOptions`). If `require.root` is set, the resolver verifies that the FileSystem adapter implements `realpath()` and that calling it does not throw a `TypeError` (the signal that `VMFileSystem`'s underlying `fs.realpathSync` is missing). On contract violation it throws `VMError` immediately at `new NodeVM(...)` time citing GHSA-cp6g-6699-wx9c, instead of silently denying every later `require()`. Other `realpath` errors at construction (`ENOENT`, `EACCES`) are tolerated — the root may legitimately not exist yet, and runtime `isPathAllowed` will still realpath candidates and deny-by-default.
 
 The race window between the canonicalization syscall and the subsequent loader syscalls is narrow but not eliminated; full mitigation would require atomic `openat`/`O_NOFOLLOW` APIs Node does not expose to user code. CWE-367 residual risk is documented but considered acceptable.
 
@@ -1791,7 +1792,7 @@ The race window between the canonicalization syscall and the subsequent loader s
 
 ### Considered Attack Surfaces
 
-- **Custom `fs` adapters without `realpath`/`realpathSync`**: existing `VMFileSystem({ fs: customFs })` users whose `customFs` lacks `realpathSync` will hit the deny-by-default path. This is a backwards-compat break that prefers strict security to silent allowance — release notes should advise adding `realpathSync` to custom adapters.
+- **Custom `fs` adapters without `realpath`/`realpathSync`**: existing `VMFileSystem({ fs: customFs })` users whose `customFs` lacks `realpathSync`, and fully custom `FileSystem` adapters that omit `realpath()`, are surfaced at construction time by the eager probe (Mitigation #4). The probe converts what would otherwise be a silent deny-by-default at every later `require()` into a single, clearly-labelled `VMError` at `new NodeVM(...)` — strict security with an actionable error message.
 - **Race between resolver-side realpath and loader-side `require`**: theoretically exploitable on a fast filesystem with attacker-controlled symlinks; not closed structurally because Node does not expose `openat`/`O_NOFOLLOW` to user code. Documented residual risk.
 - **`mocks` / `overrides`** are unaffected — they don't go through the path resolver.
 

@@ -13,6 +13,63 @@ When reviewing a code contribution:
 3. Any code that attempts to obtain a reference to host-realm `Function`, `process`, `require`, or `child_process` from within sandbox context is an escape attempt.
 4. The ultimate goal of almost every escape is: get a reference to the host `Function` constructor, then call `Function("return process")()` to access Node.js `process` and from there `require("child_process").execSync(...)`.
 
+When documenting a new advisory, follow the [Category Entry Format](#category-entry-format) and verify the fix against the [Defense Invariants](#defense-invariants).
+
+---
+
+## Category Entry Format
+
+Categories are organized into three tiers — Primitives (1–5), Techniques (6–15), Compound Attacks (16+). Add new entries under the appropriate tier with the next sequential number.
+
+Each entry uses the following structure:
+
+- **Heading**: `## Attack Category N: <Short title>`.
+- **`**Uses**:`** — Tier 2 and Tier 3 only. Linked list of prerequisite categories this attack composes.
+- **`**Supersedes**:`** — Optional. Link to an earlier category whose mitigation was specific rather than structural and is now subsumed by this fix.
+- **`### Description`** — What the attacker can do and the underlying mechanism.
+- **`### Attack Flow`** — Numbered step-by-step breakdown.
+- **`### Canonical Example(s)`** — Code blocks. Include all known variants when multiple bypass paths exist.
+- **`### Why It Works`** — Why the existing defenses didn't prevent this. Reference V8 internals where relevant.
+- **`### Mitigation`** — The structural fix. Cite the file and function. Reference the [Defense Invariant](#defense-invariants) the fix enforces.
+- **`### Detection Rules`** — Bulleted heuristics for spotting similar patterns in code review.
+- **`### Considered Attack Surfaces`** — Optional. Adjacent surfaces analysed and ruled out, so future reviewers don't re-investigate.
+
+If a new vulnerability fits an existing category, add it as an additional canonical example and update the Mitigation. Only create a new category for genuinely novel attack classes.
+
+After adding an entry, also update:
+
+- **Summary → How The Bridge Defends** — add a row mapping the attack to its defense.
+- **Summary → Compound Attack Patterns** — for Tier 3, describe how the chain composes.
+- **CHANGELOG.md** — one-line entry under the next release.
+
+---
+
+## Defense Invariants
+
+These are the cross-cutting properties the sandbox must preserve. A fix that closes a specific PoC without restoring the relevant invariant is **specific** and will admit variants. A fix that restores the invariant at the right chokepoint is **structural**. Every Mitigation section should reference the invariant it enforces.
+
+1. **No host-realm object reaches sandbox code unwrapped.** Every value crossing the boundary is a primitive, a sandbox-realm object, or a bridge proxy. `thisFromOther` / `ensureThis` is the single chokepoint; the WeakMap caches preserve identity.
+
+2. **All caught exceptions are sanitized.** Every value entering a `catch` clause passes through `handleException`. Paths that bypass JS-level `catch` instrumentation (Wasm `try_table`, host-realm `Promise.then` rejection) are closed at the bridge.
+
+3. **Cross-realm error containers are recursively sanitized.** `SuppressedError`, `AggregateError`, and `Error.cause` may carry host references in nested fields. `handleException` walks the structure with cycle detection.
+
+4. **V8 internal algorithms cannot read attacker-controlled `constructor` on host objects.** ArraySpeciesCreate, PromiseResolveThenableJob, and similar C++ paths bypass proxy traps. The bridge neutralises raw `constructor` slots on host arrays before every host-side call (`neutralizeArraySpecies`) and pre-sets `Promise.constructor` as an own data property before `.then`/`.catch` (`resetPromiseSpecies`).
+
+5. **`Error.prepareStackTrace` always resolves to a sandbox-realm safe default.** V8 must never fall back to the host's `prepareStackTraceCallback`. Setting `Error.prepareStackTrace = undefined` in the sandbox restores the safe default rather than removing it.
+
+6. **Host-realm intrinsic prototypes are read-only from the sandbox.** `Object.prototype`, `Array.prototype`, `Function.prototype`, etc. cannot be polluted, deleted from, or frozen via bridge write traps. Mutability is preserved for non-intrinsic host objects (Buffer instances, embedder-exposed configs).
+
+7. **Cross-realm well-known symbols are not extractable.** `Symbol.for('nodejs.util.inspect.custom')` and similar cross-realm symbols are filtered at the bridge so sandbox code cannot use them as a channel to register host-side callbacks.
+
+8. **Reflect and dangerous-constructor identity is captured at init time.** The bridge caches `Reflect.*` references and built-in constructors before sandbox code runs. Sandbox-side monkey-patching of these cannot affect bridge internals.
+
+9. **Post-ES2022 syntax is treated as a transformer blind spot.** `using`, `await using`, and any future syntax not understood by Acorn (`ecmaVersion: 2022`) bypasses catch instrumentation. Defenses must hold even when no transformer instrumentation runs over the relevant scope.
+
+10. **Dynamic code compilation paths cannot reach an unwrapped host realm.** `Function`, `eval` with host references, and dynamic `import()` are blocked or proxied. `import()` throws `VMError` unconditionally.
+
+The [Security Checklist for Bridge Changes](#security-checklist-for-bridge-changes) at the end of this document gives the verification questions for each invariant.
+
 ---
 
 ## Fundamentals

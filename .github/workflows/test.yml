@@ -35,14 +35,14 @@ jobs:
               run: npm install --only=prod
 
             - name: Run unit tests
-              if: ${{ matrix.node-version >= 16 }}
+              if: ${{ matrix.node-version >= 18 }}
               run: npm test
 
-            - name: Run unit tests (node < 16)
-              if: ${{ matrix.node-version < 16 }}
+            - name: Run unit tests (node < 18)
+              if: ${{ matrix.node-version < 18 }}
               run: node scripts/legacy-test-runner.js
 
             - name: Run unit tests (compilers)
-              if: ${{ matrix.node-version >= 16 }}
+              if: ${{ matrix.node-version >= 18 }}
               run: npm install typescript coffee-script --no-save && npm run test:compilers
 

@@ -1,5 +1,28 @@
 # Changelog
 
+## [3.11.1]
+
+Single advisory closed plus prominent documentation of an existing escape hatch. Patch release — no API changes for valid configurations.
+
+### Security fix
+
+- **GHSA-8hg8-63c5-gwmx** — `nesting: true` bypassed `require: false`, allowing sandbox-to-host RCE via inner NodeVM construction. The contradictory option pair `{ nesting: true, require: false }` now throws `VMError` at `new NodeVM(...)` time citing the advisory. Same shape as the GHSA-cp6g eager FileSystem-contract probe — surface contradictory configuration at the API surface, not silently produce an unsandboxed sandbox. ATTACKS.md Category 25.
+
+### Documentation
+
+- New README section **"`nesting: true` is an escape hatch"** under Hardening recommendations. Explains that `nesting: true` lets sandbox code `require('vm2')` and construct nested NodeVMs whose `require` config is chosen by the sandbox (not constrained by the outer config — by design of nesting). **Do not enable `nesting: true` for untrusted code.**
+- JSDoc on the `nesting` option (`lib/nodevm.js`) upgraded to spell out the escape-hatch semantics and the GHSA-8hg8 contradictory-pair rejection.
+- ATTACKS.md gains Category 25 documenting the configuration trap and a matching row in the "How The Bridge Defends" table.
+
+### Upgrade notes
+
+- **If you set `{ nesting: true, require: false }`** anywhere in your codebase, `new NodeVM(...)` now throws. Either drop `nesting: true` (if you wanted deny-all), or replace `require: false` with an explicit `require` config (e.g. `require: { builtin: [] }`) to acknowledge that vm2 will be requireable. The error message is actionable and links to the README section.
+- **No other configurations are affected.** Bare `new NodeVM({ nesting: true })` continues to work as documented; this is the documented escape hatch and is not closed by this patch (out of scope — would change `nesting: true` semantics substantially).
+
+### What this fix does NOT close
+
+`nesting: true` itself remains an escape hatch for any non-trivial `require` config. The fix closes the **specific contradictory pair** flagged by the advisory; the broader recommendation is in the new README section: do not enable `nesting: true` when running untrusted code. Constraint propagation from outer to inner NodeVM (where the outer's `require` config would constrain inner construction) was considered and deferred — it would change the documented semantics of `nesting: true` and is a major-version-shaped change.
+
 ## [3.11.0]
 
 Coordinated security release closing 13 advisories, plus a new `bufferAllocLimit` option and a `realpath()` method on the FileSystem adapter contract. Minor version bump because of the new public option and the FileSystem contract addition; no incompatible changes to the existing public API surface. Embedders running untrusted code in memory-constrained environments should review the new `bufferAllocLimit` option and the README's [Hardening recommendations](README.md#hardening-recommendations) section.

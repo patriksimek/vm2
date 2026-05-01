@@ -1798,6 +1798,78 @@ The race window between the canonicalization syscall and the subsequent loader s
 
 ---
 
+## Attack Category 25: NodeVM `nesting: true` + `require: false` Configuration Trap
+
+### Description
+
+`NodeVM`'s `nesting: true` option injects a `NESTING_OVERRIDE` builtin that exposes the `vm2` package to sandbox code regardless of any other `require` configuration. The override is unconditional — it survives `require: false`, narrow `builtin` allowlists, and every other restriction the user might set. With `vm2` reachable, the sandbox constructs an inner `NodeVM` whose `require` config is **chosen by the sandbox code, not constrained by the outer config** (this is by design of `nesting`). The inner NodeVM can be configured with `child_process`, `fs`, or any other host module → full host RCE.
+
+The **specific** trap GHSA-8hg8-63c5-gwmx flagged is the contradictory pair `{ nesting: true, require: false }`: a developer who sets `require: false` to lock down modules then enables `nesting: true` for legitimate child-VM use believes the sandbox is restricted. It is not. The deeper issue — `nesting: true` is fundamentally an escape hatch — is separately documented in the README.
+
+CWE-284 (Improper Access Control).
+
+### Attack Flow
+
+1. **Host configures contradictory pair**: `new NodeVM({ nesting: true, require: false })`.
+2. **Sandbox code requires `vm2`**: succeeds because `NESTING_OVERRIDE` injected `vm2` into the builtin map regardless of `require: false`.
+3. **Sandbox constructs inner NodeVM** with attacker-chosen `require` config: `new NVM({ require: { builtin: ['child_process'] } })`.
+4. **Inner sandbox loads `child_process`** and runs arbitrary commands as the host process user.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-8hg8-63c5-gwmx)
+const vm = new NodeVM({ nesting: true, require: false });
+vm.run(`
+  const { NodeVM: NVM } = require('vm2');
+  const inner = new NVM({ require: { builtin: ['child_process'] } });
+  module.exports = inner.run(
+    'module.exports = require("child_process").execSync("id").toString()'
+  );
+`);
+// uid=1000(...) ...
+```
+
+### Why It Works
+
+The bug lives in `lib/resolver-compat.js` `makeResolverFromLegacyOptions`:
+
+```javascript
+function makeResolverFromLegacyOptions(options, override, compiler) {
+    if (!options) {
+        if (!override) return DENY_RESOLVER;     // require:false alone → deny all
+        // require:false + nesting:true → permissive resolver with vm2 loadable:
+        const builtins = makeBuiltinsFromLegacyOptions(undefined, defaultRequire, undefined, override);
+        return new Resolver(DEFAULT_FS, [], builtins);
+    }
+    ...
+}
+```
+
+`require: false` makes `requireOpts` falsy; `nesting: true` passes `NESTING_OVERRIDE` as `override`. The `(!options && override)` branch builds a resolver containing the override (which carries `vm2`) instead of returning `DENY_RESOLVER`. `lib/builtin.js`'s `makeBuiltinsFromLegacyOptions` merges `override` unconditionally, so `vm2` always lands in the resolver's builtin map.
+
+The reporter's framing — "mental-model mismatch" — is precise: there's no implementation bug in any individual line; the bug is the **interaction** between two options that look orthogonal but aren't.
+
+### Mitigation
+
+`NodeVM` constructor (`lib/nodevm.js`) throws `VMError` immediately when both `nesting: true` and `require: false` are set explicitly. Same shape as the GHSA-cp6g eager FileSystem-contract probe — surface contradictory configuration at construction with a clear, actionable error message citing the advisory and pointing to the README escape-hatch section. Enforces the principle that any configuration where vm2 cannot honor the developer's stated intent must fail loudly at the API surface, not produce a silently-permissive sandbox.
+
+The narrow fix closes the **specific** contradictory pair. The **broader** issue — `nesting: true` is documented as an escape hatch and grants sandbox code unrestricted host access via inner NodeVMs — is now documented prominently in README § "`nesting: true` is an escape hatch" and in the JSDoc on the `nesting` option. Embedders running untrusted code should not enable `nesting: true`.
+
+### Detection Rules
+
+- **`new NodeVM({ nesting: true, ... })`** with any `require` setting in code reviewing untrusted-code flows — flag as a likely escape path.
+- **`new NodeVM({ nesting: true, require: false })`** specifically — now throws at construction, but pre-3.11.1 codebases may have this pattern.
+- **Sandbox code containing `require('vm2')`** — only reachable when `nesting: true`; almost always indicates an escape attempt unless the embedder explicitly built a VM-spawning host integration.
+
+### Considered Attack Surfaces
+
+- **`{ nesting: true, require: { builtin: ['something'] } }`** (no `require: false`) — does NOT throw. The developer has explicitly opted into the escape hatch by configuring a non-`false` require. The README and JSDoc loudly state that `nesting: true` is unsafe for untrusted code; this is a documentation-level mitigation, not a code-level one. Constraint propagation from outer to inner NodeVM (where the outer's `require` config would constrain inner construction) is out of scope for the 3.11.1 patch — it would change the documented semantics of `nesting: true` substantially.
+- **Sandbox-side `require('vm2')` when `nesting: false`** — already throws `EDENIED` because the override is not installed. Unaffected.
+- **`mocks` / `overrides`** — bypass the resolver entirely; unaffected by this fix and unaffected by `nesting: true` (mocks don't carry the `vm2` package).
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -1915,6 +1987,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Array species self-return | set/defineProperty traps + neutralizeArraySpecies + SPECIES_ATTACK_SENTINEL |
 | Host prepareStackTrace fallback | Safe default always set; setter resets to safe default instead of `undefined` |
 | NodeVM `require.root` symlink bypass | `isPathAllowed` realpaths candidate before prefix check; `rootPaths` canonicalized at construction; deny-by-default if realpath throws |
+| NodeVM `nesting: true` + `require: false` config trap | Constructor throws `VMError` at the contradictory option pair, citing GHSA-8hg8-63c5-gwmx and the README escape-hatch section |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

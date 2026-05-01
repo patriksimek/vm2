@@ -502,6 +502,24 @@ Even with `bufferAllocLimit` set, run the host process with `--max-old-space-siz
 
 The `'*'` wildcard expands to most Node built-ins, including `child_process`, `fs`, `dgram`, `net`, `http`, and `dns`. These are full host-capability primitives — `require('child_process').execSync('id')` is reachable from the sandbox under `'*'`. vm2's `'*'` semantics are intentional (some embedders run trusted-but-isolated code), but it should not be used as a default for untrusted code. Prefer an explicit allowlist of the smallest set of modules your sandbox actually needs.
 
+### 5. `nesting: true` is an escape hatch
+
+`nesting: true` lets sandbox code `require('vm2')` and construct nested NodeVMs. **The nested VM's `require` config is chosen by the sandbox code that constructs it, not constrained by the outer VM.** Concretely:
+
+```js
+const vm = new NodeVM({ nesting: true, require: { builtin: [] } });
+vm.run(`
+  const { NodeVM: NVM } = require('vm2');
+  // Inner VM's config is whatever the sandbox writes here:
+  const inner = new NVM({ require: { builtin: ['child_process'] } });
+  inner.run('require("child_process").execSync("id")');  // RCE
+`);
+```
+
+If you set `nesting: true`, you have effectively granted the sandbox the same trust level you have. **Do not enable `nesting: true` for untrusted code.** Use it only when you trust the sandboxed code itself but want VM-style execution semantics (fresh global, controlled timeouts) for non-security reasons.
+
+The combination `{ nesting: true, require: false }` throws `VMError` at construction (GHSA-8hg8-63c5-gwmx) because the pair is contradictory: `nesting: true` makes `vm2` requireable regardless of `require: false`, so the deny-all expectation cannot be honored. To deny all requires, remove `nesting: true`. To allow nested VMs, replace `require: false` with an explicit config so the tradeoff is visible.
+
 ## Known Issues
 
 -   It is not possible to define a class that extends a proxied class. This includes using a proxied class in `Object.create`.

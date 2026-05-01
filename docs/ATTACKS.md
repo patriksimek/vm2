@@ -1870,6 +1870,97 @@ The narrow fix closes the **specific** contradictory pair. The **broader** issue
 
 ---
 
+## Attack Category 26: Sandbox-Realm Null-Proto via Bridge `from()` — Set-Trap Write-Through
+
+**Uses**: [Category 1](#attack-category-1-constructor-chain-traversal) (host `Function` via `.constructor`), [Category 6](#attack-category-6-proxy-trap-exploitation) (bridge `set` trap as the actual leak vector).
+
+**Supersedes**: defense-in-depth portion of GHSA-mpf8-4hx2-7cjg's fix that extended `from()` to `handleException` and `globalPromise.prototype.then` onFulfilled.
+
+### Description
+
+`bridge.from(other)` constructs a sandbox-side proxy whose internal target the bridge **treats as an other-realm (host) object**. The proxy's `set` trap therefore unwraps incoming sandbox bridge proxies (`otherFromThis(value)`) back to their raw host references and writes them directly onto the underlying target via `otherReflectSet(object, key, value)`.
+
+When `from()` is called from a sandbox-side path with a **sandbox-realm null-proto value**, the proxy's underlying target IS the sandbox object. The write-through path then stores raw host references onto a sandbox-visible object, readable via the original sandbox reference (which bypasses the proxy entirely). Reading `.constructor` on a leaked host function yields host `Function`; `Function('return process')()` is RCE.
+
+The post-GHSA-mpf8 hardening (commit `b57ac2d`, "setup-sandbox defense-in-depth (mpf8 symmetry)") added `from()` calls in three sandbox-side spots — `handleException` (transformer-instrumented JS catch path), `globalPromise.prototype.then` onFulfilled wrapper, and the `setHostPromiseSanitizers` install — for "symmetry" with the original GHSA-mpf8 fix. Two of those callsites receive sandbox-realm values and turn them into write-through proxies; this is the leak path GHSA-9vg3-4rfj-wgcm exploits.
+
+CVSS:3.1 9.8 (AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H). CWE-913 (Improper Control of Dynamically-Managed Code Resources).
+
+### Attack Flow
+
+1. Sandbox creates a null-proto carrier: `const o = {__proto__: null}`.
+2. Sandbox throws it: `throw o`. Transformer-instrumented catch calls `e = handleException(e)`.
+3. `handleException` was passing `e` through `from(e)`. With `e`'s prototype being null, `bridge.from()` had no proto-mapping to consult and built a sandbox-side proxy treating `o` as host-realm.
+4. Sandbox writes a sandbox-side proxy of a host function onto the proxy: `e.f = Buffer.prototype.inspect`. The bridge `set` trap converts the sandbox value to host realm via `otherFromThis(value)`, yielding the **raw host `inspect`**, then stores it on the underlying target — which is the sandbox object `o`.
+5. Sandbox reads via the original reference: `o.f` returns the raw host function (no proxy in the way; `o` IS sandbox-realm, so plain property access bypasses the bridge entirely).
+6. `o.f.constructor` is host `Function` → `Function('return process')()` → host `process` → RCE.
+
+The same bug exists on the `globalPromise.prototype.then` onFulfilled path: `Promise.resolve({__proto__:null}).then(e => { e.f = HostFn; ... })`.
+
+### Canonical Examples
+
+```javascript
+// (advisory GHSA-9vg3-4rfj-wgcm)
+const {VM} = require("vm2");
+new VM().run(`
+  const o = {__proto__: null};
+  try {
+    throw o;
+  } catch (e) {
+    e.f = Buffer.prototype.inspect;
+    o.f.constructor("return process")()
+      .mainModule.require('child_process').execSync('touch pwned');
+  }
+`);
+```
+
+```javascript
+// Promise.then variant
+new VM().run(`
+  (async () => {
+    const o = {__proto__: null};
+    return Promise.resolve(o).then(e => {
+      e.f = Buffer.prototype.inspect;
+      return o.f.constructor('return process')();
+    });
+  })()
+`).then(p => console.log(p)); // host process leaked
+```
+
+### Why It Works
+
+`bridge.from()` (= `thisFromOtherWithFactory(defaultFactory, other)`) is **defined for host-realm inputs**. Its internal logic walks the prototype chain looking for a `protoMappings` entry; if proto is null and no mapping found, it creates a default proxy via `thisProxyOther(factory, other, null, dangerous)`. The bridge has no realm-tagging on raw values, so it cannot distinguish "host null-proto object the sandbox should see wrapped" (the GHSA-mpf8 motivating case) from "sandbox null-proto object the sandbox already owns" (this GHSA's case).
+
+The post-GHSA-mpf8 commit `b57ac2d` extended `from()` to two sandbox-side callsites — `handleException` and `globalPromise.prototype.then` onFulfilled — purely for "symmetry"; no exploit existed for the sandbox-side path at the time. Those callsites do not receive host-realm values in normal flow: host throws are pre-converted by the bridge `apply`-trap's `thisFromOtherForThrow`, and host-promise resolutions are intercepted at the bridge level via `wrapHostPromiseThenArgs`. The "symmetry" wrap therefore only ever fires on sandbox-realm values, where it creates the dangerous write-through proxy.
+
+### Mitigation
+
+Restores [Defense Invariant 2](#defense-invariants) ("All caught exceptions are sanitized") with the **right** sanitizer for each callsite's actual realm context, and Defense Invariant 1 by ensuring `from()` is not used to "wrap" sandbox-realm values into host-treating proxies.
+
+`lib/setup-sandbox.js`:
+
+- `handleException` (line ~876): `e = from(e)` → `e = ensureThis(e)`. `ensureThis` returns sandbox-realm values unchanged and walks the proto chain only for host-mapped values, so a sandbox null-proto value stays sandbox-realm. SuppressedError / AggregateError sub-error recursion still works because each sub-call routes through the same `ensureThis` and the sub-error proto chain reaches a known host Error prototype mapping for genuinely-host sub-errors.
+- `globalPromise.prototype.then` onFulfilled wrap (line ~283): same change. The host-promise resolution path is unaffected because it goes through the bridge-level `wrapHostPromiseThenArgs` interception, which keeps using `from()` (correct — values there ARE host-realm).
+- `bridge.setHostPromiseSanitizers` install (line ~959): the rejection sanitizer is now `e => handleException(from(e))` instead of `handleException`. The explicit outer `from(e)` preserves the GHSA-mpf8 invariant for genuinely-host null-proto rejection values (they reach sandbox callbacks bridge-wrapped, not raw); the inner `handleException` then performs SuppressedError / AggregateError recursive sanitization on the wrapped value.
+
+The fix surface is three lines of code in `setup-sandbox.js`, no bridge changes.
+
+### Detection Rules
+
+- **`from(value)` calls in sandbox-side code paths** — `lib/setup-sandbox.js` and any future sandbox-side callsite. Whenever the value can be sandbox-realm by construction (transformer catch path, sandbox-Promise rejection, executor catch), the call must use `ensureThis` (sandbox-passthrough for unmapped values) instead of `from` (always-wrap).
+- **`{__proto__: null}` followed by `throw` or `Promise.resolve(...)` in untrusted code review** — the canonical attack carrier. Innocuous on its own, but combined with property assignment in catch / `.then` it's a write-through probe.
+- **`obj.constructor("return process")` or `obj.f.constructor("return ...")` patterns** — the post-leak escape primitive. Flag in code review even when wrapped in try/catch.
+- **Reverts of the b57ac2d "symmetry" change** — any future commit re-introducing `from()` in `handleException` or sandbox-side `Promise.prototype.then` onFulfilled must re-prove the realm assumption holds for every callsite reachable on those paths.
+
+### Considered Attack Surfaces
+
+- **`localPromise` constructor catch wrapper** (line ~76): `reject(handleException(e))`. The executor runs in the sandbox; `e` is a sandbox-realm thrown value (host throws inside an executor that was passed through the bridge would already be wrapped at the bridge boundary). `handleException` now uses `ensureThis` internally, so this path is safe.
+- **Sandbox-side `localPromise.prototype.then` onRejected wrap** (line ~1170): also routes through `handleException`. Same reasoning — sandbox-realm rejection value, `ensureThis` correctly passes through.
+- **`readonly()` factory `from(mock)` call** (line ~1281): `mock` is a sandbox-supplied user value that the embedder asked to read-only-mock onto a host target. The wrap is intentional (the value crosses TO the host as the read-side data). Sandbox cannot exploit the resulting proxy because it doesn't have a sandbox-side reference to the underlying mock object identity.
+- **Bridge-level `wrapHostPromiseThenArgs` / `wrapHostPromiseCatchArgs`**: still use `from()` directly, correct because at that layer the value is host-realm by construction (delivered from host Promise machinery).
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -1988,6 +2079,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Host prepareStackTrace fallback | Safe default always set; setter resets to safe default instead of `undefined` |
 | NodeVM `require.root` symlink bypass | `isPathAllowed` realpaths candidate before prefix check; `rootPaths` canonicalized at construction; deny-by-default if realpath throws |
 | NodeVM `nesting: true` + `require: false` config trap | Constructor throws `VMError` at the contradictory option pair, citing GHSA-8hg8-63c5-gwmx and the README escape-hatch section |
+| Sandbox-realm null-proto via bridge `from()` set-trap write-through (GHSA-9vg3-4rfj-wgcm) | `handleException` and sandbox-Promise.then onFulfilled use `ensureThis` (sandbox-realm passthrough); host-Promise rejection sanitiser composes `from()` outside `handleException` so the GHSA-mpf8 invariant still wraps host null-proto values |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

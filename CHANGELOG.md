@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Security fix
+
+- **GHSA-9vg3-4rfj-wgcm** — Sandbox breakout via null-proto throw / `handleException`. The post-GHSA-mpf8 hardening switched `handleException` and `globalPromise.prototype.then` onFulfilled to wrap caught/resolved values with `bridge.from()` for "symmetry". `from()` builds a sandbox-side proxy whose target the bridge treats as host-realm; calling it on a sandbox-realm null-proto value (`{__proto__: null}` thrown or `Promise.resolve`-d by sandbox JS) produced a proxy whose `set` trap unwrapped sandbox proxies of host references (e.g. `Buffer.prototype.inspect`) back to their raw host originals and stored them on the underlying sandbox object — readable via the original sandbox reference and pivot to host `Function` constructor → RCE. Three callsites in `lib/setup-sandbox.js` reverted to `ensureThis()` semantics; the host-Promise rejection sanitizer composes `from()` outside `handleException` so the GHSA-mpf8 invariant (host null-proto rejection values must reach sandbox callbacks bridge-wrapped) is preserved. ATTACKS.md Category 26.
+
 ## [3.11.1]
 
 Single advisory closed plus prominent documentation of an existing escape hatch. Patch release — no API changes for valid configurations.

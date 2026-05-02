@@ -1961,6 +1961,88 @@ The fix surface is three lines of code in `setup-sandbox.js`, no bridge changes.
 
 ---
 
+## Attack Category 27: Internal State Probe via Computed Property Access on `globalThis`
+
+**Uses**: [Category 12](#attack-category-12-code-transformation-bypass) (the transformer is a syntactic gate; computed keys are invisible to it).
+
+**Supersedes**: GHSA-wp5r-2gw5-m7q7 ("Transformer Fast-Path Bypass Exposes Internal State Variable") whose mitigation tightened the transformer's identifier-rejection but kept `globalThis[INTERNAL_STATE_NAME]` reachable for any non-identifier read path.
+
+### Description
+
+The transformer protects the `VM2_INTERNAL_STATE_DO_NOT_USE_OR_PROGRAM_WILL_FAIL` identifier so user source cannot reference it as a bare name (any declaration or use, including `\u`-escaped variants, throws `Use of internal vm2 state variable`). Until this fix, however, the value the identifier resolves to was installed as a permanent non-enumerable own property on the sandbox `globalThis`. Identifier rejection is a *syntactic* control, but property reads use a *dynamic* key — the AST walker has no way to evaluate `globalThis[k]` where `k` is a string literal, a computed string, a base-decoded blob, or a key obtained from `Object.getOwnPropertyNames(globalThis)`. Every reflective probe of the global object therefore returned the live state object and its `wrapWith` / `handleException` / `import` methods.
+
+CVSS:3.1 5.3 (AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N). CWE-693 (Protection Mechanism Failure). Today the exposed methods are defensive utilities only and there is no direct escape primitive — the impact is "complete bypass of a security control" and the latent attack surface for any future addition to the state object.
+
+### Attack Flow
+
+1. Sandbox code asks `globalThis['VM2_INTERNAL_STATE_DO_NOT_USE_OR_PROGRAM_WILL_FAIL']` (string literal, transformer never inspects strings) — pre-fix returned the state object.
+2. Or `Reflect.get(globalThis, '…')` / `Object.getOwnPropertyDescriptor(globalThis, '…')` / `'…' in globalThis` — same.
+3. Or simply `Object.getOwnPropertyNames(globalThis).filter(n => n.startsWith('VM2_'))` to *discover* the canonical name without hardcoding it, then read with bracket access.
+4. The returned object's properties are sandbox-realm functions (`wrapWith`, `handleException`, `import`); calling them today is innocuous, but any future sensitive method on that object would be immediately exploitable.
+
+### Canonical Examples
+
+```javascript
+// (advisory GHSA-2cm2-m3w5-gp2f)
+const {VM} = require("vm2");
+console.log(new VM().run(`
+  globalThis['VM2_INTERNAL_STATE_DO_NOT_USE_OR_PROGRAM_WILL_FAIL']
+`));
+// pre-fix: { wrapWith, handleException, import }
+```
+
+```javascript
+// Equivalent variants — all resolve via the same own-property read path
+new VM().run(`Reflect.get(globalThis, 'VM2_INTERNAL_STATE_DO_NOT_USE_OR_PROGRAM_WILL_FAIL')`);
+new VM().run(`Object.getOwnPropertyDescriptor(globalThis, 'VM2_INTERNAL_STATE_DO_NOT_USE_OR_PROGRAM_WILL_FAIL')`);
+new VM().run(`'VM2_INTERNAL_STATE_DO_NOT_USE_OR_PROGRAM_WILL_FAIL' in globalThis`);
+new VM().run(`Object.getOwnPropertyNames(globalThis).find(n => n.includes('VM2_INTERNAL'))`);
+```
+
+### Why It Works
+
+The transformer rejects any user-source `Identifier` node whose `name` matches `INTERNAL_STATE_NAME`. Property reads are not identifier nodes — the AST has `MemberExpression(globalThis, computed: 'VM2_…')` where the second argument is a `Literal` whose value is a string. The walker does not evaluate string contents, so it cannot tell whether the dynamic key happens to coincide with the protected identifier. Even tightening the walker to reject the substring would still miss `globalThis['VM2' + '_INTERNAL_…']`, `globalThis[String.fromCharCode(86,77,…)]`, base64-decoded blobs, or names obtained from `Object.getOwnPropertyNames(globalThis)` at runtime. As long as the value is reachable via `[[Get]]` on the global object, no transformer-level filter can close the class.
+
+The previous mitigation (GHSA-wp5r-2gw5-m7q7) hardened the transformer's identifier-rejection (kept the regex bailout consistent, added the unicode-escape force-AST). It correctly closed the bare-identifier path but left the computed-key path entirely open, because the global property still existed — that fix was *specific to the identifier route*, not *structural for the binding*.
+
+### Mitigation
+
+Restores [Defense Invariant 10](#defense-invariants) ("Dynamic code compilation paths cannot reach an unwrapped host realm") for the implicit dependency of every transformer-instrumented `catch` / `with` / `import()` rewrite on the canonical identifier — the binding it resolves to is now a sandbox-controlled lexical record entry rather than an attacker-reflectable global property.
+
+`lib/vm.js` (bootstrap script source for `setupSandboxScript`):
+
+```js
+const setupSandboxScript = compileScript(
+  `${__dirname}/setup-sandbox.js`,
+  `let ${INTERNAL_STATE_NAME};(function(global, host, bridge, data, context) { … })`,
+);
+```
+
+The leading `let ${INTERNAL_STATE_NAME}` lands the binding in the context's **`[[GlobalLexicalEnvironment]]`** — a separate ECMAScript record from the global object's own-property table. Three properties of that record are what makes the fix structural:
+
+1. **Reachable as a bare identifier from every script in the context.** Bare-identifier resolution walks the script's own lex chain, then `[[GlobalLexicalEnvironment]]`, then the global object. The transformer's emitted `${INTERNAL_STATE_NAME}.handleException(e)` therefore still resolves; this works equally for VM scripts, indirect-eval'd source (the EvalHandler's `localEval`), Function constructor bodies, and the NodeVM module wrapper, because all of them are evaluated with the same context's GlobalLexicalEnvironment as the outermost lexical outer.
+2. **Not reachable from `globalThis[k]`, `Reflect.get`, descriptor APIs, or any own-property enumeration.** GlobalLexicalEnvironment entries are not properties of the global object; the global object's `[[OwnPropertyKeys]]` does not include them. `globalThis['VM2_…']`, `Reflect.has`, `'…' in globalThis`, `Object.getOwnPropertyNames`, `Reflect.ownKeys`, and prototype-chain enumeration all return `undefined` / `false` / no entry.
+3. **Persistent across `runInContext` calls in the same context.** User scripts that legitimately rely on top-level `let x = …` carrying over to a later `vm.run(...)` continue to work — those declarations land in the same record, and the bootstrap's `let` is declared exactly once at VM construction.
+
+`lib/setup-sandbox.js` then assigns `interanState` into that outer binding (`VM2_INTERNAL_STATE_DO_NOT_USE_OR_PROGRAM_WILL_FAIL = interanState`); the previous `localReflectDefineProperty(global, …)` call is removed entirely. The transformer continues to reject any user-source occurrence of the canonical identifier (including unicode-escape variants), so user code can neither shadow the binding (`let VM2_…` would collide with the bootstrap declaration) nor reference it (`VM2_…` as bare name is rejected at compile time). The only reference paths that resolve are the transformer's own injected emissions.
+
+### Detection Rules
+
+- **`globalThis[stringLiteral]` or `Reflect.get(globalThis, …)` in security-sensitive code review** where the literal could be the canonical name. Flag any read of a long, all-caps, underscore-separated key on `globalThis` from sandboxed code paths.
+- **`Object.getOwnPropertyNames(globalThis)` filtered or pattern-matched in user code** — there is no legitimate reason for sandboxed code to enumerate the global object looking for vm2-prefixed names.
+- **New properties added to the `interanState` object in `lib/setup-sandbox.js`** must continue to be covered by the GlobalLexicalEnvironment binding; do *not* re-introduce a `defineProperty` on `global` "for compatibility" — that re-opens this category.
+- **Future code that needs to expose a sandbox-controlled value to transformer-emitted code** should follow the same pattern: declare an outer `let` in the bootstrap script source and assign to it from the IIFE, rather than installing a global object property. Document the design decision next to the new `let`.
+
+### Considered Attack Surfaces
+
+- **`let VM2_… = "evil"` in user source.** Transformer rejects the canonical identifier in any declaration form (`var`/`let`/`const`/parameter/function name/class name) so user code cannot redeclare or shadow the bootstrap binding. A redeclaration attempt would otherwise throw a `SyntaxError` because top-level `let`s share the GlobalLexicalEnvironment — but the transformer rejects earlier, with a clearer error.
+- **`Function('return globalThis')()` then bracket access.** Function constructor bodies execute with the realm's GlobalEnv as outer; bare `${INTERNAL_STATE_NAME}` inside a Function body resolves through the same GlobalLexicalEnvironment, which is the *intended* path for transformer-emitted code. Bracket access via `globalThis['VM2_…']` from inside a Function body returns `undefined` for the same reason it does from any other script.
+- **Indirect eval (`(0, eval)('…')`).** Indirect eval re-creates the lex env chain rooted at GlobalEnv; the GlobalLexicalEnvironment is consulted during identifier resolution exactly as for top-level script code. `eval('globalThis["VM2_…"]')` returns `undefined`; the transformer-emitted catch handlers inside eval'd source still resolve through the GlobalLexicalEnvironment.
+- **`with(globalThis) { VM2_… }` after constructing a string with the canonical name dynamically.** The transformer instruments user `with()` heads with `wrapWith()`, which wraps the head expression in a Proxy whose `has` trap returns `false` for `INTERNAL_STATE_NAME` — so even a dynamically-named `with` head cannot expose the binding via the with-scope's identifier resolution path.
+- **Multiple VMs sharing a process.** Each `new VM()` constructor creates its own `vm.Context`, which has its own GlobalLexicalEnvironment. The bootstrap's `let` is per-context, so VM1's binding is invisible to VM2 (and vice versa). The fix does not introduce cross-VM coupling.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -2080,6 +2162,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | NodeVM `require.root` symlink bypass | `isPathAllowed` realpaths candidate before prefix check; `rootPaths` canonicalized at construction; deny-by-default if realpath throws |
 | NodeVM `nesting: true` + `require: false` config trap | Constructor throws `VMError` at the contradictory option pair, citing GHSA-8hg8-63c5-gwmx and the README escape-hatch section |
 | Sandbox-realm null-proto via bridge `from()` set-trap write-through (GHSA-9vg3-4rfj-wgcm) | `handleException` and sandbox-Promise.then onFulfilled use `ensureThis` (sandbox-realm passthrough); host-Promise rejection sanitiser composes `from()` outside `handleException` so the GHSA-mpf8 invariant still wraps host null-proto values |
+| Internal state probe via computed property access on `globalThis` (GHSA-2cm2-m3w5-gp2f) | Bootstrap script declares `let VM2_INTERNAL_STATE_…` at script-top so the binding lands in the context's `[[GlobalLexicalEnvironment]]`; transformer-emitted `${INTERNAL_STATE_NAME}.handleException(…)` resolves there as before, but `globalThis[k]`, `Reflect.get`, descriptor APIs, and own-property enumeration cannot reach it (the global object's own-key table no longer contains the entry). Supersedes the identifier-only mitigation of GHSA-wp5r-2gw5-m7q7 by closing the entire computed-key class structurally. |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

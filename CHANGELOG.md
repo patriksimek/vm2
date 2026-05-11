@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.11.3]
+
+Single advisory closed. Patch release — no API changes.
+
+### Security fix
+
+- **GHSA-248r-7h7q-cr24** — async generator `yield*`-return thenable exception capture. Calling `i.return(thenable)` on an async generator delegating to a no-`return` inner iterator let V8's `PromiseResolveThenableJob` capture synchronous throws from the thenable's `.then` and surface them to sandbox code as iterator results — bypassing both the transformer's `catch` instrumentation and the `globalPromise.prototype.then` rejection sanitiser. Two-layer defense on `%AsyncGeneratorPrototype%.next/.return/.throw` in `lib/setup-sandbox.js`: every iterator-result promise routes value and rejection through `handleException`, and every thenable argument is replaced with a sandbox-realm wrapper whose `.then` is a fixed `safeThen` that sanitises sync throws and recursively re-wraps any nested thenable handed to `resolve(...)`. When `safeThen` reads `value.then` and it is non-function, the wrapper always resolves with a `{__proto__: null}` shadow so V8's re-read of `.then` cannot observe attacker-controlled values — closing every counting/self-replacing-getter TOCTOU variant. Trade-off: identity is not preserved for non-thenable values passed to `i.return(x)`. ATTACKS.md Category 29.
+
 ## [3.11.2]
 
 Three advisories closed. Patch release — no API changes.

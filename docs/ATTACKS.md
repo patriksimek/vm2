@@ -2111,6 +2111,136 @@ This restores [Defense Invariant: Bridge-Internal Containers Must Not Invoke San
 - **Equivalent pattern elsewhere in the bridge**: audited; `thisFromOtherArguments`, `otherFromThisArguments`, and every other index-write site already use `thisReflectDefineProperty` or `otherReflectDefineProperty`. `neutralizeArraySpeciesBatch` was the lone outlier.
 
 ---
+## Attack Category 29: Async Generator yield*-Return Thenable Exception Capture
+
+**Uses**: [Category 4: Error Object Exploitation](#attack-category-4-error-object-exploitation), [Category 7: Promise and Async Exploitation](#attack-category-7-promise-and-async-exploitation).
+
+### Description
+
+When an async generator delegates with `yield*` to an inner async iterator that lacks a `return` method, the spec specifies that calling `.return(value)` on the outer generator must `Await(value)` and then propagate the abrupt return up. V8 implements this via the standard `PromiseResolveThenableJob`: if `value` is a thenable, V8 calls `value.then(resolve, reject)` and any synchronous throw from that call is caught by the engine. The captured throw is then surfaced to the outer async generator through the yield*'s continuation as a yielded result of shape `{ value: thrownError, done: false }`.
+
+This produces a path along which a thrown value flows from a sandbox closure into another sandbox `await` **without ever entering a JavaScript `try/catch`**. Both vm2 defenses against host-realm error smuggling assume an explicit catch:
+
+1. The transformer-instrumented `catch` block (every user `catch` calls `handleException`) is bypassed because the catch is implicit in V8 internals.
+2. The `globalPromise.prototype.then` rejection sanitiser is bypassed because internal `Await` uses `PerformPromiseThen` directly and never invokes the user-visible `.then` override.
+
+The reporter's PoC chains this with deep recursion: at the precise depth where V8 detects stack overflow inside the host C++ `PromiseResolveThenableJob` glue, the `RangeError` is created in the **host** realm. With both sanitisers bypassed, the host `RangeError` is supposed to reach sandbox code unwrapped, after which `e.constructor.constructor("return process")()` yields RCE.
+
+CWE-913 (Improper Control of Dynamically-Managed Code Resources).
+
+### Attack Flow
+
+1. Define an async generator that delegates via `yield* { [Symbol.asyncIterator]: () => ({ next: v => ({ value: v, done: false }) }) }` (no `return` method on the inner iterator).
+2. Advance the outer generator one step with `await i.next()` so the suspension is inside `yield*`.
+3. Call `await i.return(thenable)` where `thenable = { then(r) { f(); r(); } }`. V8's algorithm awaits the thenable; `PromiseResolveThenableJob` invokes `thenable.then`. `f()` throws.
+4. V8 catches the throw inside the C++ resolver job. The yield* continuation surfaces the captured value to the outer async generator as `{ value: thrown, done: false }`.
+5. Sandbox `await i.return(...)` resolves with that fulfillment shape — no rejection path was taken, so `globalPromise.prototype.then` is never invoked. No user `catch` clause was entered, so the transformer's instrumentation is never invoked.
+6. With binary search, the attacker hunts for the recursion depth where the throw originates inside V8's host code, producing a host-realm `RangeError`. `e.constructor.constructor` is then the host `Function` constructor and `("return process")()` returns `process` → RCE.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-248r-7h7q-cr24)
+class E extends Error {}
+function so(d) {
+  if (d > 0) so(d - 1);
+  const e = new E();
+  e.stack;
+  throw e;
+}
+async function* helper() {
+  yield* {
+    [Symbol.asyncIterator]: () => ({
+      next: v => ({ value: v, done: false }),
+    }),
+  };
+}
+async function doCatch(f) {
+  const i = helper();
+  await i.next();
+  const v = await i.return({ then(r) { f(); r(); } });
+  return v.value;
+}
+(async () => {
+  let min = 0, max = 10000000;
+  while (min < max) {
+    const mid = (min + max) >> 1;
+    const e = await doCatch(() => so(mid));
+    if (e.name === 'RangeError' && !(e instanceof RangeError)) {
+      e.constructor.constructor('return process')()
+        .mainModule.require('child_process').execSync('touch pwned');
+      return;
+    }
+    if (e instanceof E) min = mid + 1; else max = mid;
+  }
+})();
+```
+
+### Why It Works
+
+The yield* abrupt-return path is one of the rare specification-mandated places where a value flows back into sandbox code through V8's internal Promise machinery without traversing a JavaScript `try/catch` and without invoking `Promise.prototype.then`. Both of vm2's existing chokepoints for host-realm value sanitisation are tied to those two surfaces:
+
+- **Transformer instrumentation** rewrites every `catch (e) {` into `catch (e) { e = handleException(e); ...`. There is no source-level `catch` here — V8 catches the throw in C++ during PromiseResolveThenableJob.
+- **`globalPromise.prototype.then` override** wraps `onFulfilled` with `from()` and `onRejected` with `handleException()`. V8's `Await` operation (used by `await` inside async functions) is specified in terms of `PerformPromiseThen`, an internal abstract operation that builds builtin reactions without going through the user-visible `.then` getter, so neither wrapper fires for internal awaits.
+
+### Mitigation
+
+The defense has two layers, both in `lib/setup-sandbox.js` (after `handleException` is defined and the bridge sanitisers are wired):
+
+**Layer 1 — iterator-result sanitisation.** Wrap `%AsyncGeneratorPrototype%.next` / `.return` / `.throw` so every iterator-result promise returned by an async generator chains through a sanitisation step that:
+
+- Routes the resolved `result.value` through `handleException` (no-op for sandbox-realm or primitive values; bridge-wraps host-realm values; recursively sanitises `SuppressedError.error/.suppressed` and `AggregateError.errors[]`).
+- Routes any rejection through `handleException` before re-throwing.
+
+The chain uses the cached native `globalPromisePrototypeThen` (not the overridden user-visible `.then`) so the sanitiser does not double-handle and cannot be observed via species manipulation on intermediate promises. New iterator-result objects are constructed when the value changes — never mutate an attacker-controlled result shape.
+
+**Layer 2 — thenable-arg sanitisation (closure-transport bypass).** Layer 1 alone is bypassable: an inner iterator can return `{ value: () => v, done: false }` where the closure traps the value V8 forwards as the parameter to `inner.next(captured)` on the abrupt-return loop turn. The wrapper sees only the closure, `handleException` returns it unchanged, and sandbox extracts the raw value via `wrap.value()`. To close this, the wrapper also intercepts the first argument to `.next` / `.return` / `.throw`: it is **always** replaced with a sandbox-realm wrapper whose `.then` is a fixed `safeThen` function. `safeThen` reads `value.then` exactly once internally; if it is a function, it is invoked with sanitising callbacks, and any synchronous throw is converted to `reject(handleException(e))`. V8's `PromiseResolveThenableJob` then captures a sandbox-realm rejection value, so by the time V8 forwards the value into `inner.next`, the realm has been normalized.
+
+The wrapper closes three sub-attacks against this transport:
+
+1. **Direct sync throw.** `safeThen` wraps the user `.then` call in `try/catch` and converts throws to `reject(handleException(e))`.
+2. **Nested-thenable resolve** — `{ then(r){ r({ then(r){ f(); r(); }}) }}`. The outer `.then` resolves with another thenable; V8 recursively unwraps via another `PromiseResolveThenableJob`, and the inner `.then` would otherwise run unwrapped. Fix: `safeThen` wraps the `resolve` callback so any thenable handed to it is recursively re-sanitised before V8 sees it (`safeResolve(v) → resolve(sanitizeThenableArg(v))`). V8 only ever invokes our `safeThen`, never a user `.then` directly.
+3. **Getter TOCTOU on `.then`** — a getter returns `undefined` on a pre-read and a real function on V8's read. Fix: never pre-read; always substitute the wrapper. For the non-thenable branch (`value.then` not callable when `safeThen` reads it), `safeThen` **always** resolves with a fresh `{ __proto__: null }` shadow that copies all of `value`'s own descriptors *except* `.then`. V8's subsequent `PromiseResolve` cannot re-detect a thenable on the shadow because it has no `.then` own or inherited property.
+
+   **History — why "always shadow":** v5/v6 of this fix tried to preserve identity for benign non-thenable inputs (`i.return(myMap)` returning the same Map back) by gating the shadow on a descriptor walk that detected accessors anywhere in the chain. The reviewer demonstrated two structural bypasses:
+   - **Self-replacing getter** (v6 bypass, GHSA-248r-7h7q-cr24, follow-up): the getter counts to N, returns non-function on each pre-read, then on the Nth call self-replaces with a `defineProperty` call installing a data property holding a malicious function. By the time the descriptor walk runs, the slot is already a data property; the walk concludes "no accessor present" and the code passes `value` to `resolve()`. V8's `[[Get]](value, 'then')` then reads the malicious function from the data property and schedules a fresh `PromiseResolveThenableJob` that calls it with V8's internal capability resolvers — **outside** any `safeThen` wrapper. Provable empirically: the resolver argument's `.name` is `''` (V8 internal) instead of `'safeResolveCallback'` (our wrapper).
+   - **Proxy with lying descriptors** (theoretical for vm2 since Proxy is removed from the sandbox global, but structurally identical): a Proxy can return arbitrary values from the `get` trap across reads while `getOwnPropertyDescriptor` lies about what is "really" there. Detection-based heuristics on attacker-controlled `.then` slots are fundamentally bypassable; doubling, tripling, or N-reading the slot does not help because attackers control the read-count state machine.
+
+   The v7 structural answer is: **never** trust a `.then` slot we did not place ourselves. When `userThen` reads non-function once, replace `value` with a sandbox-realm shadow that V8 reads instead. Identity preservation in this codepath is incompatible with safety against TOCTOU on `.then`.
+
+Implementation note: the wrap targets `%AsyncGeneratorPrototype%` (the shared intrinsic that owns `next/return/throw`), reached via `getPrototypeOf(getPrototypeOf(asyncGenInstance))`. A single `getPrototypeOf` walk reaches only the per-function prototype, which is unique to each async generator function and ineffective for any other generator — a subtle but critical point for prototype-level wraps of generator protocols.
+
+The wrapper builds its `argsList` as `{ __proto__: null, length, ... }` rather than a `[]` literal: an empty array literal inherits `Array.prototype`, and a sandbox-installed setter on `Array.prototype['0']` (or `Object.prototype['0']`) would walk the chain when `args[0] = arguments[0]` runs and intercept the user value before `sanitizeThenableArg` ever ran. With `__proto__: null`, integer-key writes never walk a user-controlled prototype.
+
+The three wrapped methods are installed with `writable: false, configurable: false` so sandbox code cannot delete or redefine them — even without a reference to the original native, replacing the wrapper would let sandbox interpose its own logic on V8's yield* protocol invocations.
+
+Every previous direct call to `handleException(e)` from the wrapper code is now routed through `safeSanitize(e)`, which catches throws from `handleException` itself (e.g., `bridge.from` failing on a hostile prototype) and falls back to a sandbox-realm `VMError`. Without this, an uncaught throw from `handleException` would propagate out of `safeThen` (or out of `sanitizeRejectedIterResult`) and become the resolver-job's captured value — sandbox would observe a host-realm rejection that defeated the whole sanitisation chain.
+
+Together the two layers restore **[Defense Invariant #2](#defense-invariants)** (every value entering a `catch` clause passes through `handleException`) for the implicit-catch case in V8's async generator state machine, and **Invariant #1** (no host-realm object reaches sandbox code unwrapped) for both the iterator-result `value` slot and the closure-transport variant.
+
+### Detection Rules
+
+- **`yield*` inside an async generator** delegating to an attacker-controlled async iterator (`{ [Symbol.asyncIterator]: () => ({...}) }`) — particularly when the inner object lacks a `return` method.
+- **`.return(value)` on an async generator where `value` is a thenable** — the attacker-controlled `.then` is the implicit-catch primitive. The thenable-arg sanitisation in Layer 2 wraps every such argument before it reaches V8's resolver job.
+- **Inner iterators returning `{ value: closure, done: ... }` shapes** — closures hide the captured value from prototype-level wrappers. Layer 2 closes this by sanitising at the source (the thenable input) rather than the closure output.
+- **Nested thenables in `resolve(...)` calls** — `safeResolve` recursively re-sanitises any thenable handed to it, so `{ then(r){ r(innerThenable) }}` chains stay inside the wrap.
+- **Getter-driven TOCTOU on `.then`** — `safeThen` reads `value.then` exactly once for the initial type check. If non-function, the wrapper unconditionally resolves with a fresh `{ __proto__: null }` shadow that copies all of `value`'s own descriptors **except** `.then`. V8's subsequent `[[Get]]` reads the shadow (which we control), not the user's `value`, so the entire family of `.then`-slot TOCTOU primitives — counting getters, self-replacing getters, Proxy `get` traps that switch values across reads — is closed by construction.
+
+  Trade-off: identity is **not** preserved for non-thenable values passed to `i.return(x)`. `wrap.value` is a stripped `{ __proto__: null }` copy of `x`'s own data, not `x` itself. The v5/v6 attempts to preserve identity (descriptor walk, double-read) were structurally unsound — every detection-based heuristic on an attacker-controlled `.then` slot can be bypassed by counting reads. If sandbox code needs the original reference, it should keep its own copy outside the `i.return()` call.
+- **Array.prototype / Object.prototype setter pollution on the args build** — covered by the `{ __proto__: null }` argsList described above; integer-key writes on the wrapper's args object never walk a sandbox-controlled prototype.
+- **Sandbox redefining the wrapper itself** — covered by the `writable: false, configurable: false` install, blocking `delete agProto.next`, `agProto.next = malicious`, and `defineProperty(agProto, 'next', ...)`.
+- **Awaiting iterator results inside async generators** without going through a user `catch` clause — every such path must be sanitised at the prototype level.
+- **Any new V8 specification path that uses `PerformPromiseThen` directly on a sandbox Promise** without invoking user-visible `.then` — review whether values flowing through it still pass `handleException`.
+
+### Considered Attack Surfaces
+
+- **Sync `Generator.prototype.next/.return/.throw`** — sync generators do not `Await` values, so the thenable→throw→yielded-value primitive does not apply. Sync iter results are delivered synchronously and any thrown value enters a sandbox `catch` (transformer-instrumented) or escapes as an exception that the existing rejection sanitiser handles. Not wrapped.
+- **`for await (...)` over an async iterator** — every iteration calls `iter.next()` and awaits the result. `next()` is now wrapped, so any value flowing through the loop is sanitised.
+- **Direct `await asyncIter.next()` outside a generator context** — same chokepoint; covered by the prototype wrap.
+- **Host-realm async iterators returned to sandbox** — bridge proxies route property access (`.next`, `.return`, `.throw`) through the apply trap, which already wraps host throws via `thisFromOtherForThrow`. The async generator prototype wrap is independent and does not change this path.
+- **Attacker-supplied inner iterator with a `return` method that throws** — when `iter.return` exists and throws, the spec routes through the rejection path (no implicit fulfillment). The wrapped `.return` on the outer generator sanitises the rejection regardless.
+
+---
 
 ## Considered Attack Surfaces
 
@@ -2196,6 +2326,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 19. **WebAssembly JSTag Exception Catch** [Categories 4, 12, 17]: Wasm module imports JSTag and trigger function. Trigger causes host TypeError via Error Generation Primitive. Wasm `try_table/catch` catches and returns unsanitized externref.
 20. **Array Species Self-Return + Object.assign** [Categories 3, 10, 18]: Create host array, set up self-referential species constructor, inject via `Object.assign` (bypasses proxy `set` trap), call `r.map(f)` for raw host values. Chain `cwu` calls to extract host `Function`.
 21. **Host Built-in Identity Leak via Proto Walk** [Categories 1, 2, 8] (NOW FIXED): Walk the prototype chain via `({}).__lookupGetter__('__proto__')` composed with `Buffer.apply` (or any host-bound `__proto__` getter) to terminate at host `Object.prototype`, then read `.constructor` to obtain a *reference* to host `Object` whose identity is disjoint from sandbox `Object`. The original symbol-filter patch (commit `67bc511`) closed the demonstrated RCE payload but left this primitive intact — any future bypass that turns "I have a host built-in handle" into "I can read a host symbol or call a host method that bypasses bridge sanitisation" would re-enable the same escape class. Closed structurally by `thisAddIdentityMapping` in `lib/bridge.js` (see Category 8 mitigation).
+22. **Async Generator yield*-Return Thenable + Stack-Overflow Realm Skew** [Categories 4, 7, 29] (NOW FIXED): Use `yield*` to a no-`return` inner async iterator, then `.return(thenable)` where the thenable's `.then` synchronously throws via deep recursion. V8's `PromiseResolveThenableJob` captures the throw and the yield* continuation surfaces it as `{ value, done: false }` — bypassing both the transformer's user-`catch` instrumentation and the `globalPromise.prototype.then` rejection sanitiser. Binary-search the recursion depth where the overflow originates inside V8's host C++ code so the `RangeError` is host-realm, then `e.constructor.constructor("return process")()`. Closed by wrapping `%AsyncGeneratorPrototype%.next/.return/.throw` to route iterator-result `.value` and rejections through `handleException`, plus replacing every thenable arg with a sandbox-realm wrapper whose `.then` is a fixed `safeThen` and always-shadowing the non-function branch so V8's re-read of `.then` cannot observe attacker-controlled values.
 
 ### How The Bridge Defends
 

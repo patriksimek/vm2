@@ -2,3 +2,4 @@
 .DS_Store
 .vscode
 /test.js
+.env

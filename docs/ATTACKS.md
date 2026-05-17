@@ -1850,24 +1850,23 @@ The race window between the canonicalization syscall and the subsequent loader s
 
 ---
 
-## Attack Category 25: NodeVM `nesting: true` Configuration Trap (NESTING_OVERRIDE-only resolver)
+## Attack Category 25: NodeVM `nesting` Configuration Trap (NESTING_OVERRIDE-only resolver)
 
-**Supersedes**: GHSA-8hg8-63c5-gwmx's check on the raw `options.require === false` input, which only fired for the literal `require: false` shape and missed the much commoner "`require` omitted entirely" shape — see GHSA-m4wx-m65x-ghrr.
+**Supersedes**: GHSA-8hg8-63c5-gwmx's check on the raw `options.require === false` input, which only fired for one syntactic shape and missed every other configuration that collapses to the same insecure resolver — see GHSA-m4wx-m65x-ghrr.
 
 ### Description
 
-`NodeVM`'s `nesting: true` option injects a `NESTING_OVERRIDE` builtin that exposes the `vm2` package to sandbox code regardless of any other `require` configuration. The override is unconditional — it survives `require: false`, narrow `builtin` allowlists, and every other restriction the user might set. With `vm2` reachable, the sandbox constructs an inner `NodeVM` whose `require` config is **chosen by the sandbox code, not constrained by the outer config** (this is by design of `nesting`). The inner NodeVM can be configured with `child_process`, `fs`, or any other host module → full host RCE.
+`NodeVM`'s `nesting` option (when truthy) injects a `NESTING_OVERRIDE` builtin that exposes the `vm2` package to sandbox code regardless of any other `require` configuration. The override is unconditional — it survives `require: false`, narrow `builtin` allowlists, and every other restriction the user might set. With `vm2` reachable, the sandbox constructs an inner `NodeVM` whose `require` config is **chosen by the sandbox code, not constrained by the outer config** (this is by design of `nesting`). The inner NodeVM can be configured with `child_process`, `fs`, or any other host module → full host RCE.
 
-The trap is **any** `NodeVM` configuration where `nesting: true` is combined with a falsy/omitted `require`. `makeResolverFromLegacyOptions(falsy, NESTING_OVERRIDE, ...)` short-circuits on its `if (!options)` branch and returns a resolver whose only builtin is `vm2` — a pure escape primitive with no legitimate use:
+The trap is **any** `NodeVM` configuration where a truthy `nesting` is combined with a `require` that isn't a real require-config object. Three input-shape classes all collapse to the same NESTING_OVERRIDE-only resolver:
 
-- `{ nesting: true, require: false }`     ← GHSA-8hg8-63c5-gwmx PoC (explicit deny + nesting)
-- `{ nesting: true }`                     ← GHSA-m4wx-m65x-ghrr PoC (default require kicks in)
-- `{ nesting: true, require: undefined }` ← destructuring default still applies
-- `{ nesting: true, require: null }`      ← `null` is also `!options`-truthy in resolver-compat
+- **Falsy / omitted `require`** — `{ nesting: true }`, `{ nesting: true, require: false / undefined / null / 0 / '' }`. `makeResolverFromLegacyOptions(falsy, NESTING_OVERRIDE, …)` hits its `if (!options)` branch.
+- **Truthy non-object `require`** — `{ nesting: true, require: true / 1 / 'yes' / Symbol() / function(){} }`. `makeResolverFromLegacyOptions` destructures every primitive/function value to all-`undefined`, then calls `makeBuiltinsFromLegacyOptions(undefined, …, NESTING_OVERRIDE)` — the same call shape the `if (!options)` branch produces.
+- **Truthy non-`true` `nesting`** — `{ nesting: 1 / 'yes' / {} / [] / function(){}, require: false }`. The override gate inside the constructor is `nesting && NESTING_OVERRIDE`, which fires for ANY truthy value.
 
-All four collapse to the same insecure resolver. The original GHSA-8hg8 patch tested only the first shape with strict equality on the raw input, leaving the other three as bypasses.
+All shapes produce a resolver whose only builtin is `vm2` — a pure escape primitive with no legitimate use. The original GHSA-8hg8 patch tested only the literal `{ nesting: true, require: false }` shape with strict equality on the raw input, leaving every other path as a bypass.
 
-CWE-284 (Improper Access Control). CWE-697 (Incorrect Comparison) for the GHSA-m4wx bypass specifically.
+CWE-284 (Improper Access Control). CWE-697 (Incorrect Comparison) for the original GHSA-8hg8 check, which compared too narrowly against the set of values that reach the insecure resolver.
 
 ### Attack Flow
 
@@ -1913,22 +1912,30 @@ The "mental-model mismatch" framing applies at two levels: the *configuration* t
 
 ### Mitigation
 
-`NodeVM` constructor (`lib/nodevm.js`) destructures options first, then throws `VMError` when `nesting === true && !requireOpts`. The check now lives on the value that actually drives `makeResolverFromLegacyOptions`, so every falsy/omitted path collapses to the same rejection regardless of how the embedder wrote the option:
+`NodeVM` constructor (`lib/nodevm.js`) destructures options first, then throws `VMError` when *any truthy `nesting`* is paired with a `requireOpts` that isn't a real require-config object (or a `Resolver` instance). The check lives on the value that actually drives `makeResolverFromLegacyOptions`, so every shape that collapses to the NESTING_OVERRIDE-only resolver collapses to the same rejection:
 
 ```javascript
 const { require: requireOpts = false, nesting = false, /* ... */ } = options;
-if (nesting === true && !requireOpts) {
-    throw new VMError('NodeVM `nesting: true` requires an explicit `require` config. …');
+const hasRealRequireConfig =
+    requireOpts instanceof Resolver
+    || (typeof requireOpts === 'object' && requireOpts !== null);
+if (nesting && !hasRealRequireConfig) {
+    throw new VMError('NodeVM `nesting` requires an explicit `require` config object. …');
 }
 ```
 
-This restores **Defense Invariant: Configurations that produce a NESTING_OVERRIDE-only resolver must fail loudly at construction.** The escape hatch (`nesting: true` + an explicit `require` config object, even `{}`) continues to work — the developer's "I accept the trade-off" signal is visible in the call site.
+The guard mirrors the actual reachability of the insecure resolver on two axes:
+
+- **`nesting` checked as truthy**, matching the `nesting && NESTING_OVERRIDE` gate that decides whether `vm2` is exposed. Covers `nesting: true / 1 / 'yes' / {} / [] / function(){}` uniformly.
+- **`requireOpts` must be a non-null object** (or a custom `Resolver` instance). Primitives and functions all destructure to all-undefined inside `makeResolverFromLegacyOptions` and produce the insecure resolver, so they are rejected.
+
+This establishes **Defense Invariant: Configurations that produce a NESTING_OVERRIDE-only resolver must fail loudly at construction.** The escape hatch (any truthy `nesting` + an explicit `require` config object, even `{}` or `Object.create(null)`) continues to work — the developer's "I accept the trade-off" signal is visible in the call site.
 
 ### Detection Rules
 
-- **`new NodeVM({ nesting: true, ... })`** with any falsy/omitted `require` setting — flagged at construction with `VMError` mentioning GHSA-m4wx-m65x-ghrr.
+- **`new NodeVM({ nesting: <truthy>, ... })`** with `require` set to anything other than a non-null object (or `Resolver`) — flagged at construction with `VMError` mentioning GHSA-m4wx-m65x-ghrr. Covers `require: false / undefined / null / 0 / '' / true / 1 / 'yes' / Symbol() / function(){}` and `nesting` values `true / 1 / 'yes' / {} / [] / function(){}`.
 - **`new NodeVM({ nesting: true })`** with no `require` field at all — closed by GHSA-m4wx-m65x-ghrr (was the loophole the original GHSA-8hg8 fix left open).
-- **Sandbox code containing `require('vm2')`** — only reachable when `nesting: true` *and* an explicit `require` config; almost always indicates an escape attempt unless the embedder explicitly built a VM-spawning host integration.
+- **Sandbox code containing `require('vm2')`** — only reachable when `nesting` is truthy *and* an explicit `require` config object was supplied; almost always indicates an escape attempt unless the embedder explicitly built a VM-spawning host integration.
 
 ### Considered Attack Surfaces
 
@@ -3103,7 +3110,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Array species self-return | set/defineProperty traps + neutralizeArraySpecies + SPECIES_ATTACK_SENTINEL |
 | Host prepareStackTrace fallback | Safe default always set; setter resets to safe default instead of `undefined` |
 | NodeVM `require.root` symlink bypass | `isPathAllowed` realpaths candidate before prefix check; `rootPaths` canonicalized at construction; deny-by-default if realpath throws |
-| NodeVM `nesting: true` + falsy/omitted `require` config trap | Constructor destructures first, then throws `VMError` whenever `nesting === true && !requireOpts` (covers `require: false`, `undefined`, `null`, `0`, and the field being omitted). Citing GHSA-m4wx-m65x-ghrr (supersedes GHSA-8hg8-63c5-gwmx) and the README escape-hatch section |
+| NodeVM `nesting` + non-config `require` trap (NESTING_OVERRIDE-only resolver) | Constructor destructures first, then throws `VMError` whenever `nesting` is truthy and `requireOpts` is not a non-null object or `Resolver`. Covers every value that collapses to the same insecure resolver: falsy `require` (`false`/`undefined`/`null`/`0`/`''`/omitted), truthy non-object `require` (`true`/number/string/symbol/function), and truthy non-true `nesting` (`1`/`'yes'`/`{}`/`[]`/function). Citing GHSA-m4wx-m65x-ghrr (supersedes GHSA-8hg8-63c5-gwmx) and the README escape-hatch section |
 | Sandbox-realm null-proto via bridge `from()` set-trap write-through (GHSA-9vg3-4rfj-wgcm) | `handleException` and sandbox-Promise.then onFulfilled use `ensureThis` (sandbox-realm passthrough); host-Promise rejection sanitiser composes `from()` outside `handleException` so the GHSA-mpf8 invariant still wraps host null-proto values |
 | Internal state probe via computed property access on `globalThis` (GHSA-2cm2-m3w5-gp2f) | Bootstrap script declares `let VM2_INTERNAL_STATE_…` at script-top so the binding lands in the context's `[[GlobalLexicalEnvironment]]`; transformer-emitted `${INTERNAL_STATE_NAME}.handleException(…)` resolves there as before, but `globalThis[k]`, `Reflect.get`, descriptor APIs, and own-property enumeration cannot reach it (the global object's own-key table no longer contains the entry). Supersedes the identifier-only mitigation of GHSA-wp5r-2gw5-m7q7 by closing the entire computed-key class structurally. |
 | Bridge-internal container via `Array.prototype[N]` setter (Category 28: GHSA-9qj6-qjgg-37qq Variant A + GHSA-q3fm-4wcw-g57x Variant B) | Variant A — `neutralizeArraySpeciesBatch` in `lib/bridge.js` writes saved entries via `thisReflectDefineProperty`; appended slot is an own data property and no sandbox-installed setter is invoked while the bridge holds raw saved state. Variant B — `defaultSandboxPrepareStackTrace` in `lib/setup-sandbox.js` accumulates frames in a string via primitive concatenation rather than an array, removing every reachable `Array.prototype` slot (index setter, getter, and `.join`); `makeCallSiteGetters` installs entries via `localReflectDefineProperty` for symmetry |

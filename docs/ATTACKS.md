@@ -2793,6 +2793,104 @@ JSPI is the first known instance of this third class; future spec extensions tha
 
 ---
 
+## Attack Category 34: NodeVM Wildcard Exposes Undocumented Underscored Builtins — Network Capability Bypass
+
+### Description
+
+NodeVM's `'*'` wildcard expansion (in `lib/builtin.js`) sources the list of allowed builtins from `require('module').builtinModules` filtered by `s => !s.startsWith('internal/') && !DANGEROUS_BUILTINS.has(s)`. The filter removes Node's `internal/*` modules and the host-passthrough denylist from Category 21, but it does **not** remove the parallel family of underscored builtins:
+
+```
+_http_agent     _http_common     _http_outgoing    _tls_common      _stream_readable
+_http_client    _http_incoming   _http_server      _tls_wrap        _stream_writable
+                                                                    _stream_duplex
+                                                                    _stream_transform
+                                                                    _stream_wrap
+                                                                    _stream_passthrough
+```
+
+These are Node's private implementation modules backing `http`, `https`, `tls`, and the streams subsystem. They are listed in `builtinModules` (so the wildcard expands to them) but they are not documented public API and they expose the network primitives directly:
+
+- `require('_http_client').ClientRequest(opts)` — outbound HTTP request, **bypasses `http`/`https` blocking**.
+- `require('_http_server').Server(handler).listen(0)` — listening HTTP socket, **bypasses `net` blocking**.
+- `require('_tls_wrap').TLSSocket` / `_tls_common` — TLS primitives, **bypass `tls` blocking**.
+
+### Attack Flow
+
+1. Embedder writes the documented "allow everything except network" pattern:
+   ```javascript
+   new NodeVM({require: {builtin: ['*', '-http', '-https', '-net', '-dgram', '-tls', '-dns', '-dns/promises', '-http2']}})
+   ```
+2. The `'*'` wildcard expands to `BUILTIN_MODULES`, which (pre-fix) includes every `_http_*` and `_tls_*` sibling because none of them match `internal/` or `DANGEROUS_BUILTINS`.
+3. Sandbox code calls `require('_http_client')`. The allowlist contains it, `addDefaultBuiltin` wraps the host module in `vm.readonly()`, and the proxy is handed to the sandbox.
+4. Sandbox calls `new (require('_http_client').ClientRequest)({host: '127.0.0.1', port: 80, ...})` — outbound HTTP request from the host. Equivalent attack via `_http_server` opens a listening socket.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-r9pm-gxmw-wv6p)
+const vm = new NodeVM({
+  require: {
+    builtin: ['*', '-http', '-https', '-net', '-dgram', '-tls', '-dns', '-dns/promises', '-http2'],
+    external: false
+  }
+});
+vm.run(`
+  const {ClientRequest} = require('_http_client');
+  const req = new ClientRequest({host: '169.254.169.254', port: 80, path: '/latest/meta-data/'});
+  req.on('response', r => r.on('data', d => module.exports = d.toString()));
+  req.end();
+`, 'poc.js');
+```
+
+The user's mental model — "I excluded `http` and `net`, the sandbox cannot make HTTP requests" — is silently violated.
+
+### Why It Works
+
+`require('module').builtinModules` is Node's flat list of every builtin name, including private implementation siblings. The `'-name'` exclusion mechanism in vm2 is purely string-equality based — `'-http'` does not cascade to `_http_client`, `_http_server`, etc. The mismatch between the wildcard source (full builtin list) and the embedder's mental model (documented public modules) is the bug. An exclusion-based config can never name all the siblings because Node may introduce new underscored builtins between releases.
+
+This is **not** RCE — the underscored siblings load like any other vetted builtin and the bridge proxy applies normally. The impact is capability bypass: the sandbox regains the very capability the embedder explicitly attempted to remove. CVSS 8.6 reflects the SSRF-class blast radius (cloud metadata endpoints, internal admin panels, localhost-only services).
+
+### Mitigation
+
+Filter modules whose name starts with `_` from the `BUILTIN_MODULES` source in `lib/builtin.js`:
+
+```javascript
+const BUILTIN_MODULES = (nmod.builtinModules || Object.getOwnPropertyNames(process.binding('natives')))
+  .filter(s => !s.startsWith('internal/') && !s.startsWith('_') && !isDangerousBuiltin(s));
+```
+
+After the fix, the `'*'` wildcard expands only to documented public Node builtins. The `'-name'` exclusion mechanism is again coherent — excluding `http`/`net`/`tls` removes every reachable network builtin under the wildcard. Both bare-name (`require('_http_client')`) and `node:`-prefixed (`require('node:_http_client')`) forms are blocked because the builtins map is the single source of truth (`loadBuiltinModule` returns `undefined` for absent keys, so the sandbox-side `requireImpl` throws `ENOTFOUND`).
+
+**Escape hatches preserved.** The fix is intentionally narrow:
+
+- **Explicit opt-in** still works. A power user who genuinely needs `_http_client` can list it directly (`builtin: ['_http_client']` or `makeBuiltins(['_http_client'])`) — `addDefaultBuiltin` does not consult the `s.startsWith('_')` filter.
+- **`mock` / `override`** registrations under underscored names continue to function — they bypass `addDefaultBuiltin` entirely.
+
+### Defense Invariant Enforced
+
+> **The `'*'` wildcard expands only to documented public Node builtins. Undocumented underscored siblings of network and stream modules MUST NOT be reachable from sandbox code under the wildcard expansion. Explicit opt-in remains the user's choice.**
+
+This complements [Category 21](#attack-category-21-nodevm-builtin-allowlist-bypass-via-host-passthrough-builtins)'s `DANGEROUS_BUILTINS` invariant (and the [Defense Invariant #13](#defense-invariants) it restores). Category 21 is "host-passthrough primitives are unreachable under any config"; Category 34 is "wildcard expansion follows the user's mental model of public APIs only".
+
+### Detection Rules
+
+- **`require('_http_client')` / `require('_http_server')` / `require('_tls_wrap')`** from sandbox code — canonical bypass primitives.
+- **`require('node:_http_client')`** (etc.) — `node:` prefix path, equivalent reachability.
+- **Embedder config `builtin: ['*', '-http', ...]`** — historically left every `_http_*`/`_tls_*` sibling reachable; now safe.
+
+### Considered Attack Surfaces
+
+- **`require('module').builtinModules` published as `Module.builtinModules` inside the sandbox** (`lib/setup-node-sandbox.js:140`) — this is a static metadata list, not a loader. Sandbox code seeing `_http_client` in the list does not gain the ability to load it; the resolver gates by `this.builtins.has(x)`.
+- **Custom resolvers building their own builtins map via `makeBuiltinsFromLegacyOptions`** — same source list (`BUILTIN_MODULES`), same filter, same protection.
+- **`hostRequire` registered by `mock` / `override`** — out of scope. The user is explicitly handing the sandbox a module; trust is the user's responsibility.
+- **Underscored siblings introduced by future Node versions** — the `s.startsWith('_')` filter is name-based and forward-compatible. Any new `_foo_bar` builtin Node adds is automatically excluded from the wildcard without requiring a vm2 release.
+
+### Supersedes
+
+None. This fix complements [Category 21](#attack-category-21-nodevm-builtin-allowlist-bypass-via-host-passthrough-builtins) (`DANGEROUS_BUILTINS`) — together they enforce: "no host-passthrough primitive AND no undocumented underscored sibling is reachable under `builtin: ['*']`."
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -2922,6 +3020,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Host prototype mutation via apply trap (GHSA-v6mx-mf47-r5wg) | Apply trap caches the host prototype-mutating intrinsics (`Object.prototype.__proto__` setter, `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.{defineProperty,defineProperties}`, `Reflect.defineProperty`, `__defineSetter__`, `__defineGetter__`) in `dangerousHostProtoMutators` and refuses any invocation reaching them — direct or via one-layer indirection through `Function.prototype.{call,apply,bind}` / `Reflect.{apply,construct}`. Read-side defense-in-depth in `thisEnsureThis` cache-checks `mappingOtherToThis` before the proto-walk so any previously-bridged host value returns the existing proxy even when its prototype chain has been tampered with by some other route. |
 | Bridge `set` trap ignores spec `Receiver` (GHSA-c4cf-2hgv-2qv6) | `BaseHandler.set` gates host-write forwarding on `receiver === mappingOtherToThis.get(object)`; non-canonical receivers (inherited-receiver writes via `Object.create(proxy)`, forged-receiver `Reflect.set` calls, `Object.assign(child, src)` loops) install on `receiver` via `Reflect.defineProperty`, mirroring `ReadOnlyHandler.set` |
 | NodeVM builtin denylist bypass via `process` / `inspector/promises` (GHSA-rp36-8xq3-r6c4) | `DANGEROUS_BUILTINS` extended to include `process`; matching promoted to family-prefix via `isDangerousBuiltin(key)` so subpath builtins (`inspector/promises`, future `inspector/*`, `process/*`, `module/*`) share fate with their canonical name. `node:` URL prefix stripped before lookup. Enforced at both `BUILTIN_MODULES` source and `addDefaultBuiltin`. Supersedes the GHSA-947f-4v7f-x2v8 exact-match mitigation. |
+| NodeVM wildcard exposes underscored network builtins (GHSA-r9pm-gxmw-wv6p) | `BUILTIN_MODULES` filter in `lib/builtin.js` now excludes any name starting with `_`; `'*'` no longer expands to `_http_client`/`_http_server`/`_tls_wrap`/`_stream_*` etc. Explicit opt-in (`builtin: ['_http_client']`) and `mock`/`override` paths still work via `addDefaultBuiltin`. |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

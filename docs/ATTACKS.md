@@ -2242,6 +2242,135 @@ Together the two layers restore **[Defense Invariant #2](#defense-invariants)** 
 
 ---
 
+## Attack Category 30: Host Prototype Mutation via Bridged Setter Primitives
+
+**Uses**: [Category 2: Prototype Chain Manipulation](#attack-category-2-prototype-chain-manipulation), [Category 4: Error Object Exploitation](#attack-category-4-error-object-exploitation), [Category 7: Promise and Async Exploitation](#attack-category-7-promise-and-async-exploitation).
+
+### Description
+
+The bridge's `set` / `defineProperty` / `setPrototypeOf` proxy traps block direct mutation of host-realm objects from the sandbox (`isProtectedHostObject`). But the **apply trap** lets sandbox code invoke host functions with a host object as `this`. When the function being applied is host's `Object.prototype.__proto__` setter (or any prototype-mutating intrinsic — `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.prototype.__defineSetter__`, etc.), the actual mutation happens inside the host intrinsic with `this` = the raw host object, **bypassing every write trap** because no proxy is involved in the assignment.
+
+Severing even a non-protected host prototype (Node-internal `NodeError.prototype`, a per-error `[[Prototype]]`, etc.) is enough to break downstream bridge invariants: once a host-realm chain is truncated, the bridge's proto-walking helpers (`thisFromOtherWithFactory`, `thisFromOtherForThrow`, `thisEnsureThis`) can no longer find a registered mapping at the right level, and the value can fall through unwrapped. From there `e.constructor.constructor` resolves to host `Function`, and `new HostFunction("return process")()` yields RCE.
+
+The PoC reaches host's `__proto__` setter via:
+
+```javascript
+const setProto = Buffer.call.call({}.__lookupSetter__, Buffer, "__proto__");
+```
+
+`{}.__lookupSetter__` is sandbox-side but `connect()`'ed to host's, so when applied through `Buffer.call.call(...)` it returns host's `Object.prototype.__proto__` setter (wrapped as a bridge proxy). Calling `setProto.call(<wrapped host object>, null)` invokes the wrapped host setter via the apply trap. Before this fix the trap simply unwrapped `context` and forwarded the call to `otherReflectApply(hostSetter, rawHostObject, [null])`, mutating the host object's prototype.
+
+The canonical PoC pairs the setter primitive with `WebAssembly.compileStreaming()` to surface a host-realm `TypeError`:
+
+CWE-913 (Improper Control of Dynamically-Managed Code Resources).
+
+### Attack Flow
+
+1. Resolve `getProto` / `setProto` to host's `Object.prototype.__proto__` accessor via `Buffer.call.call({}.__lookup{Getter,Setter}__, Buffer, "__proto__")`.
+2. Trigger a host-realm rejection — `await WebAssembly.compileStreaming()` throws a host `TypeError`.
+3. In `catch (e)`, the host `TypeError` arrives wrapped (the first time the bridge has seen it). Call `setProto.call(getProto.call(e), null)`. The apply trap unwraps `context` to the raw host `TypeError.prototype` and forwards to the host setter, severing the host `TypeError.prototype.[[Prototype]]` from host `Error.prototype`.
+4. Trigger a second host-realm rejection. The fresh host `TypeError` instance walks back into sandbox code through V8 internals (the await machinery delivers it directly). The bridge's proto-walk no longer reaches a registered mapping at the right level, so `ensureThis` falls through and returns the raw host `TypeError` unwrapped.
+5. Sandbox reads `e.constructor` → raw host `TypeError` (unwrapped, never crossed the bridge), `.constructor.constructor` → host `Function`. `new HostFunction("return process")()` returns host `process`. RCE.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-v6mx-mf47-r5wg)
+const { VM } = require("vm2");
+const vm = new VM();
+vm.run(`
+  "use strict";
+  const getProto = Buffer.call.call({}.__lookupGetter__, Buffer, "__proto__");
+  const setProto = Buffer.call.call({}.__lookupSetter__, Buffer, "__proto__");
+  async function f() {
+    try { await WebAssembly.compileStreaming(); }
+    catch(e) { setProto.call(getProto.call(e), null); }
+    try { await WebAssembly.compileStreaming(); }
+    catch(e) {
+      const HostFunction = e.constructor.constructor;
+      new HostFunction("return process")()
+        .mainModule.require('child_process').execSync('touch pwned');
+    }
+  }
+  f();
+`);
+```
+
+### Why It Works
+
+The two underlying invariants violated:
+
+- **Invariant A (write-side)**: "Sandbox code must not be able to mutate any host-realm object's prototype chain via the bridge." The proxy `set` / `defineProperty` / `setPrototypeOf` traps enforce this on direct mutation paths, but the apply trap creates a **second** mutation path — invoking a host prototype-mutating intrinsic *as a function* with a host object as `this`. The mutation happens inside the host intrinsic, not through any proxy, so no write trap fires.
+- **Invariant B (read-side)**: "No host-realm object reaches sandbox code unwrapped." The bridge identifies host objects by walking the prototype chain looking for a registered mapping. When a host chain has been severed, the walk fails to find the mapping and helpers like `thisEnsureThis` fall through and return the raw host value AS-IS.
+
+Together they form a compose-able primitive: mutate any host prototype → break the bridge's proto-walk recognition → next host value of that class arrives unwrapped → `e.constructor.constructor` chain to host `Function`.
+
+### Mitigation
+
+**Two-layer structural fix in `lib/bridge.js`.**
+
+**Layer A (write-side, primary): apply-trap refusal of host prototype mutators.** At bridge init, cache the identity of every host-realm function that mutates `[[Prototype]]` (or could install code that mutates it):
+
+```javascript
+// host Object.prototype.__proto__ setter
+addDangerousHostProtoMutator(
+  otherSafeGetOwnPropertyDescriptor(otherGlobalPrototypes.Object, '__proto__').set
+);
+// host Object.prototype.__defineSetter__ / __defineGetter__
+// host Object.setPrototypeOf / Object.defineProperty / Object.defineProperties
+// host Reflect.setPrototypeOf / Reflect.defineProperty
+```
+
+In the apply trap:
+
+```javascript
+if (!isHost) {
+  if (isDangerousHostProtoMutator(object)) throw new VMError(OPNA);
+  // Peel one indirection layer: Function.prototype.call / .apply / .bind
+  if (isApplyIndirectionPrimitive(object)) {
+    const underlying = otherFromThis(context);
+    if (isDangerousHostProtoMutator(underlying)) throw new VMError(OPNA);
+  }
+  // Peel Reflect.apply / Reflect.construct (underlying is args[0])
+  if (isReflectApplyPrimitive(object)) {
+    const underlying = otherFromThis(args[0]);
+    if (isDangerousHostProtoMutator(underlying)) throw new VMError(OPNA);
+  }
+}
+```
+
+The indirection peel covers the canonical PoC shape (`setProto.call(tp, null)`, where the apply target is `Function.prototype.call` and the dangerous function is `context`), `setProto.apply(tp, [null])`, and `Reflect.apply(setProto, tp, [null])`. The peel is depth-1 — recursive indirection (`Function.prototype.call.call(...)`) collapses into the same shape at the V8 level because `Function.prototype.call` is the apply target and its `context` is the inner reference.
+
+**Layer B (read-side, defense-in-depth): cache check before proto walk in `thisEnsureThis`.** Before walking the prototype chain, check `mappingOtherToThis` for an existing wrap of `other`. If found, return it. This catches host-realm values that the bridge has previously wrapped — even if their prototype chains were subsequently tampered with by some other route, the cache lookup is independent of the prototype chain.
+
+We deliberately do **not** wrap on the proto-walk fall-through paths (null proto, walked-off without finding a mapping). Wrapping there would re-introduce GHSA-9vg3-4rfj-wgcm — a sandbox-realm `{__proto__: null}` value passed to `handleException` would be turned into a host-treating proxy whose `set` trap unwraps sandbox-side proxies of host references onto the underlying object, recreating the very escape that fix closed. Layer A prevents the canonical attack from reaching a state where a fresh, never-bridged host object surfaces here through a tampered proto chain.
+
+### Detection Rules
+
+- **Sandbox-applied host `Object.prototype.__proto__` setter** — reached via `__lookupSetter__` on a host-prototype-bearing reference (`Buffer`, `Error.prototype`, etc.). The cache `dangerousHostProtoMutators` identifies it regardless of how it's named in the sandbox.
+- **Sandbox-applied host `Object.setPrototypeOf` / `Object.defineProperty` / `Object.defineProperties`** — reached via `Object` (a bridge proxy of host `Object`) or via a host-side method that returns these.
+- **Sandbox-applied host `Reflect.setPrototypeOf` / `Reflect.defineProperty`** — reached via `Reflect` (bridge proxy). `Reflect.apply` and `Reflect.construct` are tracked as indirection primitives so a sandbox using `Reflect.apply(setProto, tp, [null])` is also caught.
+- **Sandbox-applied host `Object.prototype.__defineSetter__` / `__defineGetter__`** — would install attacker-defined accessors on a host target. Indirect mutation primitive; same chokepoint.
+- **`Function.prototype.call` / `.apply` / `.bind` indirection** — the apply trap peels one layer to inspect the underlying function being applied. `setProto.call(...)` and `setProto.apply(...)` are caught.
+- **`Reflect.apply` / `Reflect.construct` indirection** — the apply trap peels these and inspects `args[0]` as the underlying function.
+
+### Considered Attack Surfaces
+
+- **Sandbox-realm `Object.setPrototypeOf` / `Reflect.setPrototypeOf` on sandbox values** — not in the dangerous-mutator set (only host-realm copies are). Sandbox code can still mutate its own prototypes freely.
+- **`__proto__` *getter* (read-only)** — not blocked. Reading a host prototype is not, by itself, a privilege-escalation primitive, and blocking the getter would break legitimate `instanceof` and inspection paths. The attack requires *writing*, which is what the dangerous-mutator set covers.
+- **Deeper indirection** (`Function.prototype.call.call.call(...)`) — V8 collapses these at the spec level. The apply trap's `object` is always the outermost `Function.prototype.call`, and `context` is the next-inner reference. Depth-1 peel is sufficient.
+- **`Function.prototype.bind` returning a new function** — bound functions don't immediately apply; they're invoked later. When the bound function is eventually applied, the apply trap fires again with the bound function as `object`. The bound function unwraps to a host-realm "bound function exotic object" rather than the original target, so the simple identity check on the bound function's identity wouldn't hit. However, sandbox-controllable bind paths reaching a dangerous mutator can be tested adversarially; if a bypass surfaces, the peel should be extended.
+- **Symbol-based "private" setter slots** — not known to exist for prototype mutation. The defense covers the documented set of mutators.
+
+### Related Categories
+
+- [Category 2: Prototype Chain Manipulation](#attack-category-2-prototype-chain-manipulation) — sets up the attacker's goal of mutating a host prototype chain.
+- [Category 4: Error Object Exploitation](#attack-category-4-error-object-exploitation) — the canonical PoC uses host-realm `TypeError` as the carrier.
+- [Category 7: Promise and Async Exploitation](#attack-category-7-promise-and-async-exploitation) — `WebAssembly.compileStreaming()` rejection is the host-error source.
+- [Category 26: Sandbox-Realm Null-Proto via Bridge `from()`](#attack-category-26-sandbox-realm-null-proto-via-bridge-from--set-trap-write-through) — explains why we cannot indiscriminately wrap fall-through values in `thisEnsureThis`.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -2327,6 +2456,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 20. **Array Species Self-Return + Object.assign** [Categories 3, 10, 18]: Create host array, set up self-referential species constructor, inject via `Object.assign` (bypasses proxy `set` trap), call `r.map(f)` for raw host values. Chain `cwu` calls to extract host `Function`.
 21. **Host Built-in Identity Leak via Proto Walk** [Categories 1, 2, 8] (NOW FIXED): Walk the prototype chain via `({}).__lookupGetter__('__proto__')` composed with `Buffer.apply` (or any host-bound `__proto__` getter) to terminate at host `Object.prototype`, then read `.constructor` to obtain a *reference* to host `Object` whose identity is disjoint from sandbox `Object`. The original symbol-filter patch (commit `67bc511`) closed the demonstrated RCE payload but left this primitive intact — any future bypass that turns "I have a host built-in handle" into "I can read a host symbol or call a host method that bypasses bridge sanitisation" would re-enable the same escape class. Closed structurally by `thisAddIdentityMapping` in `lib/bridge.js` (see Category 8 mitigation).
 22. **Async Generator yield*-Return Thenable + Stack-Overflow Realm Skew** [Categories 4, 7, 29] (NOW FIXED): Use `yield*` to a no-`return` inner async iterator, then `.return(thenable)` where the thenable's `.then` synchronously throws via deep recursion. V8's `PromiseResolveThenableJob` captures the throw and the yield* continuation surfaces it as `{ value, done: false }` — bypassing both the transformer's user-`catch` instrumentation and the `globalPromise.prototype.then` rejection sanitiser. Binary-search the recursion depth where the overflow originates inside V8's host C++ code so the `RangeError` is host-realm, then `e.constructor.constructor("return process")()`. Closed by wrapping `%AsyncGeneratorPrototype%.next/.return/.throw` to route iterator-result `.value` and rejections through `handleException`, plus replacing every thenable arg with a sandbox-realm wrapper whose `.then` is a fixed `safeThen` and always-shadowing the non-function branch so V8's re-read of `.then` cannot observe attacker-controlled values.
+23. **Host Prototype Mutation via Apply-Trap Indirection + WebAssembly Rejection** [Categories 2, 4, 7, 30] (NOW FIXED): Resolve host `Object.prototype.__proto__` setter via `Buffer.call.call({}.__lookupSetter__, Buffer, "__proto__")` (the `connect()`-aliased sandbox `__lookupSetter__` walks back to host). Trigger a host-realm `TypeError` (e.g., `await WebAssembly.compileStreaming()`). Inside `catch(e)`, call `setProto.call(getProto.call(e), null)` — the apply trap unwraps `context` and forwards to the host setter, severing host `TypeError.prototype.[[Prototype]]` without any write trap firing. The next host `TypeError` from `await WebAssembly.compileStreaming()` walks back into sandbox code through V8 async internals; the bridge's proto-walk no longer finds the registered mapping at the right level and the value falls through unwrapped. `e.constructor.constructor` is then host `Function`. Closed structurally by (A) caching host prototype-mutating intrinsics (`Object.prototype.__proto__` setter, `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.{defineProperty,defineProperties}`, `Reflect.defineProperty`, `Object.prototype.__define{Getter,Setter}__`) and refusing them in the apply trap with one layer of indirection peel for `Function.prototype.{call,apply,bind}` and `Reflect.{apply,construct}`; (B) cache-check on `mappingOtherToThis` before the proto-walk in `thisEnsureThis` so any previously-bridged host value returns the existing proxy even with a tampered proto chain.
 
 ### How The Bridge Defends
 
@@ -2364,6 +2494,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Sandbox-realm null-proto via bridge `from()` set-trap write-through (GHSA-9vg3-4rfj-wgcm) | `handleException` and sandbox-Promise.then onFulfilled use `ensureThis` (sandbox-realm passthrough); host-Promise rejection sanitiser composes `from()` outside `handleException` so the GHSA-mpf8 invariant still wraps host null-proto values |
 | Internal state probe via computed property access on `globalThis` (GHSA-2cm2-m3w5-gp2f) | Bootstrap script declares `let VM2_INTERNAL_STATE_…` at script-top so the binding lands in the context's `[[GlobalLexicalEnvironment]]`; transformer-emitted `${INTERNAL_STATE_NAME}.handleException(…)` resolves there as before, but `globalThis[k]`, `Reflect.get`, descriptor APIs, and own-property enumeration cannot reach it (the global object's own-key table no longer contains the entry). Supersedes the identifier-only mitigation of GHSA-wp5r-2gw5-m7q7 by closing the entire computed-key class structurally. |
 | Bridge saved-state leak via `Array.prototype[N]` setter (GHSA-9qj6-qjgg-37qq) | `neutralizeArraySpeciesBatch` writes saved entries via `thisReflectDefineProperty`; appended slot is an own data property and no sandbox-installed setter is invoked while the bridge holds raw saved state |
+| Host prototype mutation via apply trap (GHSA-v6mx-mf47-r5wg) | Apply trap caches the host prototype-mutating intrinsics (`Object.prototype.__proto__` setter, `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.{defineProperty,defineProperties}`, `Reflect.defineProperty`, `__defineSetter__`, `__defineGetter__`) in `dangerousHostProtoMutators` and refuses any invocation reaching them — direct or via one-layer indirection through `Function.prototype.{call,apply,bind}` / `Reflect.{apply,construct}`. Read-side defense-in-depth in `thisEnsureThis` cache-checks `mappingOtherToThis` before the proto-walk so any previously-bridged host value returns the existing proxy even when its prototype chain has been tampered with by some other route. |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

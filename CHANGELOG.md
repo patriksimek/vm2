@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.11.4]
+
+Single advisory closed. Patch release — no API changes.
+
+### Security fix
+
+- **GHSA-v6mx-mf47-r5wg** — host prototype mutation via apply-trap indirection. Sandbox code could reach host prototype-mutating setters (`Object.prototype.__proto__`, `setPrototypeOf`, `defineProperty`, `__defineSetter__`/`__defineGetter__`) through `Function.prototype.{call,apply,bind}` and `Reflect.{apply,construct}` indirection, sever a host intrinsic's prototype chain, and escape via the bridge's `thisEnsureThis` proto-walk fallthrough. Two-layer structural fix in `lib/bridge.js` (apply-trap blocklist + cache check before proto-walk). See ATTACKS.md Category 30 and `test/ghsa/GHSA-v6mx-mf47-r5wg/`.
+
 ## [3.11.3]
 
 Single advisory closed. Patch release — no API changes.

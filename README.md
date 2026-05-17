@@ -518,7 +518,7 @@ vm.run(`
 
 If you set `nesting: true`, you have effectively granted the sandbox the same trust level you have. **Do not enable `nesting: true` for untrusted code.** Use it only when you trust the sandboxed code itself but want VM-style execution semantics (fresh global, controlled timeouts) for non-security reasons.
 
-The combination `{ nesting: true, require: false }` throws `VMError` at construction (GHSA-8hg8-63c5-gwmx) because the pair is contradictory: `nesting: true` makes `vm2` requireable regardless of `require: false`, so the deny-all expectation cannot be honored. To deny all requires, remove `nesting: true`. To allow nested VMs, replace `require: false` with an explicit config so the tradeoff is visible.
+`nesting: true` **requires an explicit `require` config object** (e.g. `require: { builtin: [] }` or `require: {}`). Any other shape — `require: false`, `require: undefined`, `require: null`, or omitting `require` entirely — throws `VMError` at construction (GHSA-m4wx-m65x-ghrr, supersedes GHSA-8hg8-63c5-gwmx). All of those shapes produce a NESTING_OVERRIDE-only resolver: the sandbox can `require('vm2')` but nothing else, which is a pure escape primitive with no legitimate use. To deny all requires, remove `nesting: true`. To allow nested VMs, provide an explicit `require` config so the trade-off is visible at the call site.
 
 ## Known Issues
 

@@ -567,8 +567,15 @@ describe('modules', () => {
 
 describe('nesting', () => {
 	it('NodeVM', () => {
+		// SECURITY (GHSA-m4wx-m65x-ghrr): `nesting: true` alone (without an
+		// explicit `require` config) is now rejected at construction because
+		// the destructuring default produces an insecure NESTING_OVERRIDE-only
+		// resolver. To exercise legitimate nesting we pass an explicit empty
+		// `require` config — the developer's "I accept the escape-hatch tradeoff"
+		// signal documented in the README.
 		const vm = new NodeVM({
-			nesting: true
+			nesting: true,
+			require: {builtin: []}
 		});
 
 		const nestedObject = vm.run(`

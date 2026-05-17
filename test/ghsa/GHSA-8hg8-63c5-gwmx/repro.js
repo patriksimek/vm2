@@ -62,13 +62,16 @@ describe('GHSA-8hg8-63c5-gwmx — nesting: true bypasses require: false', () => 
 		assert.doesNotThrow(() => new NodeVM({ nesting: true, require: { builtin: [] } }));
 	});
 
-	it('accepts { nesting: true } alone (default require — escape-hatch use, documented)', () => {
-		// Bare `nesting: true` continues to work as documented. The README
-		// "`nesting: true` is an escape hatch" section explains the trade-off.
-		// Not closed here (would require Option C constraint propagation —
-		// out of scope for 3.11.1). This regression test ensures the narrow
-		// fix doesn't accidentally break the bare-nesting case.
-		assert.doesNotThrow(() => new NodeVM({ nesting: true }));
+	it('rejects { nesting: true } alone (closed by GHSA-m4wx-m65x-ghrr)', () => {
+		// The original fix left this loophole — bare `nesting: true` produced the
+		// same NESTING_OVERRIDE-only resolver as `{ nesting: true, require: false }`
+		// because the destructuring default `require: requireOpts = false` runs
+		// after the check. GHSA-m4wx-m65x-ghrr moves the check after destructuring
+		// and uses `!requireOpts`, so this configuration now throws too.
+		assert.throws(
+			() => new NodeVM({ nesting: true }),
+			err => err instanceof VMError && /GHSA-m4wx-m65x-ghrr/.test(err.message)
+		);
 	});
 
 	it('accepts { require: false } alone (no nesting — deny all requires)', () => {

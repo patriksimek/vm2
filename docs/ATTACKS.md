@@ -2535,6 +2535,107 @@ The fix preserves benign subclass behaviour: `class MyPromise extends Promise {}
 
 ---
 
+## Attack Category 32: Bridge `set` Trap Ignores Spec `Receiver` — Inherited-Receiver Write-Through
+
+**Uses**: [Category 6: Proxy Trap Exploitation](#attack-category-6-proxy-trap-exploitation).
+
+### Description
+
+ECMA-262 §9.5.9 `[[Set]](P, V, Receiver)` for Proxy exotic objects supplies the *original recipient* of the assignment as the `Receiver` parameter to the trap. When sandbox code writes to an object that **inherits** from a bridge proxy (`Object.create(proxy).x = v`) or supplies a forged receiver (`Reflect.set(proxy, k, v, customReceiver)`), V8 invokes the trap with `Receiver` set to that recipient — *not* the proxy itself. The spec-mandated behaviour for the trap is to install the property on `Receiver`, mirroring how ordinary objects propagate `[[Set]]` up the prototype chain.
+
+`BaseHandler.set` in `lib/bridge.js` historically ignored the `Receiver` argument and unconditionally forwarded the write through to the wrapped host object via `otherReflectSet(object, key, value)`. Consequence: **every host-realm object exposed to the sandbox becomes a write channel through any inheriting receiver.** A single `Object.create(hostObj)` produces a sandbox-side object whose every property write lands on the host object, bypassing any future write-side hardening that assumes "writes only arrive via direct `proxy.x = v` through the canonical proxy receiver". The originally reported path used `kCustom = Symbol.for('nodejs.util.promisify.custom')` as the write key against `Object.create(hostFn)` to install a sandbox-controlled function under the host promisifier dispatch slot, so `util.promisify(hostFn)()` on the host side would dispatch to attacker code. The class is generic to any key; the symbol-key shape was the sharpest end (host control flow hand-off) but plain string keys are equally write-through.
+
+CVSS:3.1 ~8.0 (AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:N — direct host data integrity violation; full RCE requires the host to consume the polluted slot).
+
+### Attack Flow
+
+1. Sandbox obtains a reference to any host-realm object the embedder exposed — either via `sandbox: { x }` or any function/value reachable through the bridge.
+2. Sandbox constructs an inheriting object: `const child = Object.create(hostObj)` (or any equivalent — `Reflect.set(hostObj, k, v, sandboxObj)`, `Object.create(Object.create(hostObj))`, `Object.assign(Object.create(hostObj), src)`).
+3. Sandbox writes a property: `child[key] = sandboxValue`. V8's `[[Set]]` walks `child` → `proxy(hostObj)` and invokes the trap with `Receiver = child`.
+4. The pre-fix trap discarded `Receiver` and ran `otherReflectSet(hostObj, key, value)`. The property landed on `hostObj` on the **host realm**.
+5. Host code subsequently reads `hostObj[key]` (or `Object.getOwnPropertySymbols(hostObj)`, or dispatches through it via a well-known protocol such as `util.promisify`). The attacker's value is read; if the host treats it as a callable, sandbox code runs in the host realm.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-c4cf-2hgv-2qv6)
+const util = require('util');
+const { VM } = require('vm2');
+
+const hostFn = function api(cb) { cb(null, 'real-data'); };
+const vm = new VM();
+vm.sandbox.hostFn = hostFn;
+
+vm.run(`
+  const kCustom = Symbol.for('nodejs.util.promisify.custom');
+  const child = Object.create(hostFn);
+  child[kCustom] = function () {
+    return Promise.resolve('HIJACKED-VIA-RECEIVER-BUG');
+  };
+`);
+
+// Host side:
+util.promisify(hostFn)().then(console.log);   // → "HIJACKED-VIA-RECEIVER-BUG"
+```
+
+Five variants share the same primitive — `receiver !== <canonical proxy for target>`:
+
+| # | Primitive |
+|---|-----------|
+| 1 | `Object.create(hostObj)[Symbol.for('nodejs.util.promisify.custom')] = fn` |
+| 2 | `Object.create(hostObj).x = 'v'` (plain string key — no symbol involved) |
+| 3 | `Reflect.set(hostObj, k, v, sandboxObj)` |
+| 4 | `Object.create(Object.create(hostObj)).x = 'v'` (deep proto chain) |
+| 5 | `Object.assign(Object.create(hostObj), { k: v })` |
+
+### Why It Works
+
+`BaseHandler.set` was written to "forward writes to the host target", a reasonable mental model when the only assumption is `proxy.x = v`. The spec, however, defines `[[Set]]` over the proxy as a single trap that subsumes *all* writes reaching the proxy through the prototype chain — including writes whose original recipient is some sandbox-side child. Two existing handlers got this right by accident: `ReadOnlyHandler.set` writes to `receiver` unconditionally (its policy is "host is read-only"), and `ProtectedHandler.set`'s function-value branch also installs on `receiver`. `BaseHandler.set` was the only trap that violated the spec — and because every non-intrinsic host object flows through `BaseHandler` (intrinsics go through `ProtectedHandler`'s OPNA short-circuit, read-only mocks go through `ReadOnlyHandler`), the bug applied to every embedder-exposed object the sandbox was ever handed.
+
+Interaction with [Category 8 / Category 20 / GHSA-m5q2-4fm3-vfqp](#attack-category-20-cross-realm-symbol-extraction-via-host-object-prototype-walk): the m5q2 fix expanded `Symbol.for` to deny the entire `nodejs.` namespace **and** added an `isDangerousCrossRealmSymbol(key)` rejection inside the `set` / `defineProperty` / `deleteProperty` traps themselves. That symmetric symbol guard fires before the receiver-mismatch check below, so the canonical symbol-key PoC (variant 1) is now structurally blocked at two independent layers even on a sandbox lacking this category's fix. The receiver bug remains a real, generic write-channel — variants 2–5 (plain string keys, forged `Reflect.set` receiver, deep proto chains, `Object.assign(child, src)`) reach the host write path without involving any cross-realm symbol — so this category's fix is required defense-in-depth on top of m5q2 rather than a duplicate of it.
+
+### Mitigation
+
+Restores [Defense Invariant 1](#defense-invariants) ("no host-realm object reaches sandbox code unwrapped") and adds a previously-implicit corollary: **a sandbox-originated write reaches a host-realm object only when the spec `[[Set]]` receiver equals the canonical bridge proxy for that object's target.**
+
+`lib/bridge.js`, `BaseHandler.set` (after the existing `__proto__` and `constructor`-on-array short-circuits, before the host-write forwarding):
+
+```javascript
+const canonicalProxy = thisReflectApply(thisWeakMapGet, mappingOtherToThis, [object]);
+if (receiver !== canonicalProxy) {
+    return thisReflectDefineProperty(receiver, key, {
+        __proto__: null,
+        value: value,
+        writable: true,
+        enumerable: true,
+        configurable: true,
+    }) === true;
+}
+```
+
+The lookup reuses `mappingOtherToThis`, which `thisProxyOther` already populates with `[other, proxy]` (`!isHost`) or `[other, proxy2]` (`isHost`). In the host-loaded branch the *outer* `proxy2` is the sandbox-facing object; its empty handler forwards `[[Set]]` to `proxy` while preserving `Receiver`, so the BaseHandler trap fires with `Receiver === proxy2`. Both branches therefore yield a single canonical proxy per host target, and direct sandbox writes (`hostProxy.x = v`, `Reflect.set(hostProxy, k, v, hostProxy)`, `Object.assign(hostProxy, src)`) continue to take the legitimate `otherReflectSet` path. Non-canonical receivers — `Object.create(proxy)` children, explicit-receiver `Reflect.set` calls, sandbox-side `setPrototypeOf` constructions — install on the receiver itself via `Reflect.defineProperty`, exactly as the spec mandates.
+
+The fix is symmetric with `ReadOnlyHandler.set` (which uses the same install-on-receiver shape unconditionally) and with the function-value branch of `ProtectedHandler.set`. `ProtectedHandler.set` inherits the fix automatically through its `super.set` delegation for non-function values.
+
+### Detection Rules
+
+- **`Object.create(hostProxy)` followed by property assignment on the child** — every form: `child[k] = v`, `Reflect.set(child, k, v)`, `Object.defineProperty(child, k, desc)` (the last installs on `child` directly and does not route through the trap, so it is not relevant; the first two are).
+- **`Reflect.set(hostProxy, k, v, receiver)` where `receiver !== hostProxy`** — explicit-receiver writes against any host object.
+- **`Object.assign(Object.create(hostProxy), src)`** — bulk pollution via the receiver-mismatch primitive.
+- **Code review pattern**: sandbox code that calls `Object.create` on any embedder-exposed object is suspicious; benign sandbox code virtually never needs to inherit from host objects.
+
+### Considered Attack Surfaces
+
+- **`Reflect.set(hostProxy, k, v, hostProxy)`** — receiver matches the canonical proxy, goes through the legitimate write path. Equivalent to `hostProxy[k] = v`. Existing `isProtectedHostObject` and `__proto__` short-circuits still apply.
+- **`Reflect.set(hostProxy, k, v, undefined)` / `null`** — receiver does not strict-equal the canonical proxy → install-on-receiver branch fires → `Reflect.defineProperty(undefined, …)` throws a `TypeError`, the sandbox sees a `TypeError`, the host object is untouched.
+- **Adversary-controlled Proxy receiver with a custom `defineProperty` trap** — vm2 does not expose the `Proxy` constructor to the sandbox in plain VM mode (`typeof Proxy === 'undefined'`), so this composition is not reachable today. If a future change exposes `Proxy`, the install-on-receiver branch must be re-audited.
+- **`setPrototypeOf(child, hostProxy)` after `child` already has writes** — the next write on `child` walks the new prototype, fires the trap with `Receiver = child`, and installs on `child`. Host untouched.
+- **`BaseHandler.defineProperty`** — `[[DefineOwnProperty]]` carries no `Receiver` per ECMA-262 §9.5.6; `Object.defineProperty(child, k, desc)` where `child` inherits from `hostProxy` installs on `child` directly without invoking the proxy's `defineProperty` trap. No analogous receiver bug exists. (`Object.defineProperty(hostProxy, k, desc)` *does* route to the trap, but that path already has the `isProtectedHostObject` short-circuit from GHSA-vwrp-x96c-mhwq.)
+- **`BaseHandler.deleteProperty`** — `[[Delete]]` (§9.5.10) has no `Receiver`. `delete child.k` for `child` inheriting from proxy is a no-op on the proxy.
+- **Compound with [Category 18: Array Species Self-Return](#attack-category-18-array-species-self-return-via-constructor-manipulation)** — `Object.create(hostArray).constructor = fn` now installs `constructor` on the sandbox child rather than (as before the existing array-constructor short-circuit) on the proxy target. The host array's raw `constructor` slot remains untouched in either case; `neutralizeArraySpecies` continues to defend the species path independently.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -2660,6 +2761,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Internal state probe via computed property access on `globalThis` (GHSA-2cm2-m3w5-gp2f) | Bootstrap script declares `let VM2_INTERNAL_STATE_…` at script-top so the binding lands in the context's `[[GlobalLexicalEnvironment]]`; transformer-emitted `${INTERNAL_STATE_NAME}.handleException(…)` resolves there as before, but `globalThis[k]`, `Reflect.get`, descriptor APIs, and own-property enumeration cannot reach it (the global object's own-key table no longer contains the entry). Supersedes the identifier-only mitigation of GHSA-wp5r-2gw5-m7q7 by closing the entire computed-key class structurally. |
 | Bridge-internal container via `Array.prototype[N]` setter (Category 28: GHSA-9qj6-qjgg-37qq Variant A + GHSA-q3fm-4wcw-g57x Variant B) | Variant A — `neutralizeArraySpeciesBatch` in `lib/bridge.js` writes saved entries via `thisReflectDefineProperty`; appended slot is an own data property and no sandbox-installed setter is invoked while the bridge holds raw saved state. Variant B — `defaultSandboxPrepareStackTrace` in `lib/setup-sandbox.js` accumulates frames in a string via primitive concatenation rather than an array, removing every reachable `Array.prototype` slot (index setter, getter, and `.join`); `makeCallSiteGetters` installs entries via `localReflectDefineProperty` for symmetry |
 | Host prototype mutation via apply trap (GHSA-v6mx-mf47-r5wg) | Apply trap caches the host prototype-mutating intrinsics (`Object.prototype.__proto__` setter, `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.{defineProperty,defineProperties}`, `Reflect.defineProperty`, `__defineSetter__`, `__defineGetter__`) in `dangerousHostProtoMutators` and refuses any invocation reaching them — direct or via one-layer indirection through `Function.prototype.{call,apply,bind}` / `Reflect.{apply,construct}`. Read-side defense-in-depth in `thisEnsureThis` cache-checks `mappingOtherToThis` before the proto-walk so any previously-bridged host value returns the existing proxy even when its prototype chain has been tampered with by some other route. |
+| Bridge `set` trap ignores spec `Receiver` (GHSA-c4cf-2hgv-2qv6) | `BaseHandler.set` gates host-write forwarding on `receiver === mappingOtherToThis.get(object)`; non-canonical receivers (inherited-receiver writes via `Object.create(proxy)`, forged-receiver `Reflect.set` calls, `Object.assign(child, src)` loops) install on `receiver` via `Reflect.defineProperty`, mirroring `ReadOnlyHandler.set` |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

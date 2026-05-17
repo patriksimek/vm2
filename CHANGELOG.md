@@ -2,10 +2,11 @@
 
 ## [3.11.4]
 
-Four advisories closed. Patch release — no API changes.
+Five advisories closed. Patch release — no API changes.
 
 ### Security fixes
 
+- **GHSA-c4cf-2hgv-2qv6** — bridge escape via `BaseHandler.set` ignoring the ECMA-262 §9.5.9 `Receiver` argument; `Object.create(hostProxy).x = v` and `Reflect.set(hostProxy, k, v, sandboxObj)` wrote through to the host object instead of installing on the receiver, turning every embedder-exposed host object into a sandbox write channel. Receiver-gated install-on-receiver fix in `lib/bridge.js` mirroring `ReadOnlyHandler.set`. See ATTACKS.md Category 32 and `test/ghsa/GHSA-c4cf-2hgv-2qv6/`.
 - **GHSA-m5q2-4fm3-vfqp** — sandbox escape via unblocked cross-realm `Symbol.for` keys plus missing dangerous-symbol guards on the bridge's write traps. Two-layer structural fix: `lib/setup-sandbox.js` denies the entire `nodejs.` namespace at `Symbol.for` and aligns the read-side filters with the full 9-symbol cache, and `lib/bridge.js` extends `isDangerousCrossRealmSymbol` and applies it to the `set`/`defineProperty`/`deleteProperty` traps. See ATTACKS.md Category 8 / Category 20 (both extended) and `test/ghsa/GHSA-m5q2-4fm3-vfqp/`.
 - **GHSA-v6mx-mf47-r5wg** — host prototype mutation via apply-trap indirection. Sandbox code could reach host prototype-mutating setters (`Object.prototype.__proto__`, `setPrototypeOf`, `defineProperty`, `__defineSetter__`/`__defineGetter__`) through `Function.prototype.{call,apply,bind}` and `Reflect.{apply,construct}` indirection, sever a host intrinsic's prototype chain, and escape via the bridge's `thisEnsureThis` proto-walk fallthrough. Two-layer structural fix in `lib/bridge.js` (apply-trap blocklist + cache check before proto-walk). See ATTACKS.md Category 30 and `test/ghsa/GHSA-v6mx-mf47-r5wg/`.
 - **GHSA-q3fm-4wcw-g57x** — Defense Invariant #11 hardening for `defaultSandboxPrepareStackTrace` (second variant of GHSA-9qj6-qjgg-37qq in a different file). The sandbox stack-trace formatter accumulated frames in a sandbox-realm array and `.join`-ed them, so a sandbox-installed setter on `Array.prototype[N]` (or `.join` override) observed bridge-internal state — no host reference reachable today, but one enrichment away from regressing into the GHSA-9qj6 RCE shape. Fixed in `lib/setup-sandbox.js` by folding frames through a primitive string accumulator (no `Array.prototype` slot reachable) and converting `makeCallSiteGetters` to `localReflectDefineProperty` for symmetry. See ATTACKS.md Category 28 Variant B and `test/ghsa/GHSA-q3fm-4wcw-g57x/`.
@@ -14,7 +15,7 @@ Four advisories closed. Patch release — no API changes.
 
 ## [3.11.3]
 
-Single advisory closed. Patch release — no API changes.
+Patch release — no API changes.
 
 ### Security fix
 

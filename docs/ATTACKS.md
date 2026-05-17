@@ -1607,7 +1607,7 @@ The user's mental model of `['*', '-child_process']` is "every builtin except `c
 
 Three-layer denylist enforcement in `lib/builtin.js` (restores **[Invariant 13 — The NodeVM builtin allowlist is a closed system](#defense-invariants)**):
 
-1. **`DANGEROUS_BUILTINS` Set** at module load — `['module', 'worker_threads', 'cluster', 'vm', 'repl', 'inspector', 'process', 'trace_events', 'wasi']`.
+1. **`DANGEROUS_BUILTINS` Set** at module load — `['module', 'worker_threads', 'cluster', 'vm', 'repl', 'inspector', 'process', 'trace_events', 'wasi', 'diagnostics_channel', 'async_hooks', 'perf_hooks', 'v8']`. The last four were added by [Category 35](#attack-category-35-nodevm-process-wide-observability-builtins-host-data-info-leak) for the process-wide observability info-leak class; they share the deny-by-default enforcement but a different threat model (data exposure, not code execution).
 2. **Family-prefix check** via `isDangerousBuiltin(key)` — any `<family>/...` whose family is in the denylist is also blocked (e.g. `inspector/promises`, future `inspector/foo`, hypothetical `process/foo`, `module/foo`). The check also strips the optional `node:` URL-style prefix so `node:process` and `node:inspector/promises` are caught.
 3. **Filter from `BUILTIN_MODULES`** — closes the `'*'` wildcard expansion path. `'*'` will never auto-allow these names regardless of the user's exclusion list.
 4. **Reject in `addDefaultBuiltin`** — closes the explicit-allowlist path (`builtin: ['module']`, `builtin: ['process']`, `builtin: ['inspector/promises']`) and the lower-level `makeBuiltins([...])` API used by custom resolvers. The `SPECIAL_MODULES` escape hatch is preserved: a future safe wrapper (e.g. a `module` shim that exposes only `builtinModules` metadata) can be registered there if a real consumer needs it.
@@ -1637,7 +1637,7 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 
 ### Considered Attack Surfaces
 
-- **`async_hooks`** exposes context tracing but not host-code-loading primitives. Allowed under `'*'`.
+- **`async_hooks`, `diagnostics_channel`, `perf_hooks`, `v8`** are now denied as process-wide observability primitives — see [Category 30](#attack-category-30-nodevm-process-wide-observability-builtins-host-data-info-leak). They expose host-process state rather than host-code-loading primitives, but are functionally identical from the embedder's perspective: any allowlist that includes them leaks per-request user data, auth tokens, and heap contents into the sandbox.
 - **`child_process`** is NOT on the auto-denylist because users may legitimately want it for trusted scripts (e.g., dev tooling running known scripts in vm2 for hot-reload isolation). For untrusted code, `child_process` is a full-host-RCE primitive — embedders MUST exclude it explicitly (`['*', '-child_process']`) or, better, use an explicit allowlist of just the modules they need. The README's "Hardening recommendations" section calls this out.
 - **`fs`** is allowed under `'*'` because file-system access can be a legitimate sandbox capability for many use cases (e.g., user-script template engines reading templates). Users who want filesystem isolation use `VMFileSystem` or exclude `fs` explicitly. Same caveat as `child_process` — `'*'` is not sandbox-safe for untrusted code.
 - **`dgram`, `net`, `http`, `https`, `dns`** are network-IO builtins, allowed under `'*'`. Any of them give untrusted code outbound network access from the host. Embedders should explicitly exclude or allowlist.
@@ -2891,6 +2891,96 @@ None. This fix complements [Category 21](#attack-category-21-nodevm-builtin-allo
 
 ---
 
+## Attack Category 35: NodeVM Process-Wide Observability Builtins (Host-Data Info Leak)
+
+### Description
+
+NodeVM's `require.builtin` allowlist defends sandbox code from reaching dangerous Node modules. [Category 21](#attack-category-21-nodevm-builtin-allowlist-bypass-via-host-passthrough-builtins) denied the host-code-loading primitives (`module`, `worker_threads`, `cluster`, `vm`, `repl`, `inspector`, `process`, `trace_events`, `wasi`). A second class of dangerous builtins exists with a different threat model: **process-wide observability modules** whose primary capability is reading state of the entire host Node process, not loading or executing code.
+
+When such a builtin is reachable from the sandbox (via the `'*'` wildcard or an explicit allowlist), the sandbox can subscribe to or read host process state directly — no RCE chain needed. The data the embedder routes through these APIs in the same process (HTTP requests, async-context user IDs, performance marks, V8 heap) is by definition host data; reaching the host module *is* the escape.
+
+CWE-668 (Exposure of Resource to Wrong Sphere). Info-leak class, not RCE class.
+
+### Attack Flow
+
+Each builtin gives a one-liner exfiltration primitive. Once the sandbox holds a readonly proxy over the host module, the proxy's `apply` trap forwards every method call back to the host realm:
+
+- **`diagnostics_channel`** — `dc.channel('http.server.request.start').subscribe(cb)`. The sandbox callback receives raw host `IncomingMessage` objects for every HTTP request the embedder serves, with full `Authorization`, `Cookie`, `x-session-token` headers intact.
+- **`async_hooks`** — `async_hooks.executionAsyncResource()` returns the current host `AsyncResource`. Embedders that use `AsyncLocalStorage` for per-request user/auth context (extremely common pattern: `express`, `fastify`, `next.js`) pin that state on the resource, and the sandbox reads it directly.
+- **`perf_hooks`** — `perf_hooks.performance.getEntriesByType('mark')` reads every host-side `performance.mark(name)`. Production code routinely embeds request IDs, user IDs, route paths, or partial query strings into mark names for observability dashboards.
+- **`v8`** — `v8.getHeapSnapshot()` returns a Readable stream of the entire host V8 heap (every string, every Buffer, every closure capture). `v8.writeHeapSnapshot(path)` writes the same to an arbitrary host filesystem path. `v8.queryObjects(Ctor)` (Node 20+) returns every host-realm instance of a constructor.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-9g8x-92q2-p28f)
+const vm = new NodeVM({ require: { builtin: ['*'], external: false } });
+vm.run(`
+  const dc = require('diagnostics_channel');
+  const stolen = [];
+  dc.channel('http.server.request.start').subscribe((req) => {
+    stolen.push({
+      url: req.url,
+      authorization: req.headers.authorization,
+      session: req.headers['x-session-token'],
+    });
+  });
+  // ... wait for host HTTP traffic. Headers are read from inside the sandbox.
+`, 'poc.js');
+```
+
+Equivalent one-liners for the other three:
+
+```javascript
+require('async_hooks').executionAsyncResource(); // -> host AsyncResource
+require('perf_hooks').performance.getEntriesByType('mark'); // -> host marks
+require('v8').writeHeapSnapshot('/tmp/host-heap.json'); // -> entire host heap on disk
+```
+
+### Why It Works
+
+The vm2 boundary is built around the assumption that "the sandbox observes its own realm, not the host's". Most Node builtins satisfy this implicitly: `path.join(...)`, `crypto.randomBytes(...)`, `url.parse(...)` all operate on inputs the sandbox passes in and return values the sandbox owns. The bridge's `ReadOnlyHandler` makes those builtins safe via uniform proxy semantics.
+
+Process-wide observability builtins break the assumption because the data they surface *is* host data by spec — `executionAsyncResource()` returns "the resource currently executing" measured against the host's call stack, not the sandbox's. Wrapping the module in a proxy does not localize the data source. The bridge cannot usefully sanitize the values because they're real host objects (IncomingMessage, AsyncResource), and stripping them to primitives would defeat the embedder's reason for ever exposing the module in the first place.
+
+The four builtins in scope all share this property: they observe a process resource (HTTP request hook, async context, perf timeline, V8 heap). Mitigation must therefore be "deny by default", not "proxy more carefully".
+
+### Mitigation
+
+Extend `DANGEROUS_BUILTINS` in `lib/builtin.js` with the four observability names. Reuses the same enforcement established by Category 21 (now four-layer after the `isDangerousBuiltin` family-prefix promotion):
+
+1. **Filtered out of `BUILTIN_MODULES`** — closes the `'*'` wildcard expansion path. `builtin: ['*']` and `builtin: ['*', '-fs']` no longer auto-allow these names.
+2. **Rejected in `addDefaultBuiltin`** via `isDangerousBuiltin(key)` — closes the explicit-allowlist path (`builtin: ['perf_hooks']`), the object-map form (`builtin: { v8: true }`), and the lower-level `makeBuiltins(['async_hooks'])` API used by custom resolvers.
+3. **Family-prefix check** — any `<family>/...` whose family is in the denylist is also blocked (e.g. hypothetical `perf_hooks/foo`).
+4. **`node:` prefix stripped before lookup** — `require('node:diagnostics_channel')` resolves identically to the bare name and is blocked by the same denial.
+
+The `SPECIAL_MODULES`, `mocks`, and `overrides` escape hatches are preserved: an embedder who genuinely needs sandbox-local timing or async context can register a controlled wrapper under the same name (e.g., a `perf_hooks` shim that only exposes a sandbox-local clock). The denylist only rejects the *default host-passthrough loader*.
+
+`v8` was added during this fix beyond the originally-named three. The class is "process-wide observability modules"; `v8.writeHeapSnapshot(path)` is strictly worse than `perf_hooks` against the same invariant (writes a full heap dump to an arbitrary host filesystem path), so excluding it would leave a wide bypass of the same class.
+
+The fix restores **[Defense Invariant #13](#defense-invariants)** at a different layer — the NodeVM builtin allowlist is a closed system, regardless of whether the threat is code execution or data exposure. The bridge invariant still holds for these modules; the deny-list ensures the bridge is never asked to wrap them in the first place.
+
+### Detection Rules
+
+- **`builtin: ['*']` or `builtin: ['*', '-X']`** in NodeVM config — historically auto-allowed `diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8`. Now filtered. Same caveat as Category 21: `'*'` still allows `fs`, `child_process` (if not excluded), `net`, `http`, `dns` — not a sandbox-safe default for untrusted code.
+- **`require('diagnostics_channel').channel(...).subscribe(...)`** — host HTTP/DB/IPC observability subscription.
+- **`require('async_hooks').executionAsyncResource()` / `.createHook({...}).enable()`** — host async context inspection.
+- **`require('perf_hooks').performance.getEntriesByType('mark' | 'measure' | 'resource')`** — host performance timeline read.
+- **`require('v8').getHeapSnapshot()` / `.writeHeapSnapshot(path)`** — full host heap exfiltration to memory or disk.
+- **`require('v8').queryObjects(Ctor)`** (Node 20+) — enumeration of host-realm instances of a constructor.
+- **Sandbox code that subscribes to channels named `http.server.request.*`, `http.client.request.*`, `dns.lookup.*`, `net.client.socket.*`** — these are the canonical diagnostic channels used by Node core and request-tracking libraries.
+
+### Considered Attack Surfaces
+
+- **`os`** exposes hostname, network interfaces, user info. The data is host environment, not per-request, and is generally considered configuration metadata rather than tenant data. Allowed under `'*'` for consistency with `process.env` exposure expectations. Embedders who consider hostname/`userInfo()` sensitive should exclude `os` explicitly.
+- **`dns`** can resolve internal hostnames and exfiltrate via DNS lookup. Network-IO class, same as `http`/`net`. Not in this denylist — embedders who care about network isolation must allowlist explicitly. Documented in Category 21's "Considered Attack Surfaces".
+- **`zlib`, `crypto`, `string_decoder`, `buffer`** — sandbox-local data transforms, no host-state observability. Safe under default proxy semantics.
+- **`process`** — already denied via Category 21 (after GHSA-rp36-8xq3-r6c4 extended `DANGEROUS_BUILTINS`). The sandbox global `process` is a curated stub defined in `lib/setup-node-sandbox.js`.
+- **`worker_threads.parentPort` and `worker_threads.workerData`** — would expose host worker IPC channel and initial data. Already denied by Category 21 (entire `worker_threads` module is denied; this category is a different threat model on top, not a subset).
+- **`http`, `https`, `http2`, `net`, `tls`, `dgram`** — network-IO modules. These do *not* observe existing host state; they originate new connections. Different threat model (outbound network from host) — covered in Category 21's "Considered Attack Surfaces" and Category 34 (underscored siblings). Embedders who want network isolation must exclude or replace them.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -3021,6 +3111,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Bridge `set` trap ignores spec `Receiver` (GHSA-c4cf-2hgv-2qv6) | `BaseHandler.set` gates host-write forwarding on `receiver === mappingOtherToThis.get(object)`; non-canonical receivers (inherited-receiver writes via `Object.create(proxy)`, forged-receiver `Reflect.set` calls, `Object.assign(child, src)` loops) install on `receiver` via `Reflect.defineProperty`, mirroring `ReadOnlyHandler.set` |
 | NodeVM builtin denylist bypass via `process` / `inspector/promises` (GHSA-rp36-8xq3-r6c4) | `DANGEROUS_BUILTINS` extended to include `process`; matching promoted to family-prefix via `isDangerousBuiltin(key)` so subpath builtins (`inspector/promises`, future `inspector/*`, `process/*`, `module/*`) share fate with their canonical name. `node:` URL prefix stripped before lookup. Enforced at both `BUILTIN_MODULES` source and `addDefaultBuiltin`. Supersedes the GHSA-947f-4v7f-x2v8 exact-match mitigation. |
 | NodeVM wildcard exposes underscored network builtins (GHSA-r9pm-gxmw-wv6p) | `BUILTIN_MODULES` filter in `lib/builtin.js` now excludes any name starting with `_`; `'*'` no longer expands to `_http_client`/`_http_server`/`_tls_wrap`/`_stream_*` etc. Explicit opt-in (`builtin: ['_http_client']`) and `mock`/`override` paths still work via `addDefaultBuiltin`. |
+| NodeVM process-wide observability builtins (GHSA-9g8x-92q2-p28f) | `DANGEROUS_BUILTINS` denylist extended with `diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8`; filtered out of `BUILTIN_MODULES` (closes `'*'` wildcard) and rejected in `addDefaultBuiltin` via `isDangerousBuiltin` (closes explicit allowlist and `makeBuiltins([...])`). `node:` prefix normalized and family-prefix subpath matching applied. `mocks`/`overrides` escape hatch preserved for sandbox-local replacements |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

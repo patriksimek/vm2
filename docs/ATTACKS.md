@@ -733,6 +733,16 @@ Function.prototype.value = (depth, opt, inspect) => {
 const obj = { valueOf: undefined, constructor: undefined };
 Object.defineProperties(obj, inspectDesc);
 WebAssembly.compileStreaming(obj).catch(() => {});
+
+// GHSA-m5q2-4fm3-vfqp: extraction is unnecessary when Symbol.for itself returns the real
+// cross-realm symbol. Combined with bridge write-trap pass-through, sandbox can install a
+// host-side hook directly:
+const kPromisify = Symbol.for('nodejs.util.promisify.custom'); // unfiltered before the fix
+hostFn[kPromisify] = function (path) { return Promise.resolve('HIJACKED'); };
+// Host-side: util.promisify(hostFn)('anything').then(...) yields 'HIJACKED'.
+// Sibling abuses with the same primitive: planting `nodejs.stream.readable`/.writable on a
+// non-stream host object to confuse `Stream.isReadable`/`isWritable` duck typing, or
+// installing `nodejs.webstream.controllerErrorFunction` to capture host error dispatch.
 ```
 
 ### Why It Works
@@ -761,6 +771,10 @@ Multi-layer defense. **Sandbox side** (`setup-sandbox.js`): overrides `Symbol.fo
 **Pre-wrap container scrub**: `apply` and `construct` traps invoke `stripDangerousSymbolsFromHostResult(ret)` on the raw host return value before wrapping. For host arrays, the scrub drops any element that is a dangerous symbol and compacts; for non-array host objects (such as the return value of `Object.getOwnPropertyDescriptors`), it deletes own-property slots keyed by the dangerous symbols. This closes iteration and descriptor-enumeration paths that would otherwise still see the dangerous symbol present on the host container.
 
 **ownKeys trap rewrite**: iterates the raw host result via `otherReflectGet` rather than bridge-wrapping it, so dangerous symbols can be *dropped* (preserving the Proxy ownKeys invariant, which forbids `undefined` keys) rather than rewritten.
+
+**`nodejs.` prefix denial at the source (GHSA-m5q2-4fm3-vfqp)**: the `Symbol.for` override originally allow-listed only `nodejs.util.inspect.custom` and `nodejs.rejection`, leaving seven other Node-internal `nodejs.*` keys live (`nodejs.util.promisify.custom`, the four stream brand symbols, the two webstream symbols). The override now intercepts the entire `nodejs.` namespace — any key starting with `nodejs.` is mapped to a sandbox-local symbol — so the canonical `Symbol.for(...)` extraction path cannot produce a real cross-realm symbol regardless of which internal feature the attacker targets. A keyed cache preserves `Symbol.for(k) === Symbol.for(k)` identity inside the sandbox for the same key. The companion read-side filter (`isDangerousSymbol` in `setup-sandbox.js`, `isDangerousCrossRealmSymbol` in `bridge.js`) was extended with the seven additional symbols so identity checks against host-extracted symbols match the same set; new entries to either side must be mirrored to keep the source-deny and identity-filter layers consistent.
+
+**Bridge write-trap symbol guard (GHSA-m5q2-4fm3-vfqp)**: the read-direction filter prevents the sandbox from surfacing dangerous symbols, but the write traps (`set`, `defineProperty`, `deleteProperty`) historically forwarded the key straight through to `otherReflect*` without inspecting it. If any future bypass surfaces a dangerous symbol back inside the sandbox (or a host-side embedder hands one in via a path that bypasses the per-symbol filter), the unguarded write traps would let it land as a key on any non-protected host object — turning the leak into a host-side hook installation. Each of the three write traps now checks `isDangerousCrossRealmSymbol(key)` when `!isHost` and throws `VMError(OPNA)`, mirroring the read-side filter. Symmetric coverage across read and write makes "obtaining the symbol" no longer enough to weaponize it; the attacker would also need a path that bypasses both layers simultaneously.
 
 ### Detection Rules
 
@@ -1503,6 +1517,8 @@ The bridge's design separated sandbox-realm reasoning from host-realm reasoning 
 `createBridge()` builds a closure-scoped `WeakMap` of "protected host objects" at bridge init, populated with every entry in `otherGlobalPrototypes` (the cached intrinsic prototypes — Object, Array, Function, Error and subclasses, RegExp, Promise, Number/String/Boolean wrappers, Date, Map, Set, WeakMap, WeakSet, AsyncFunction, GeneratorFunction, AsyncGeneratorFunction, SuppressedError, AggregateError, VMError) plus each prototype's `.constructor` value (so the host `Object`/`Array`/`Function` constructors themselves are also protected). The four write traps in `BaseHandler` — `set`, `defineProperty`, `deleteProperty`, `preventExtensions` — now check `isProtectedHostObject(object)` before any `otherReflect*` mutation call and throw `VMError(OPNA)` on hit. The check fires only when `!isHost` (sandbox-originated writes); host-side embedder code writing to its own intrinsics through other paths is unaffected.
 
 The protected set is captured *before* any sandbox code runs, and is keyed on raw host-realm object identity — so prototype-pollution attempts that try to subvert the check itself (e.g., `Array.prototype.constructor = attackerFn`) fail because the WeakMap holds the original references.
+
+**Symbol-key augmentation (GHSA-m5q2-4fm3-vfqp)**: the per-object `isProtectedHostObject` check fires only for intrinsic prototypes, so non-intrinsic host objects (a plain `{}` exposed via `vm.sandbox.x`, a host function, a Buffer instance) remained writable from the sandbox. That is intentional — embedders need to expose mutable host state — but it interacts badly with [Category 8](#attack-category-8-cross-realm-symbol-extraction-from-host-objects)-class symbol leaks: a sandbox that obtains a real `nodejs.*` cross-realm symbol could install a host-side hook (util.promisify, stream brand, webstream controller) on any such non-protected host object and steer host control flow without ever needing host RCE. The four write traps (`set`, `defineProperty`, `deleteProperty` — plus `preventExtensions` already covered by the original Cat-20 fix) now also reject any sandbox-originated key that satisfies `isDangerousCrossRealmSymbol(key)`. This is the symmetric counterpart to the existing read-direction symbol filter: even if a future bypass surfaces a dangerous symbol back inside the sandbox, it cannot be installed as a key on any bridge-wrapped host object.
 
 ### Detection Rules
 

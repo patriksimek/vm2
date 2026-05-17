@@ -2047,17 +2047,24 @@ The leading `let ${INTERNAL_STATE_NAME}` lands the binding in the context's **`[
 
 ## Attack Category 28: Bridge Internal-State Leak via Sandbox-Realm Array Setter
 
-**Uses**: [Category 2: Prototype Chain Manipulation](#attack-category-2-prototype-chain-manipulation), [Category 18: Array Species Self-Return via Constructor Manipulation](#attack-category-18-array-species-self-return-via-constructor-manipulation)
+**Uses**: [Category 2: Prototype Chain Manipulation](#attack-category-2-prototype-chain-manipulation), [Category 4: Error Object Exploitation](#attack-category-4-error-object-exploitation), [Category 18: Array Species Self-Return via Constructor Manipulation](#attack-category-18-array-species-self-return-via-constructor-manipulation)
 
 ### Description
 
-The species defense from Category 18 stores per-call saved-state records (`{ arr, originalDesc, marker }` where `arr` is the host-realm proxy of an argument array) inside an array literal `[]` allocated by the sandbox-side bridge closure. That literal inherits **sandbox `Array.prototype`**. The original implementation appended entries with `saved[saved.length] = c` — an ordinary index assignment that walks the prototype chain when no own slot exists.
+Bridge-internal containers — lists, maps, and saved-state records that exist only for the bridge's own bookkeeping — are reached from sandbox-realm closures whose intrinsics (`Array.prototype`, `Object.prototype`, `Map.prototype`) are attacker-reachable. When such a container is appended to with an ordinary index assignment `obj[obj.length] = value`, V8's `[[Set]]` walks the prototype chain whenever no own slot exists at the target index. A sandbox-installed setter on `Array.prototype[N]` therefore fires *during* the bridge's own write and observes (or mutates) the bridge's raw state.
 
-If sandbox code installs a setter on `Array.prototype[N]` before triggering any sandbox→host call (for example `new Buffer(a)` with sandbox array `a` as argument), `neutralizeArraySpeciesBatch` writes into `saved[0]`, which falls through to that setter. The setter receives the saved-state record `c`, reads `c.arr` (the host-realm proxy), and walks `arr.f.constructor.constructor("return process")()` to host `process` → RCE.
+This category covers two concrete sites that exhibit the same primitive. Both are closed by switching to identity-stable, prototype-bypassing writes (`Reflect.defineProperty` on numeric keys).
 
-GHSA-9qj6-qjgg-37qq, CVSS 9.8.
+| Variant | Site | Container | Setter receives | Today's impact |
+|---|---|---|---|---|
+| **A** — Species saved-state (GHSA-9qj6-qjgg-37qq, CVSS 9.8) | `neutralizeArraySpeciesBatch` in `lib/bridge.js` | `saved[]` of `{ arr, originalDesc, marker }` | host-realm proxy `value.arr` of the argument array | RCE via `arr.f.constructor.constructor("return process")()` |
+| **B** — Stack-trace formatter (GHSA-q3fm-4wcw-g57x, CVSS 2.1) | `defaultSandboxPrepareStackTrace` in `lib/setup-sandbox.js` | `lines[]` of formatted frame strings | primitive string `'    at CallSite {}'` | side-channel observation; no host reference reachable today because post-#563 wrapping forces every frame through sandbox `CallSite.toString()` which always returns the safe literal |
+
+Variant B is a hardening fix rather than an exploit-today escape: the value handed to the setter is a primitive string, not a host reference. The structural concern is that the underlying *primitive* (bridge-internal container invokes sandbox code) is identical to Variant A, so any future change that enriches the appended record (e.g. an object holding a CallSite proxy or an error reference) would regress straight into the Variant A RCE shape.
 
 ### Attack Flow
+
+**Variant A — species saved-state → RCE:**
 
 1. **Setter on Array.prototype[0]**: sandbox code defines `Object.defineProperty(Array.prototype, 0, { set(value) { ... } })`.
 2. **Plant a chain hop**: sandbox stores a useful reference on the argument array, e.g. `a.f = Buffer.prototype.inspect` — when read back via the host-realm proxy, this returns a host-realm `Function` instance whose `constructor.constructor` is host `Function`.
@@ -2065,7 +2072,16 @@ GHSA-9qj6-qjgg-37qq, CVSS 9.8.
 4. **Setter fires on the bridge's own state**: `saved[saved.length] = c` walks the sandbox `Array.prototype` chain, hits `Array.prototype[0]`'s setter, and hands `c` (containing the host-realm proxy `arr`) to attacker code.
 5. **Pivot through the leaked proxy**: `value.arr.f.constructor.constructor("return process")()` reaches host `process`, then `mainModule.require('child_process').execSync(...)` for arbitrary command execution.
 
-### Canonical Example
+**Variant B — stack-trace formatter:**
+
+1. **Setter on Array.prototype[N]**: sandbox installs `Object.defineProperty(Array.prototype, 1, { set(value) { ... } })`. Index 1 is the first slot the formatter writes (the array starts at `[header]`, length 1).
+2. **Trigger the formatter**: any access to `error.stack` runs the wrapped `defaultSandboxPrepareStackTrace`. The wrap is installed by the `Error.prepareStackTrace` setter and routes the default through the same `CallSite` wrapping path as user-provided formatters.
+3. **Bridge-internal write fires sandbox code**: the formatter executes `lines[lines.length] = '    at ' + callSites[i]`. With no own slot at index 1, V8 walks the chain and invokes the attacker-installed setter, which observes every appended frame.
+4. **Read-side variant**: even with the indexed writes hardened, `lines.join('\n')` looks up `Array.prototype.join` via the prototype chain. A sandbox override receives the lines array and can rewrite the final stack string.
+
+### Canonical Examples
+
+**Variant A — RCE:**
 
 ```javascript
 const { VM } = require('vm2');
@@ -2082,33 +2098,62 @@ new VM().run(`
 `);
 ```
 
+**Variant B — observability:**
+
+```javascript
+const { VM } = require('vm2');
+const result = new VM().run(`
+    const observed = { setterFired: false, capturedValue: null, indexFired: null };
+    Object.defineProperty(Array.prototype, 1, {
+        configurable: true,
+        set(value) {
+            observed.setterFired = true;
+            observed.indexFired = 1;
+            observed.capturedValue =
+                typeof value === 'string' ? value.slice(0, 40) : typeof value;
+        },
+        get() { return undefined; }
+    });
+    const e = new Error('x');
+    e.stack;
+    observed;
+`);
+// Before fix: { setterFired: true, indexFired: 1, capturedValue: '    at CallSite {}' }
+```
+
 ### Why It Works
 
-`neutralizeArraySpeciesBatch` is defined inside the shared `createBridge` closure that is instantiated **twice** — once in the host realm, once in the sandbox realm. The proxy that wraps a host function for sandbox use installs sandbox-side handlers, so the `apply`/`construct` trap runs in the sandbox-realm closure and `[]` literals there allocate **sandbox-realm Arrays**. Their prototype chain is sandbox `Array.prototype`, which the attacker controls.
+Both `neutralizeArraySpeciesBatch` and `defaultSandboxPrepareStackTrace` execute inside sandbox-realm closures. The `apply`/`construct` trap that wraps a host function for sandbox use installs sandbox-side handlers, so the bridge code in `lib/bridge.js` runs in the sandbox-realm copy of the shared closure; the stack-trace formatter in `lib/setup-sandbox.js` runs on the sandbox global scope by construction. In both cases the `[]` array literal allocates a **sandbox-realm Array** whose prototype chain is sandbox `Array.prototype` — fully attacker-controllable.
 
-The bridge's existing pattern in `thisFromOtherArguments` already uses `thisReflectDefineProperty` to install argument indices precisely because index assignment via `[i] =` triggers prototype-chain setters. `neutralizeArraySpeciesBatch` did not follow that pattern; the regression was introduced when the species defense (GHSA-grj5-jjm8-h35p) replaced its earlier no-restore variant with a `saved`-list design.
+`obj[obj.length] = value` is an ordinary `[[Set]]` with receiver `obj`. Absent an own data slot at the target index, V8 walks `[[Prototype]]` and invokes any accessor it finds, passing `value` to the setter. The same applies to `.join`: the lookup walks `[[Prototype]]` to find `Array.prototype.join`, and an override there receives the lines array as `this`.
+
+The bridge's existing pattern in `thisFromOtherArguments` already uses `thisReflectDefineProperty` to install argument indices precisely because index assignment via `[i] =` triggers prototype-chain setters. The two sites covered here were outliers — Variant A introduced when the species defense (GHSA-grj5-jjm8-h35p) replaced its earlier no-restore variant with a `saved`-list design; Variant B introduced under the post-#563 hardening for [Category 19](#attack-category-19-host-preparestacktrace-fallback-via-arrayfromasync-promise-bypass) when `defaultSandboxPrepareStackTrace` was added to keep V8 off Node's host-side formatter.
 
 ### Mitigation
 
-`neutralizeArraySpeciesBatch` now installs every entry with `thisReflectDefineProperty(saved, savedLen, { value, writable: true, enumerable: true, configurable: true })` in `lib/bridge.js`. `Reflect.defineProperty` creates an own data property and bypasses the prototype-chain setter completely, so a sandbox-installed setter on `Array.prototype[N]` is never invoked while the bridge holds raw saved state.
+**Variant A**: `neutralizeArraySpeciesBatch` now installs every entry with `thisReflectDefineProperty(saved, savedLen, { value, writable: true, enumerable: true, configurable: true })` in `lib/bridge.js`. `Reflect.defineProperty` creates an own data property and bypasses the prototype-chain setter completely, so a sandbox-installed setter on `Array.prototype[N]` is never invoked while the bridge holds raw saved state. `restoreArraySpeciesBatch` is symmetric without code change: indexed reads on `savedList[i]` now land on own data slots installed by the neutralize pass, so a sandbox-installed **getter** on `Array.prototype[N]` cannot intercept, substitute, or mutate the saved-state record between neutralize and restore either. The defense is index-agnostic — it holds for index 0, any positive integer index, and any shape of argument list (context-only, args-only, or both).
 
-`restoreArraySpeciesBatch` is symmetric without code change: indexed reads on `savedList[i]` now land on own data slots installed by the neutralize pass, so a sandbox-installed **getter** on `Array.prototype[N]` cannot intercept, substitute, or mutate the saved-state record between neutralize and restore either. The defense is index-agnostic — it holds for index 0, any positive integer index, and any shape of argument list (context-only, args-only, or both).
+**Variant B**: `defaultSandboxPrepareStackTrace` no longer materialises an array. The formatter folds each frame directly into a string accumulator via primitive concatenation (`result += '\n' + frame`), removing every reachable `Array.prototype` slot at once — index setters, the final `.join`, and any hypothetical future enrichment of the bridge-internal container. String concatenation routes through primitive `[[Get]]` of `callSites[i]` (a sandbox-realm `CallSite` wrapper whose `toString` returns the safe `'CallSite {}'` literal) and primitive string-plus, neither of which dispatch through `Array.prototype` or `Object.prototype`. `makeCallSiteGetters` (same file) is converted for symmetry to install each entry via `localReflectDefineProperty(callSiteGetters, idx, { value, ... })`; this loop runs at sandbox init before user code can install setters, so it is safe today, but the consistent pattern prevents future regressions and keeps the indexed reads at `applyCallSiteGetters` immune to later sandbox-installed getters on `Array.prototype[N]`.
 
-This restores [Defense Invariant: Bridge-Internal Containers Must Not Invoke Sandbox Code](#defense-invariants): any list, set, or map allocated for the bridge's exclusive use must read and write through identity-stable, prototype-bypassing primitives — never operators that fall through to `Array.prototype` / `Object.prototype` / `Map.prototype.{get,set}`. The same invariant explains why the bridge already uses `thisReflectApply(thisWeakMapSet, mapping, [k, v])` rather than `mapping.set(k, v)` everywhere.
+Together these fixes restore [Defense Invariant #11: Bridge-Internal Containers Must Not Invoke Sandbox Code](#defense-invariants): any list, set, or map allocated for the bridge's exclusive use must read and write through identity-stable, prototype-bypassing primitives — never operators that fall through to `Array.prototype` / `Object.prototype` / `Map.prototype.{get,set}`. The same invariant explains why the bridge already uses `thisReflectApply(thisWeakMapSet, mapping, [k, v])` rather than `mapping.set(k, v)` everywhere. The chokepoint is now uniform across `lib/bridge.js` and `lib/setup-sandbox.js`.
 
-**Supersedes**: this fix retroactively hardens the [Category 18](#attack-category-18-array-species-self-return-via-constructor-manipulation) species defense by closing the saved-list write path the attacker would otherwise use to extract the very state the species fix produces.
+**Supersedes**: this category retroactively hardens the [Category 18](#attack-category-18-array-species-self-return-via-constructor-manipulation) species defense by closing the saved-list write path the attacker would otherwise use to extract the very state the species fix produces. Variant B closes the audit gap from Variant A's original mitigation, which was scoped to `lib/bridge.js`.
 
 ### Detection Rules
 
-- **`Object.defineProperty(Array.prototype, <int>, { set: ... })` immediately preceding a host-function call** — classic shape of this attack; near-zero legitimate use case.
-- **Setter or getter on `Array.prototype` numeric indices in untrusted code** — should be treated as suspicious in any sandboxed context, regardless of which advisory it targets.
+- **`Object.defineProperty(Array.prototype, <int>, { set: ... })` immediately preceding a host-function call or `error.stack` read** — classic shape of either variant; near-zero legitimate use case.
+- **`Array.prototype.join` override followed by Error access** — read-side variant of the stack-trace primitive.
+- **Setter or getter on `Array.prototype` numeric indices in untrusted code** — should be treated as suspicious in any sandboxed context, regardless of which bridge container is the target.
 - **Reads of `value.arr` / `value.constructor` / `value.<bridge-internal-key>` inside an `Array.prototype` setter** — capture-and-extract pattern aimed at bridge state.
 
 ### Considered Attack Surfaces
 
 - **`saved.length` write via sandbox `Array.prototype.length` getter**: writing to `saved[savedLen]` reads `saved.length` only via the local counter; even if reading were used, V8 services array `length` from the magic own slot and never consults `Array.prototype.length` for instances.
-- **`Object.prototype` setter on numeric keys**: `c` is a `{ __proto__: null, ... }` literal, so reads on `value.arr` inside the captured record do not walk `Object.prototype` either; even if they did, the leak channel is the `Array.prototype[N]` setter, not the record's own access path.
-- **Equivalent pattern elsewhere in the bridge**: audited; `thisFromOtherArguments`, `otherFromThisArguments`, and every other index-write site already use `thisReflectDefineProperty` or `otherReflectDefineProperty`. `neutralizeArraySpeciesBatch` was the lone outlier.
+- **`Object.prototype` setter on numeric keys**: in Variant A, `c` is a `{ __proto__: null, ... }` literal, so reads on `value.arr` inside the captured record do not walk `Object.prototype` either; even if they did, the leak channel is the `Array.prototype[N]` setter, not the record's own access path.
+- **`callSites[i]` invoking sandbox `toString`** (Variant B): `callSites[i]` is a sandbox-realm `CallSite` wrapper instance whose `toString` is defined as a fixed `'CallSite {}'` literal. The string concatenation invokes that wrapper, which is deliberate sandbox-facing API — Invariant #11 forbids the *bridge container* from invoking sandbox code, not the bridge from invoking documented sandbox-realm safe accessors on individual values.
+- **`'    at ' + callSites[i]` triggering `Symbol.toPrimitive`** (Variant B): the `CallSite` wrapper does not define `Symbol.toPrimitive`, so V8 invokes the standard `toString`/`valueOf` path. The wrapper's `toString` returns a string, so the conversion never reaches `Symbol.toPrimitive` even if it were defined on `Object.prototype` (which the existing symbol-filter defenses would catch separately).
+- **`result += '\n' + frame` and host-realm primitives** (Variant B): string `+` is a pure primitive operation on the V8 string type and does not dispatch through `Object.prototype` or `String.prototype` accessors.
+- **Equivalent pattern elsewhere in the bridge**: audited end-to-end. `thisFromOtherArguments`, `otherFromThisArguments`, and every other index-write site in `lib/bridge.js` use `thisReflectDefineProperty` or `otherReflectDefineProperty`. `neutralizeArraySpeciesBatch` (Variant A) and `defaultSandboxPrepareStackTrace` / `makeCallSiteGetters` (Variant B) were the remaining outliers; both are now fixed. The invariant is uniform across `lib/bridge.js` and `lib/setup-sandbox.js`.
 
 ---
 ## Attack Category 29: Async Generator yield*-Return Thenable Exception Capture
@@ -2493,7 +2538,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | NodeVM `nesting: true` + `require: false` config trap | Constructor throws `VMError` at the contradictory option pair, citing GHSA-8hg8-63c5-gwmx and the README escape-hatch section |
 | Sandbox-realm null-proto via bridge `from()` set-trap write-through (GHSA-9vg3-4rfj-wgcm) | `handleException` and sandbox-Promise.then onFulfilled use `ensureThis` (sandbox-realm passthrough); host-Promise rejection sanitiser composes `from()` outside `handleException` so the GHSA-mpf8 invariant still wraps host null-proto values |
 | Internal state probe via computed property access on `globalThis` (GHSA-2cm2-m3w5-gp2f) | Bootstrap script declares `let VM2_INTERNAL_STATE_…` at script-top so the binding lands in the context's `[[GlobalLexicalEnvironment]]`; transformer-emitted `${INTERNAL_STATE_NAME}.handleException(…)` resolves there as before, but `globalThis[k]`, `Reflect.get`, descriptor APIs, and own-property enumeration cannot reach it (the global object's own-key table no longer contains the entry). Supersedes the identifier-only mitigation of GHSA-wp5r-2gw5-m7q7 by closing the entire computed-key class structurally. |
-| Bridge saved-state leak via `Array.prototype[N]` setter (GHSA-9qj6-qjgg-37qq) | `neutralizeArraySpeciesBatch` writes saved entries via `thisReflectDefineProperty`; appended slot is an own data property and no sandbox-installed setter is invoked while the bridge holds raw saved state |
+| Bridge-internal container via `Array.prototype[N]` setter (Category 28: GHSA-9qj6-qjgg-37qq Variant A + GHSA-q3fm-4wcw-g57x Variant B) | Variant A — `neutralizeArraySpeciesBatch` in `lib/bridge.js` writes saved entries via `thisReflectDefineProperty`; appended slot is an own data property and no sandbox-installed setter is invoked while the bridge holds raw saved state. Variant B — `defaultSandboxPrepareStackTrace` in `lib/setup-sandbox.js` accumulates frames in a string via primitive concatenation rather than an array, removing every reachable `Array.prototype` slot (index setter, getter, and `.join`); `makeCallSiteGetters` installs entries via `localReflectDefineProperty` for symmetry |
 | Host prototype mutation via apply trap (GHSA-v6mx-mf47-r5wg) | Apply trap caches the host prototype-mutating intrinsics (`Object.prototype.__proto__` setter, `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.{defineProperty,defineProperties}`, `Reflect.defineProperty`, `__defineSetter__`, `__defineGetter__`) in `dangerousHostProtoMutators` and refuses any invocation reaching them — direct or via one-layer indirection through `Function.prototype.{call,apply,bind}` / `Reflect.{apply,construct}`. Read-side defense-in-depth in `thisEnsureThis` cache-checks `mappingOtherToThis` before the proto-walk so any previously-bridged host value returns the existing proxy even when its prototype chain has been tampered with by some other route. |
 
 ### Key Security Invariant: Promise Species Resolution Timing

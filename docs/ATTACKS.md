@@ -72,6 +72,8 @@ These are the cross-cutting properties the sandbox must preserve. A fix that clo
 
 12. **No sandbox-visible object has a host-realm prototype chain without bridge interposition.** Every Promise (and, by extension, every spec-defined async dispatch target) reachable from sandbox code is either (a) sandbox-realm with `globalPromise.prototype` in its `[[Prototype]]` chain — so the sandbox-side `.then`/`.catch` overrides apply — or (b) a bridge proxy of a host-realm Promise — so the bridge `apply`-trap interception applies. A third shape (sandbox-realm allocation with a host-realm prototype, with no proxy in between) bypasses both layers: `p.then`/`.catch`/`.finally` lookup walks across realms to host native methods directly, `Object.defineProperty(p, 'constructor', ...)` writes onto the raw object, and V8's host-realm `SpeciesConstructor` dispatches the rejection through attacker-controlled species without ever invoking a sandbox-visible chokepoint. Any V8/Node primitive that produces such an object — WebAssembly JSPI is the first known one — must be neutralized at sandbox bootstrap. See [Category 33](#attack-category-33-webassembly-jspi-cross-realm-promise-prototype).
 
+13. **The NodeVM builtin allowlist is a closed system.** No Node builtin whose own API can reload, evaluate, debug, spawn, or otherwise re-enter host code (`module`, `worker_threads`, `cluster`, `vm`, `repl`, `inspector`, `process`, `trace_events`, `wasi`) is reachable from the sandbox, regardless of how the embedder writes `builtin` — wildcard, explicit name, object syntax, low-level `makeBuiltins`. The check is family-prefix and `node:`-normalised, so subpath builtins (`inspector/promises`) and URL-style spellings (`node:process`) share fate with their canonical name. The only way to re-expose any of these names is to register a sandbox-safe wrapper through `SPECIAL_MODULES`, `mocks`, or `overrides` — i.e. the embedder must consciously opt into a stub that is not the raw host module.
+
 The [Security Checklist for Bridge Changes](#security-checklist-for-bridge-changes) at the end of this document gives the verification questions for each invariant.
 
 ---
@@ -1549,7 +1551,8 @@ NodeVM's `require.builtin` allowlist defends sandbox code from reaching dangerou
 - `cluster` exposes `cluster.fork()` — spawns a host child process running attacker-controlled code.
 - `vm` exposes `vm.runInThisContext` — evaluates code directly in the host realm, bypassing every bridge proxy.
 - `repl` exposes `repl.start({eval, input, output})` — constructs an interactive evaluator attached to host streams.
-- `inspector` exposes the inspector protocol — attaches a debugger to the host process.
+- `inspector` (and `inspector/promises`, subpath family) exposes the inspector protocol — attaches a debugger to the host process and runs `Session().post('Runtime.evaluate', { expression })` against host JS.
+- `process` exposes `process.getBuiltinModule(name)` (Node 22+) — reloads ANY core module regardless of the embedder's allow/deny list — plus `process.binding(...)`, `process.dlopen(...)`, `process._linkedBinding(...)`, and the raw host `process.env`. The sandbox global `process` is a sanitized shim defined in `setup-node-sandbox.js`; the raw host module is never safe to expose.
 
 ### Attack Flow
 
@@ -1558,10 +1561,10 @@ NodeVM's `require.builtin` allowlist defends sandbox code from reaching dangerou
 3. **Sandbox calls `Module._load('child_process')`**. The bridge `apply` trap forwards to host `Module._load`, which loads `child_process` natively in the host with no vm2 check.
 4. **`child_process.execSync(...)`** → host RCE.
 
-### Canonical Example
+### Canonical Examples
 
 ```javascript
-// (advisory GHSA-947f-4v7f-x2v8)
+// (advisory GHSA-947f-4v7f-x2v8) — `module` bypass
 const vm = new NodeVM({
   require: { builtin: ['*', '-child_process'], external: false }
 });
@@ -1572,17 +1575,42 @@ vm.run(`
 `, 'poc.js');
 ```
 
+```javascript
+// (advisory GHSA-rp36-8xq3-r6c4) — `process.getBuiltinModule` bypass
+const vm = new NodeVM({
+  require: { builtin: ['*', '-child_process', '-inspector'], external: false }
+});
+vm.run(`
+  const cp = require('process').getBuiltinModule('child_process');
+  module.exports = cp.execFileSync('/bin/sh', ['-c', 'id']).toString();
+`, 'poc.js');
+```
+
+```javascript
+// (advisory GHSA-rp36-8xq3-r6c4) — `inspector/promises` subpath bypass
+const vm = new NodeVM({
+  require: { builtin: ['*', '-child_process', '-inspector'], external: false }
+});
+vm.run(`
+  const { Session } = require('inspector/promises');
+  const s = new Session();
+  s.connect();
+  s.post('Runtime.evaluate', { expression: '/* runs in host realm */' });
+`, 'poc.js');
+```
+
 ### Why It Works
 
 The user's mental model of `['*', '-child_process']` is "every builtin except `child_process`". That model assumes every builtin is either fully sandboxed or fully blocked — but `module` (and its peers above) are neither. They're *meta-builtins* that load other builtins by name. The generic `vm.readonly()` wrapper cannot make them safe because the sandbox-bypass primitive is the very thing the user is calling.
 
 ### Mitigation
 
-Two-layer denylist enforcement in `lib/builtin.js`:
+Three-layer denylist enforcement in `lib/builtin.js` (restores **[Invariant 13 — The NodeVM builtin allowlist is a closed system](#defense-invariants)**):
 
-1. **`DANGEROUS_BUILTINS` Set** at module load — `['module', 'worker_threads', 'cluster', 'vm', 'repl', 'inspector', 'trace_events', 'wasi']`.
-2. **Filter from `BUILTIN_MODULES`** — closes the `'*'` wildcard expansion path. `'*'` will never auto-allow these names regardless of the user's exclusion list.
-3. **Reject in `addDefaultBuiltin`** — closes the explicit-allowlist path (`builtin: ['module']`) and the lower-level `makeBuiltins(['module'])` API used by custom resolvers. The `SPECIAL_MODULES` escape hatch is preserved: a future safe wrapper (e.g., a `module` shim that exposes only `builtinModules` metadata) can be registered there if a real consumer needs it.
+1. **`DANGEROUS_BUILTINS` Set** at module load — `['module', 'worker_threads', 'cluster', 'vm', 'repl', 'inspector', 'process', 'trace_events', 'wasi']`.
+2. **Family-prefix check** via `isDangerousBuiltin(key)` — any `<family>/...` whose family is in the denylist is also blocked (e.g. `inspector/promises`, future `inspector/foo`, hypothetical `process/foo`, `module/foo`). The check also strips the optional `node:` URL-style prefix so `node:process` and `node:inspector/promises` are caught.
+3. **Filter from `BUILTIN_MODULES`** — closes the `'*'` wildcard expansion path. `'*'` will never auto-allow these names regardless of the user's exclusion list.
+4. **Reject in `addDefaultBuiltin`** — closes the explicit-allowlist path (`builtin: ['module']`, `builtin: ['process']`, `builtin: ['inspector/promises']`) and the lower-level `makeBuiltins([...])` API used by custom resolvers. The `SPECIAL_MODULES` escape hatch is preserved: a future safe wrapper (e.g. a `module` shim that exposes only `builtinModules` metadata) can be registered there if a real consumer needs it.
 
 The fix does not affect the `mocks` / `overrides` escape hatches — users who genuinely need a stub for one of these names can register a sandbox-safe replacement.
 
@@ -1590,6 +1618,8 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 
 - **`trace_events.createTracing({categories: [...]})`** asserts `args[0]->IsArray()` in V8 C++. The array crosses the bridge as a Proxy, the `IsArray()` check fails, and the entire host process aborts. Reachable as ~150 bytes from sandbox under `builtin: ['*']` — not RCE, but a host-process-DoS primitive of the same severity class as Category 22.
 - **`wasi`** exposes the WebAssembly System Interface preview1 syscall surface (filesystem `preopens`, host clock/random, network if preopened). The API is experimental and broad; even a misconfigured `preopens: {}` exposes the host CWD when sandbox code constructs a WASI module.
+
+**Supersedes**: the previous GHSA-947f-4v7f-x2v8 mitigation, which used an exact-match denylist and missed `process` and subpath builtins such as `inspector/promises`. The family-prefix check subsumes the prior fix and forecloses every same-shape variant.
 
 ### Detection Rules
 
@@ -1599,7 +1629,9 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 - **`cluster.fork()`** — host process spawn.
 - **`vm.runInThisContext(...)`** — host-realm `eval`.
 - **`repl.start({eval, ...})`** — host-realm REPL evaluator.
-- **`inspector.open()`** — debugger attachment to host process.
+- **`inspector.open()`** or **`new (require('inspector/promises').Session)()`** — debugger attachment / `Runtime.evaluate` host-realm code execution.
+- **`require('process').getBuiltinModule(name)`** — reloads any core module bypassing the allow/deny list.
+- **`require('process').binding('spawn_sync')` / `.dlopen(module, path)`** — raw C++ binding surface and native add-on loader.
 - **`trace_events.createTracing({categories: [...]})`** — host process abort via C++ assertion failure.
 - **`new (require('wasi').WASI)({...})`** — preview1 syscall surface.
 
@@ -2889,6 +2921,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Bridge-internal container via `Array.prototype[N]` setter (Category 28: GHSA-9qj6-qjgg-37qq Variant A + GHSA-q3fm-4wcw-g57x Variant B) | Variant A — `neutralizeArraySpeciesBatch` in `lib/bridge.js` writes saved entries via `thisReflectDefineProperty`; appended slot is an own data property and no sandbox-installed setter is invoked while the bridge holds raw saved state. Variant B — `defaultSandboxPrepareStackTrace` in `lib/setup-sandbox.js` accumulates frames in a string via primitive concatenation rather than an array, removing every reachable `Array.prototype` slot (index setter, getter, and `.join`); `makeCallSiteGetters` installs entries via `localReflectDefineProperty` for symmetry |
 | Host prototype mutation via apply trap (GHSA-v6mx-mf47-r5wg) | Apply trap caches the host prototype-mutating intrinsics (`Object.prototype.__proto__` setter, `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.{defineProperty,defineProperties}`, `Reflect.defineProperty`, `__defineSetter__`, `__defineGetter__`) in `dangerousHostProtoMutators` and refuses any invocation reaching them — direct or via one-layer indirection through `Function.prototype.{call,apply,bind}` / `Reflect.{apply,construct}`. Read-side defense-in-depth in `thisEnsureThis` cache-checks `mappingOtherToThis` before the proto-walk so any previously-bridged host value returns the existing proxy even when its prototype chain has been tampered with by some other route. |
 | Bridge `set` trap ignores spec `Receiver` (GHSA-c4cf-2hgv-2qv6) | `BaseHandler.set` gates host-write forwarding on `receiver === mappingOtherToThis.get(object)`; non-canonical receivers (inherited-receiver writes via `Object.create(proxy)`, forged-receiver `Reflect.set` calls, `Object.assign(child, src)` loops) install on `receiver` via `Reflect.defineProperty`, mirroring `ReadOnlyHandler.set` |
+| NodeVM builtin denylist bypass via `process` / `inspector/promises` (GHSA-rp36-8xq3-r6c4) | `DANGEROUS_BUILTINS` extended to include `process`; matching promoted to family-prefix via `isDangerousBuiltin(key)` so subpath builtins (`inspector/promises`, future `inspector/*`, `process/*`, `module/*`) share fate with their canonical name. `node:` URL prefix stripped before lookup. Enforced at both `BUILTIN_MODULES` source and `addDefaultBuiltin`. Supersedes the GHSA-947f-4v7f-x2v8 exact-match mitigation. |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

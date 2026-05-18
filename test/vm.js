@@ -112,11 +112,16 @@ describe('node', () => {
 		assert.strictEqual(inspect(vm.run("({ a: 1, b: 'a' })")), inspect({a: 1, b: 'a'}));
 	});
 
-	it('inspect array (issue #566)', () => {
+	// Node <18 inspects Array proxies with duplicated keys
+	// (`[ 1, 2, 3, '0': 1, '1': 2, '2': 3 ]`); this is a Node display behavior
+	// for proxies of arrays, not something the bridge controls. Gate the
+	// strict-equality assertion to Node versions where util.inspect renders
+	// Array proxies cleanly.
+	it.cond('inspect array (issue #566)', NODE_VERSION >= 18, () => {
 		assert.strictEqual(inspect(vm.run('[ 1, 2, 3 ]')), inspect([1, 2, 3]));
 	});
 
-	it('inspect nested object and array (issue #566)', () => {
+	it.cond('inspect nested object and array (issue #566)', NODE_VERSION >= 18, () => {
 		assert.strictEqual(
 			inspect(vm.run('({outer: { inner: 42 }, arr: [1,2,[3,4]]})')),
 			inspect({outer: {inner: 42}, arr: [1, 2, [3, 4]]})
@@ -141,7 +146,11 @@ describe('node', () => {
 		assert.ok(str.length < 500, `circular inspect grew unbounded: length=${str.length}`);
 	});
 
-	it('inspect with showProxy:true still reveals proxy structure (issue #566)', () => {
+	// Node 10's util.inspect with showProxy:true performs a legacy 'inspect'
+	// string-keyed lookup on the proxy that the bridge intentionally denies
+	// (see thisThrowOnKeyAccessHandler). The deny is the same defense that
+	// blocks the showProxy handler-leak attack, so we just gate the test.
+	it.cond('inspect with showProxy:true still reveals proxy structure (issue #566)', NODE_VERSION >= 11, () => {
 		// When the user opts in to showProxy, the underlying proxy chain
 		// must still be visible — our default-mode custom inspect must not
 		// override the explicit showProxy:true path.
@@ -3079,7 +3088,8 @@ describe('freeze, protect', () => {
 	// neutralization in the host->sandbox direction (apply/construct on a
 	// sandbox-realm function), where V8 already mediates `constructor` via the
 	// bridge's get trap.
-	it('frozen host arrays support array iteration methods (#567)', () => {
+	// flatMap requires Node 11+.
+	it.cond('frozen host arrays support array iteration methods (#567)', NODE_VERSION >= 11, () => {
 		const vm = new VM();
 		const items = [{type: 'a'}, {type: 'b'}, {type: 'c'}];
 		const storage = {items};

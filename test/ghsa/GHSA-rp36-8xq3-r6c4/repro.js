@@ -154,7 +154,17 @@ describe('GHSA-rp36-8xq3-r6c4 — NodeVM builtin denylist bypass', () => {
 		expectBlocked(vm, "require('inspector/promises')", "explicit inspector/promises allowlist");
 	});
 
-	it('safe builtins still load under "*"', () => {
+	// `fs/promises` requires Node 14+, `dns/promises` / `stream/promises` are
+	// Node 15+. The regression we're guarding against (family-prefix check
+	// shadowing sibling subpath builtins) can only manifest on Node versions
+	// that actually expose those subpaths, so this test is gated accordingly.
+	const NODE_MAJOR = parseInt(process.versions.node.split('.')[0], 10);
+	if (typeof it.cond !== 'function') {
+		it.cond = function (name, cond, fn) {
+			return cond ? it(name, fn) : it.skip(name, fn);
+		};
+	}
+	it.cond('safe builtins still load under "*"', NODE_MAJOR >= 15, () => {
 		// Regression guard: the family-prefix check must not break sibling
 		// builtins like fs/promises, dns/promises, stream/promises, etc.
 		const vm = makeVm();

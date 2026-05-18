@@ -1,5 +1,13 @@
 # Changelog
 
+## [3.11.5]
+
+Patch release — no API changes.
+
+### Fix
+
+- **#566** — `util.inspect` of `vm.run(...)` results rendered as `Proxy(Proxy({}))` on Node 26+. Install `nodejs.util.inspect.custom` on host-side proxy targets so the inspect output reflects the underlying shape.
+
 ## [3.11.4]
 
 Ten advisories closed. Patch release — no API changes for valid configurations.

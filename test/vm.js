@@ -101,17 +101,105 @@ describe('node', () => {
 	it.cond('inspect', NODE_VERSION >= 11, () => {
 		if (NODE_VERSION < 26) assert.throws(() => inspect(doubleProxy), /Expected/);
 		assert.doesNotThrow(() => inspect(vm.run('({})'), {showProxy: true, customInspect: true}));
-		if (false) {
-			// This failes on node 10 since they do not unwrap proxys.
-			// And the hack to fix this is only in the inner proxy.
-			// We could add another hack, but that one would require
-			// to look if the caller is from a special node function and
-			// then remove all the integer keys. To get the caller we
-			// would need to get the stack trace which is slow and
-			// the probability of this call is so low that I don't do
-			// this right now.
-			assert.strictEqual(inspect(vm.run('[1, 2, 3]')), inspect([1, 2, 3]), true);
-		}
+	});
+
+	// Issue #566: Node 26 changed util.inspect to surface proxies as
+	// `Proxy(target)` and to read `nodejs.util.inspect.custom` directly off
+	// the raw proxy target, bypassing trap dispatch. vm2's bridge installs
+	// the symbol on every host-side proxy target so console.log / util.inspect
+	// render the underlying shape instead of `Proxy(Proxy({}))`.
+	it('inspect object (issue #566)', () => {
+		assert.strictEqual(inspect(vm.run("({ a: 1, b: 'a' })")), inspect({a: 1, b: 'a'}));
+	});
+
+	it('inspect array (issue #566)', () => {
+		assert.strictEqual(inspect(vm.run('[ 1, 2, 3 ]')), inspect([1, 2, 3]));
+	});
+
+	it('inspect nested object and array (issue #566)', () => {
+		assert.strictEqual(
+			inspect(vm.run('({outer: { inner: 42 }, arr: [1,2,[3,4]]})')),
+			inspect({outer: {inner: 42}, arr: [1, 2, [3, 4]]})
+		);
+	});
+
+	it('inspect class instance (issue #566)', () => {
+		const v = vm.run('class C { constructor() { this.x = 1; this.y = 2; } }; new C()');
+		// Properties must be visible regardless of Node version.
+		const str = inspect(v);
+		assert.ok(str.includes('x: 1'), `expected x:1 in ${str}`);
+		assert.ok(str.includes('y: 2'), `expected y:2 in ${str}`);
+		assert.ok(!str.includes('Proxy'), `inspect output must not surface Proxy wrapper: ${str}`);
+	});
+
+	it('inspect circular reference (issue #566)', () => {
+		const v = vm.run('const o = { x: 1 }; o.self = o; o');
+		const str = inspect(v);
+		assert.ok(str.includes('x: 1'), `expected x:1 in ${str}`);
+		assert.ok(/Circular/i.test(str), `expected Circular marker in ${str}`);
+		// Defense against unbounded recursion: output stays bounded.
+		assert.ok(str.length < 500, `circular inspect grew unbounded: length=${str.length}`);
+	});
+
+	it('inspect with showProxy:true still reveals proxy structure (issue #566)', () => {
+		// When the user opts in to showProxy, the underlying proxy chain
+		// must still be visible — our default-mode custom inspect must not
+		// override the explicit showProxy:true path.
+		const str = inspect(vm.run("({ a: 1 })"), {showProxy: true});
+		assert.ok(str.includes('Proxy'), `expected Proxy marker with showProxy:true, got ${str}`);
+	});
+
+	it('inspect custom symbol is not extractable from sandbox (issue #566)', () => {
+		// SECURITY: the inspect.custom function we install on the host-side
+		// target must remain unreachable to sandbox code. The bridge already
+		// filters nodejs.util.inspect.custom in `get`, `ownKeys`, and
+		// `getOwnPropertyDescriptor` traps via isDangerousCrossRealmSymbol.
+		// Verify those defenses still hold after our install.
+		const out = vm.run(`
+			(() => {
+				const sym = Symbol.for('nodejs.util.inspect.custom');
+				const obj = { a: 1 };
+				// Direct property access via the proxy must not surface the host function.
+				const direct = obj[sym];
+				// ownKeys / getOwnPropertyDescriptor must not list the symbol either.
+				const ownSymbolListed = Object.getOwnPropertySymbols(obj).indexOf(sym) >= 0;
+				const descPresent = Object.getOwnPropertyDescriptor(obj, sym) !== undefined;
+				// Walk the prototype chain — even if the symbol is on a parent, it
+				// must not yield a host function reference.
+				let walked = undefined;
+				let cur = obj;
+				while (cur) {
+					const d = Object.getOwnPropertyDescriptor(cur, sym);
+					if (d && d.value) { walked = d.value; break; }
+					cur = Object.getPrototypeOf(cur);
+				}
+				return JSON.stringify({
+					direct: typeof direct,
+					ownSymbolListed,
+					descPresent,
+					walked: typeof walked,
+				});
+			})();
+		`);
+		const parsed = JSON.parse(out);
+		assert.strictEqual(parsed.direct, 'undefined', 'direct lookup leaked inspect.custom');
+		assert.strictEqual(parsed.ownSymbolListed, false, 'ownKeys leaked inspect.custom symbol');
+		assert.strictEqual(parsed.descPresent, false, 'getOwnPropertyDescriptor leaked inspect.custom');
+		assert.strictEqual(parsed.walked, 'undefined', 'prototype walk leaked inspect.custom');
+	});
+
+	it('inspect mass-produced objects do not retain references (issue #566)', () => {
+		// The circular-reference guard uses a WeakMap. Verify it is cleared
+		// after each top-level inspect call so independent inspects do not
+		// leak [Circular] markers across calls.
+		const a = vm.run('({ x: 1 })');
+		const b = vm.run('({ y: 2 })');
+		// First inspect — establishes the in-flight set
+		inspect(a);
+		inspect(b);
+		// Re-inspecting must produce the same output (no stale [Circular]).
+		assert.strictEqual(inspect(a), inspect({x: 1}));
+		assert.strictEqual(inspect(b), inspect({y: 2}));
 	});
 
 	after(() => {

@@ -3068,4 +3068,107 @@ describe('freeze, protect', () => {
 		assert.strictEqual(vm.run('(i) => i.array.map(item => 1).join(",")')(obj), '1,1');
 		assert.strictEqual(vm.run('(i) => /x/.test(i.date)')(obj), false);
 	});
+
+	// Regression: issue #567 -- 3.11.0's species-attack defense (GHSA-grj5-jjm8-h35p)
+	// caused `'isExtensible' on proxy: trap result does not reflect extensibility
+	// of proxy target` whenever sandbox code ran an array method on a frozen host
+	// array. The defense neutralized array species on the host->sandbox callback
+	// argument path too, where the third callback arg is a ReadOnly proxy that
+	// refuses defineProperty. Two-part fix: align ReadOnly proxy target's
+	// extensibility with its `isExtensible` trap result, and skip species
+	// neutralization in the host->sandbox direction (apply/construct on a
+	// sandbox-realm function), where V8 already mediates `constructor` via the
+	// bridge's get trap.
+	it('frozen host arrays support array iteration methods (#567)', () => {
+		const vm = new VM();
+		const items = [{type: 'a'}, {type: 'b'}, {type: 'c'}];
+		const storage = {items};
+		vm.freeze(storage, 'storage');
+
+		assert.deepStrictEqual(
+			vm.run('storage.items.map(i => i.type)'),
+			['a', 'b', 'c']
+		);
+		assert.deepStrictEqual(
+			vm.run('storage.items.filter(i => i.type !== "b").map(i => i.type)'),
+			['a', 'c']
+		);
+		assert.strictEqual(
+			vm.run('storage.items.reduce((s, i) => s + i.type, "")'),
+			'abc'
+		);
+		assert.strictEqual(
+			vm.run('storage.items.find(i => i.type === "c").type'),
+			'c'
+		);
+		assert.strictEqual(
+			vm.run('storage.items.some(i => i.type === "b")'),
+			true
+		);
+		assert.strictEqual(
+			vm.run('storage.items.every(i => typeof i.type === "string")'),
+			true
+		);
+		// forEach previously crashed on the third callback argument.
+		assert.strictEqual(
+			vm.run('let n = 0; storage.items.forEach(() => n++); n'),
+			3
+		);
+		// flatMap / concat exercise more ArraySpeciesCreate paths.
+		assert.deepStrictEqual(
+			vm.run('storage.items.flatMap(i => [i.type, i.type.toUpperCase()])'),
+			['a', 'A', 'b', 'B', 'c', 'C']
+		);
+		assert.deepStrictEqual(
+			vm.run('storage.items.concat([{type: "d"}]).map(i => i.type)'),
+			['a', 'b', 'c', 'd']
+		);
+	});
+
+	it('ReadOnly proxy reports non-extensible without throwing (#567)', () => {
+		const vm = new VM();
+		const arr = [1, 2, 3];
+		vm.freeze(arr, 'arr');
+
+		// Both must answer without throwing the proxy invariant TypeError.
+		assert.strictEqual(vm.run('Reflect.isExtensible(arr)'), false);
+		assert.strictEqual(vm.run('Object.isExtensible(arr)'), false);
+		// Object.preventExtensions on a ReadOnly proxy should succeed (it is
+		// already conceptually non-extensible) rather than throwing.
+		assert.doesNotThrow(() => vm.run('Object.preventExtensions(arr)'));
+		assert.strictEqual(vm.run('Reflect.preventExtensions(arr)'), true);
+	});
+
+	it('species defense still blocks attacks via frozen host arrays (#567 follow-up)', () => {
+		const vm = new VM();
+		const arr = [1, 2, 3];
+		vm.sandbox.arr = arr;
+
+		// Even with species-defense gated to !isHost, a sandbox cannot install
+		// a malicious `constructor` on the host array via any write path —
+		// the bridge's set/defineProperty traps intercept `constructor` writes
+		// on host arrays and the get trap returns the cached sandbox Array
+		// constructor regardless of what attacker installs.
+		const target = vm.run(`
+			const target = [];
+			Object.defineProperty(target, Symbol.species, {
+				value: function() { return target; }
+			});
+
+			arr.constructor = function() { return target; };
+			arr.map(x => globalThis.LEAK || 'safe');
+			arr.filter(x => true);
+			arr.slice();
+
+			Object.defineProperty(Array.prototype, 'constructor', {
+				value: function() { return target; },
+				configurable: true,
+				writable: true,
+			});
+			arr.map(x => 'still-safe');
+
+			target.length;
+		`);
+		assert.strictEqual(target, 0, 'attacker target must remain empty');
+	});
 });

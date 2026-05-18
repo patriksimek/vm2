@@ -7,6 +7,7 @@ Patch release — no API changes.
 ### Fix
 
 - **#566** — `util.inspect` of `vm.run(...)` results rendered as `Proxy(Proxy({}))` on Node 26+. Install `nodejs.util.inspect.custom` on host-side proxy targets so the inspect output reflects the underlying shape.
+- **#567** — Array iteration methods on a `vm.freeze()`-d host array threw an `'isExtensible' on proxy` invariant error (regression from the GHSA-grj5-jjm8-h35p species defense). Align the ReadOnly proxy target's extensibility with its trap result and skip species neutralization on the host→sandbox apply path.
 
 ## [3.11.4]
 

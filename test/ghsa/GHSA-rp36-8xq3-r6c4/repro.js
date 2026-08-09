@@ -154,10 +154,13 @@ describe('GHSA-rp36-8xq3-r6c4 — NodeVM builtin denylist bypass', () => {
 		expectBlocked(vm, "require('inspector/promises')", "explicit inspector/promises allowlist");
 	});
 
-	// `fs/promises` requires Node 14+, `dns/promises` / `stream/promises` are
-	// Node 15+. The regression we're guarding against (family-prefix check
-	// shadowing sibling subpath builtins) can only manifest on Node versions
-	// that actually expose those subpaths, so this test is gated accordingly.
+	// `fs/promises` requires Node 14+, `stream/promises` is Node 15+. The
+	// regression we're guarding against (family-prefix check shadowing sibling
+	// subpath builtins) can only manifest on Node versions that actually expose
+	// those subpaths, so this test is gated accordingly. NOTE: `dns/promises`
+	// was a sibling example here originally, but it is now intentionally denied
+	// as a host-process builtin (GHSA-m5w8-4gq2-6f8x), so the safe-sibling check
+	// uses `fs/promises` and `stream/promises`.
 	const NODE_MAJOR = parseInt(process.versions.node.split('.')[0], 10);
 	if (typeof it.cond !== 'function') {
 		it.cond = function (name, cond, fn) {
@@ -166,20 +169,17 @@ describe('GHSA-rp36-8xq3-r6c4 — NodeVM builtin denylist bypass', () => {
 	}
 	it.cond('safe builtins still load under "*"', NODE_MAJOR >= 15, () => {
 		// Regression guard: the family-prefix check must not break sibling
-		// builtins like fs/promises, dns/promises, stream/promises, etc.
+		// builtins like fs/promises, stream/promises, etc.
 		const vm = makeVm();
 		const result = vm.run(`
 			const fsp = require('fs/promises');
-			const dnsp = require('dns/promises');
 			const sp = require('stream/promises');
 			module.exports = {
 				fsp: typeof fsp.readFile,
-				dnsp: typeof dnsp.lookup,
 				sp: typeof sp.pipeline
 			};
 		`);
 		assert.strictEqual(result.fsp, 'function');
-		assert.strictEqual(result.dnsp, 'function');
 		assert.strictEqual(result.sp, 'function');
 	});
 });

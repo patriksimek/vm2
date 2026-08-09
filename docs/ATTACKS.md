@@ -1607,7 +1607,7 @@ The user's mental model of `['*', '-child_process']` is "every builtin except `c
 
 Three-layer denylist enforcement in `lib/builtin.js` (restores **[Invariant 13 — The NodeVM builtin allowlist is a closed system](#defense-invariants)**):
 
-1. **`DANGEROUS_BUILTINS` Set** at module load — `['module', 'worker_threads', 'cluster', 'vm', 'repl', 'inspector', 'process', 'trace_events', 'wasi', 'diagnostics_channel', 'async_hooks', 'perf_hooks', 'v8']`. The last four were added by [Category 35](#attack-category-35-nodevm-process-wide-observability-builtins-host-data-info-leak) for the process-wide observability info-leak class; they share the deny-by-default enforcement but a different threat model (data exposure, not code execution).
+1. **`DANGEROUS_BUILTINS` Set** at module load — `['module', 'worker_threads', 'cluster', 'vm', 'repl', 'inspector', 'process', 'trace_events', 'wasi', 'diagnostics_channel', 'async_hooks', 'perf_hooks', 'v8', 'os', 'dns']`. The last six were added by [Category 35](#attack-category-35-nodevm-process-wide-observability-builtins-host-data-info-leak) for the process-wide observability info-leak class (`os` and `dns` via GHSA-m5w8-4gq2-6f8x, which additionally close the host-process *write* APIs `os.setPriority` / `dns.setServers` / `dns.setDefaultResultOrder`); they share the deny-by-default enforcement but a different threat model (data exposure / host-state mutation, not code execution).
 2. **Family-prefix check** via `isDangerousBuiltin(key)` — any `<family>/...` whose family is in the denylist is also blocked (e.g. `inspector/promises`, future `inspector/foo`, hypothetical `process/foo`, `module/foo`). The check also strips the optional `node:` URL-style prefix so `node:process` and `node:inspector/promises` are caught.
 3. **Filter from `BUILTIN_MODULES`** — closes the `'*'` wildcard expansion path. `'*'` will never auto-allow these names regardless of the user's exclusion list.
 4. **Reject in `addDefaultBuiltin`** — closes the explicit-allowlist path (`builtin: ['module']`, `builtin: ['process']`, `builtin: ['inspector/promises']`) and the lower-level `makeBuiltins([...])` API used by custom resolvers. The `SPECIAL_MODULES` escape hatch is preserved: a future safe wrapper (e.g. a `module` shim that exposes only `builtinModules` metadata) can be registered there if a real consumer needs it.
@@ -2908,6 +2908,8 @@ When such a builtin is reachable from the sandbox (via the `'*'` wildcard or an 
 
 CWE-668 (Exposure of Resource to Wrong Sphere). Info-leak class, not RCE class.
 
+**Extended by GHSA-m5w8-4gq2-6f8x (`os`, `dns`)** — the same class contains two more builtins whose state belongs to the host process and which additionally expose *process-wide write* APIs. These are strictly worse than the read-only four above: `os.setPriority()` renices the host process, and `dns.setServers()` / `dns.setDefaultResultOrder()` mutate the host's process-wide DNS resolution from one synchronous line of sandbox code. CWE-200 + CWE-732 + CWE-285.
+
 ### Attack Flow
 
 Each builtin gives a one-liner exfiltration primitive. Once the sandbox holds a readonly proxy over the host module, the proxy's `apply` trap forwards every method call back to the host realm:
@@ -2916,6 +2918,8 @@ Each builtin gives a one-liner exfiltration primitive. Once the sandbox holds a 
 - **`async_hooks`** — `async_hooks.executionAsyncResource()` returns the current host `AsyncResource`. Embedders that use `AsyncLocalStorage` for per-request user/auth context (extremely common pattern: `express`, `fastify`, `next.js`) pin that state on the resource, and the sandbox reads it directly.
 - **`perf_hooks`** — `perf_hooks.performance.getEntriesByType('mark')` reads every host-side `performance.mark(name)`. Production code routinely embeds request IDs, user IDs, route paths, or partial query strings into mark names for observability dashboards.
 - **`v8`** — `v8.getHeapSnapshot()` returns a Readable stream of the entire host V8 heap (every string, every Buffer, every closure capture). `v8.writeHeapSnapshot(path)` writes the same to an arbitrary host filesystem path. `v8.queryObjects(Ctor)` (Node 20+) returns every host-realm instance of a constructor.
+- **`os`** (GHSA-m5w8-4gq2-6f8x) — reads: `os.userInfo()` returns the host process owner (uid/gid/username/homedir/shell); `os.networkInterfaces()` returns the host's full network topology (container/VM veth pairs, IPs, MACs); `os.hostname()` / `os.loadavg()` / `os.uptime()` / `os.freemem()` are host-wide telemetry. Write: `os.setPriority([pid,] prio)` invokes `setpriority(2)` on the host process (pid 0 = host), persisting after the sandbox call returns.
+- **`dns`** (GHSA-m5w8-4gq2-6f8x) — the strongest primitive in the class: `dns.setServers(['attacker:53'])` replaces the host's process-wide DNS resolver list, so every subsequent lookup the host makes (its own outbound HTTP, telemetry, npm registry, `fetch`, URL-based fs paths) flows through the attacker's resolver — a one-line DNS hijack with no rate limit, audit trail, or embedder notification. `dns.setDefaultResultOrder()` is a second process-wide write knob; `dns.getServers()` / `dns.lookup()` / `dns.resolve()` read and act from the host network identity. The `dns/promises` subpath shares the surface and is covered by the same denial via the family-prefix matcher.
 
 ### Canonical Example
 
@@ -2944,17 +2948,34 @@ require('perf_hooks').performance.getEntriesByType('mark'); // -> host marks
 require('v8').writeHeapSnapshot('/tmp/host-heap.json'); // -> entire host heap on disk
 ```
 
+The `os` / `dns` extension (GHSA-m5w8-4gq2-6f8x) — note the two host-process *writes*:
+
+```javascript
+// (advisory GHSA-m5w8-4gq2-6f8x)
+const vm = new NodeVM({ require: { builtin: ['*'], external: false } });
+vm.run(`
+  const os = require('os');
+  os.userInfo();              // -> host uid/gid/username/homedir/shell
+  os.networkInterfaces();     // -> host network topology (IPs, MACs)
+  os.setPriority(10);         // WRITE: renices the host process
+
+  require('dns').setServers(['127.0.0.1:5353']); // WRITE: hijacks every
+  // subsequent host DNS lookup -- outbound HTTP, telemetry, registry fetch.
+`, 'poc.js');
+// Both writes are observed from the host realm after vm.run() returns.
+```
+
 ### Why It Works
 
 The vm2 boundary is built around the assumption that "the sandbox observes its own realm, not the host's". Most Node builtins satisfy this implicitly: `path.join(...)`, `crypto.randomBytes(...)`, `url.parse(...)` all operate on inputs the sandbox passes in and return values the sandbox owns. The bridge's `ReadOnlyHandler` makes those builtins safe via uniform proxy semantics.
 
 Process-wide observability builtins break the assumption because the data they surface *is* host data by spec — `executionAsyncResource()` returns "the resource currently executing" measured against the host's call stack, not the sandbox's. Wrapping the module in a proxy does not localize the data source. The bridge cannot usefully sanitize the values because they're real host objects (IncomingMessage, AsyncResource), and stripping them to primitives would defeat the embedder's reason for ever exposing the module in the first place.
 
-The four builtins in scope all share this property: they observe a process resource (HTTP request hook, async context, perf timeline, V8 heap). Mitigation must therefore be "deny by default", not "proxy more carefully".
+The builtins in scope all share this property: they observe a process resource (HTTP request hook, async context, perf timeline, V8 heap) or — for `os` / `dns` — read host-kernel/host-process state and, worse, *write* it. `os.setPriority()` and `dns.setServers()` are not observations at all; they mutate global host-process state, so even a perfect read-side proxy is irrelevant. Mitigation must therefore be "deny by default", not "proxy more carefully".
 
 ### Mitigation
 
-Extend `DANGEROUS_BUILTINS` in `lib/builtin.js` with the four observability names. Reuses the same enforcement established by Category 21 (now four-layer after the `isDangerousBuiltin` family-prefix promotion):
+Extend `DANGEROUS_BUILTINS` in `lib/builtin.js` with the observability names — the original four (`diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8`) plus `os` and `dns` (GHSA-m5w8-4gq2-6f8x). Reuses the same enforcement established by Category 21 (now four-layer after the `isDangerousBuiltin` family-prefix promotion):
 
 1. **Filtered out of `BUILTIN_MODULES`** — closes the `'*'` wildcard expansion path. `builtin: ['*']` and `builtin: ['*', '-fs']` no longer auto-allow these names.
 2. **Rejected in `addDefaultBuiltin`** via `isDangerousBuiltin(key)` — closes the explicit-allowlist path (`builtin: ['perf_hooks']`), the object-map form (`builtin: { v8: true }`), and the lower-level `makeBuiltins(['async_hooks'])` API used by custom resolvers.
@@ -2964,6 +2985,8 @@ Extend `DANGEROUS_BUILTINS` in `lib/builtin.js` with the four observability name
 The `SPECIAL_MODULES`, `mocks`, and `overrides` escape hatches are preserved: an embedder who genuinely needs sandbox-local timing or async context can register a controlled wrapper under the same name (e.g., a `perf_hooks` shim that only exposes a sandbox-local clock). The denylist only rejects the *default host-passthrough loader*.
 
 `v8` was added during this fix beyond the originally-named three. The class is "process-wide observability modules"; `v8.writeHeapSnapshot(path)` is strictly worse than `perf_hooks` against the same invariant (writes a full heap dump to an arbitrary host filesystem path), so excluding it would leave a wide bypass of the same class.
+
+`os` and `dns` (GHSA-m5w8-4gq2-6f8x) were the two remaining members of the class. They satisfy the same description (host-process state the `vm.readonly()` proxy cannot localise) and additionally expose *write* primitives — `dns.setServers()` is a one-line process-wide DNS hijack, strictly worse than every read-only leak the original fix closed. Adding the two family names automatically covers `node:os`, `node:dns`, and the `dns/promises` subpath via `isDangerousBuiltin`'s `node:`-strip and family-prefix matching, with no per-API enumeration needed for future Node releases. Embedders who genuinely need a sandbox-local subset (`os.platform()`, `os.EOL`, `os.constants`) register a controlled wrapper via `mock` / `override`, exactly as for the original four.
 
 The fix restores **[Defense Invariant #13](#defense-invariants)** at a different layer — the NodeVM builtin allowlist is a closed system, regardless of whether the threat is code execution or data exposure. The bridge invariant still holds for these modules; the deny-list ensures the bridge is never asked to wrap them in the first place.
 
@@ -3120,7 +3143,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Bridge `set` trap ignores spec `Receiver` (GHSA-c4cf-2hgv-2qv6) | `BaseHandler.set` gates host-write forwarding on `receiver === mappingOtherToThis.get(object)`; non-canonical receivers (inherited-receiver writes via `Object.create(proxy)`, forged-receiver `Reflect.set` calls, `Object.assign(child, src)` loops) install on `receiver` via `Reflect.defineProperty`, mirroring `ReadOnlyHandler.set` |
 | NodeVM builtin denylist bypass via `process` / `inspector/promises` (GHSA-rp36-8xq3-r6c4) | `DANGEROUS_BUILTINS` extended to include `process`; matching promoted to family-prefix via `isDangerousBuiltin(key)` so subpath builtins (`inspector/promises`, future `inspector/*`, `process/*`, `module/*`) share fate with their canonical name. `node:` URL prefix stripped before lookup. Enforced at both `BUILTIN_MODULES` source and `addDefaultBuiltin`. Supersedes the GHSA-947f-4v7f-x2v8 exact-match mitigation. |
 | NodeVM wildcard exposes underscored network builtins (GHSA-r9pm-gxmw-wv6p) | `BUILTIN_MODULES` filter in `lib/builtin.js` now excludes any name starting with `_`; `'*'` no longer expands to `_http_client`/`_http_server`/`_tls_wrap`/`_stream_*` etc. Explicit opt-in (`builtin: ['_http_client']`) and `mock`/`override` paths still work via `addDefaultBuiltin`. |
-| NodeVM process-wide observability builtins (GHSA-9g8x-92q2-p28f) | `DANGEROUS_BUILTINS` denylist extended with `diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8`; filtered out of `BUILTIN_MODULES` (closes `'*'` wildcard) and rejected in `addDefaultBuiltin` via `isDangerousBuiltin` (closes explicit allowlist and `makeBuiltins([...])`). `node:` prefix normalized and family-prefix subpath matching applied. `mocks`/`overrides` escape hatch preserved for sandbox-local replacements |
+| NodeVM process-wide observability builtins (GHSA-9g8x-92q2-p28f, GHSA-m5w8-4gq2-6f8x) | `DANGEROUS_BUILTINS` denylist extended with `diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8` and (GHSA-m5w8-4gq2-6f8x) `os`, `dns`; filtered out of `BUILTIN_MODULES` (closes `'*'` wildcard) and rejected in `addDefaultBuiltin` via `isDangerousBuiltin` (closes explicit allowlist and `makeBuiltins([...])`). `node:` prefix normalized and family-prefix subpath matching applied (covers `node:os`, `node:dns`, `dns/promises`). `os.setPriority` / `dns.setServers` / `dns.setDefaultResultOrder` host-process writes closed alongside the read leaks. `mocks`/`overrides` escape hatch preserved for sandbox-local replacements |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

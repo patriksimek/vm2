@@ -66,13 +66,12 @@ If any check fails, stop and report exactly what is missing. Do **not**:
 
 The skill is invoked **after** the reporter confirms, but verify the trail exists so you can quote it in the commit body if needed:
 
-```bash
-node scripts/read-ghsa-thread.mjs <GHSA-id>
-```
+Read the thread in Chrome, signed in as `patriksimek-bot`: `navigate` to
+`https://github.com/patriksimek/vm2/security/advisories/<GHSA-id>`, then `get_page_text`.
 
 Scan the last few comments for explicit confirmation tokens: phrasing like "fix looks good", "no bypass found", "confirmed", "LGTM", "happy with the patch", or the reporter ack'ing the latest commit SHA on the private fork. **Do not paraphrase any confirmation language into your commit message** — it leaks attribution. Just use its presence as your green light. If you cannot find confirmation, surface the latest 1–2 comments verbatim to the user and ask whether to proceed.
 
-If the script dies on a stale cookie, ask the user to refresh `GH_SESSION_COOKIE` per `scripts/read-ghsa-thread.mjs`. Do not fall back to `gh api` — the comment thread is not in the REST payload.
+Do not fall back to `gh api` for thread content — the comment thread is not in the REST payload.
 
 ### 2b. Advisory metadata audit (collect, do not mutate)
 

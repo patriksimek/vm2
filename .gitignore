@@ -3,3 +3,4 @@
 .vscode
 /test.js
 .env
+.claude/advisory-ledger.md

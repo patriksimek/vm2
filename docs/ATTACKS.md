@@ -1763,6 +1763,11 @@ New `bufferAllocLimit` option on the `VM` (and inheriting `NodeVM`) constructor,
 - `Buffer.alloc(size, fill, encoding)` — sandbox-side wrapper checks size, then delegates to the cached host allocator via `Reflect.apply`. Registered with `connect()` so the bridge surfaces this wrapper as the canonical sandbox `Buffer.alloc`.
 - `Buffer.allocUnsafe(size)` / `Buffer.allocUnsafeSlow(size)` — same pattern, defense-in-depth (also covered transitively because they delegate to the now-capped `Buffer.alloc`).
 - Deprecated `Buffer(N)` / `new Buffer(N)` — `BufferHandler.apply` / `construct` traps already special-case numeric first arg; the cap is added there too.
+- **`Buffer.concat(list, totalLength)`** (added GHSA-gmc2-2x9w-cgh9) — caps `totalLength` when supplied, or the summed `list[i].length` when omitted, before delegating to host (which would otherwise call `Buffer.allocUnsafe(totalLength)` internally, bypassing the alloc wrapper).
+- **`Buffer.from(value [, encoding | offset, length])`** (added GHSA-gmc2-2x9w-cgh9) — caps `value.length` for object-typed inputs (closes the `{length: N}` array-like DoS path) but excludes TypedArray/DataView/Buffer copies (they have both `.byteLength` and `.buffer`, and the source is already sandbox-allocated). Also caps the explicit `length` third argument used in the ArrayBuffer overload.
+- **`Buffer.copyBytesFrom(view, offset, length)`** (added GHSA-gmc2-2x9w-cgh9, Node 22+) — caps `length` when supplied, or `view.byteLength - offset` when omitted. Probed at module load (`typeof host.Buffer.copyBytesFrom === 'function'`) so older Node versions don't crash.
+
+**Fail-closed gate (added GHSA-gmc2-2x9w-cgh9).** At sandbox setup the wrapper enumerates `host.Buffer`'s own keys against an explicit allowlist (`BUFFER_STATIC_CLASSIFIED`: the six capped factories above plus the non-allocating inspectors `byteLength` / `compare` / `isBuffer` / `isEncoding` / `of`). Any function-valued key not on the allowlist is `connect()`'d to a throwing stub that names the missing key and this advisory. A future Node release that ships a new `Buffer.*` allocator therefore cannot reach the host C++ allocator from sandbox code unless a maintainer explicitly classifies the new method — the maintainer-facing failure mode flips from "silent uncapped path" to "explicit throw at first sandbox call". This is the structural piece: the invariant survives "the maintainer forgot to add a wrapper".
 
 Oversized requests throw `RangeError('Buffer allocation size N exceeds bufferAllocLimit M')` synchronously with no host allocation — RSS delta drops from hundreds of megabytes to ~2 MB (just the error object).
 
@@ -1772,17 +1777,32 @@ The default `Infinity` keeps 3.10.6 fully backwards-compatible — no existing w
 
 - **`Buffer.alloc(N)` / `Buffer.allocUnsafe(N)` / `Buffer.allocUnsafeSlow(N)`** with attacker-controlled N inside sandbox code.
 - **`Buffer(N)` / `new Buffer(N)`** — deprecated forms still work and are equivalent.
-- **`Buffer.from(largeString)`** — partially capped via byteLength on the source string, but still a residual surface (see below).
+- **`Buffer.concat(list, totalLength)`** with attacker-controlled `totalLength` (or sandbox-controllable sum of `list[i].length`).
+- **`Buffer.from({length: N})`** — array-like with fake numeric `length` triggers host's `fromArrayLike(N)` allocator.
+- **`Buffer.from(largeArray)`** — real array of size N allocates N host bytes (1× amplification but cap still applies).
+- **`Buffer.copyBytesFrom(view, offset, length)`** (Node 22+) with attacker-controlled `length` or large `view`.
+
+### Canonical Bypass Example (GHSA-gmc2-2x9w-cgh9)
+
+```javascript
+// All three bypass the pre-fix bufferAllocLimit cap by reaching the host
+// C++ allocator without traversing the sandbox-side allocUnsafe wrapper.
+new VM({ bufferAllocLimit: 32*1024*1024 }).run(
+    'Buffer.concat([Buffer.from("a")], 50 * 1024 * 1024)'   // 50 MB allocated
+);
+new VM({ bufferAllocLimit: 32*1024*1024 }).run(
+    'Buffer.from({length: 8 * 1024 * 1024})'                // 8 MB allocated
+);
+```
 
 ### Considered Attack Surfaces
 
 - **`new Uint8Array(N)`, `new ArrayBuffer(N)`, `new SharedArrayBuffer(N)` and other typed-array constructors**: same primitive class — synchronous native allocation by attacker-controlled size. **Not capped by this fix.** A determined attacker can substitute `new Uint8Array(100*1024*1024)` for `Buffer.alloc(100*1024*1024)` and reproduce the DoS. Closing this fully requires wrapping each TypedArray constructor (and `ArrayBuffer` / `SharedArrayBuffer`) — significantly more invasive (Proxy wrappers, `instanceof` preservation, `prototype.constructor` pinning to prevent constructor-walk recovery). Tracked for follow-up.
 - **`String.prototype.repeat(N)`**: produces a sandbox-realm string of size `len * N` bytes, similar primitive. Not capped here.
-- **`Buffer.from(largeArray)` / `Buffer.from(iterable)`**: bounded by source array size which had to be allocated through some other path first; iteration runs in JS-land and is interruptible by `timeout`. Lower priority.
 - **Repeated allocations under the cap** (e.g., 32 × `Buffer.alloc(32 MiB)`): an aggregate per-run budget would close this but would require tracking allocation totals across the bridge. Out of scope for the canonical advisory.
 - **WebAssembly `memory.grow`**: governed by wasm `maximum` declaration at instantiation; not currently wrapped.
 
-The fix closes the canonical reported DoS (Buffer.alloc family) and provides the mechanism (`bufferAllocLimit` option, `checkBufferAllocLimit` helper) that future fixes for typed-array constructors and `String.repeat` can reuse.
+The fix closes the canonical reported DoS (Buffer.alloc family + concat + from + copyBytesFrom) and the fail-closed gate ensures future Buffer.* additions are caught at sandbox-init time rather than only by the next reported advisory.
 
 ---
 

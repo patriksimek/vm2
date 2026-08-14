@@ -138,7 +138,7 @@ VM is a simple sandbox to synchronously run untrusted code without the `require`
 
 -   `timeout` - Script timeout in milliseconds. **WARNING**: You might want to use this option together with `allowAsync=false`. Further, operating on returned objects from the sandbox can run arbitrary code and circumvent the timeout. One should test if the returned object is a primitive with `typeof` and fully discard it (doing logging or creating error messages with such an object might also run arbitrary code again) in the other case.
 -   `sandbox` - VM's global object.
--   `compiler` - `javascript` (default), `typescript`, `coffeescript` or custom compiler function. The library expects you to have compiler pre-installed if the value is set to `typescript` or `coffeescript`.
+-   `compiler` - `javascript` (default), `typescript`, `coffeescript` or custom compiler function. The library expects you to have compiler pre-installed if the value is set to `typescript` or `coffeescript`. **`typescript` requires `typescript@6` or earlier** — see [Compilers](#compilers).
 -   `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
 -   `wasm` - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`). Note: `WebAssembly.JSTag` is removed inside the sandbox for security reasons, so wasm code cannot catch JavaScript exceptions.
 -   `allowAsync` - If set to `false` any attempt to run code using `async` will throw a `VMError` (default: `true`).
@@ -174,7 +174,7 @@ Unlike `VM`, `NodeVM` allows you to require modules in the same way that you wou
 
 -   `console` - `inherit` to enable console, `redirect` to redirect to events, `off` to disable console (default: `inherit`).
 -   `sandbox` - VM's global object.
--   `compiler` - `javascript` (default), `typescript`, `coffeescript` or custom compiler function (which receives the code, and it's file path). The library expects you to have compiler pre-installed if the value is set to `typescript` or `coffeescript`.
+-   `compiler` - `javascript` (default), `typescript`, `coffeescript` or custom compiler function (which receives the code, and it's file path). The library expects you to have compiler pre-installed if the value is set to `typescript` or `coffeescript`. **`typescript` requires `typescript@6` or earlier** — see [Compilers](#compilers).
 -   `eval` - If set to `false` any calls to `eval` or function constructors (`Function`, `GeneratorFunction`, etc.) will throw an `EvalError` (default: `true`).
 -   `wasm` - If set to `false` any attempt to compile a WebAssembly module will throw a `WebAssembly.CompileError` (default: `true`). Note: `WebAssembly.JSTag` is removed inside the sandbox for security reasons, so wasm code cannot catch JavaScript exceptions.
 -   `bufferAllocLimit` - Same semantics as on `VM` — maximum size in bytes for a single `Buffer.alloc` family request from inside the sandbox. Default: `Infinity`. See [Hardening recommendations](#hardening-recommendations).
@@ -303,6 +303,44 @@ console.log(vm.run(script));
 ```
 
 Code is compiled automatically the first time it runs. One can compile the code anytime with `script.compile()`. Once the code is compiled, the method has no effect.
+
+## Compilers
+
+`compiler` accepts `javascript` (default), `typescript`, `coffeescript`, or your own function. The `typescript` and `coffeescript` compilers are optional — install the package yourself; vm2 does not depend on either.
+
+### TypeScript
+
+**The built-in `typescript` compiler requires `typescript@6` or earlier.**
+
+vm2 transpiles through TypeScript's `transpileModule()` API. TypeScript 7 removed it from the package entry point — `require('typescript')` there resolves to `{ version, versionMajorMinor }` only, and the replacement API lives behind the explicitly unstable `typescript/unstable/*` subpaths, none of which provide a single-file transpile equivalent. There is therefore nothing for vm2 to fall back to on 7.x.
+
+Selecting `compiler: 'typescript'` with TypeScript 7 installed throws at `new VMScript(...)` / `new VM(...)`:
+
+```
+VMError: The installed TypeScript (7.0.2) does not expose the transpileModule() API that
+vm2's built-in TypeScript compiler uses; it was removed from the package entry point in
+TypeScript 7. Install typescript@6 or earlier, or pass your own transpiler as a function:
+{ compiler: (code, filename) => javaScriptSource }.
+```
+
+Either pin `typescript@6`, or supply your own transpiler — any function returning JavaScript works, so TypeScript 7's `tsc`, esbuild, swc, or a type-stripper are all valid:
+
+```js
+import { VM, VMScript } from 'vm2';
+import { transformSync } from 'esbuild';
+
+const script = new VMScript('const x: number = 1; x', {
+	compiler: (code, filename) => transformSync(code, { loader: 'ts', format: 'cjs' }).code,
+});
+
+new VM().run(script);
+```
+
+A custom compiler receives `(code, filename)` and must return JavaScript source. It runs **in the host realm, before sandboxing** — treat it as trusted code and never build one out of untrusted input.
+
+### CoffeeScript
+
+Requires `coffee-script` to be installed. Compiled with `{ header: false, bare: true }`; any `compilerOptions` you pass are merged over those.
 
 ## Error handling
 
@@ -527,6 +565,7 @@ If you set `nesting: true`, you have effectively granted the sandbox the same tr
 -   Logging sandbox arrays will repeat the array part in the properties.
 -   Source code transformations can result a different source string for a function.
 -   There are ways to crash the node process from inside the sandbox. See [Hardening recommendations](#hardening-recommendations).
+-   The built-in `typescript` compiler does not work with TypeScript 7 or newer, which removed the `transpileModule()` API vm2 uses. Use `typescript@6` or pass your own transpiler — see [Compilers](#compilers).
 
 [npm-image]: https://img.shields.io/npm/v/vm2.svg
 [npm-url]: https://www.npmjs.com/package/vm2

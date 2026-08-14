@@ -42,7 +42,13 @@ jobs:
               if: ${{ matrix.node-version < 20 }}
               run: node scripts/legacy-test-runner.js
 
+            # TypeScript is pinned to 6.x. TypeScript 7 (the Go rewrite) reduced its
+            # CommonJS entry point to `lib/version.cjs` — `transpileModule` and
+            # `ModuleKind`, which lib/compiler.js uses, are gone, and the replacement
+            # lives behind the explicitly unstable `typescript/unstable/*` subpaths.
+            # 6.0.3 is the last release with the classic API. Supporting TS 7 is
+            # tracked separately; unpinning before then just breaks the job.
             - name: Run unit tests (compilers)
               if: ${{ matrix.node-version >= 20 }}
-              run: npm install typescript coffee-script --no-save && npm run test:compilers
+              run: npm install typescript@6 coffee-script --no-save && npm run test:compilers
 

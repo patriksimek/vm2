@@ -397,6 +397,12 @@ describe('GHSA-v836-6xw4-9cx3 (ArrayBuffer/TypedArray bufferAllocLimit bypass)',
 	// is visible.
 	describe('known residual: array-like length accessor (documented)', function () {
 		it('toggling array-like length accessor is a documented residual', function () {
+			// This case deliberately performs the ~100 MB allocation it documents as
+			// still reachable, so it is a real allocate-and-zero-fill. Mocha's 2 s
+			// default is not enough on a loaded CI runner (it timed out on the Node 20
+			// job while passing everywhere else). Same allowance as the other
+			// large-allocation case above.
+			this.timeout(30000);
 			const vm = new VM({ bufferAllocLimit: CAP });
 			let overAllocated = false;
 			try {

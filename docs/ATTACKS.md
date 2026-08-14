@@ -1249,7 +1249,7 @@ V8 creates `SuppressedError` instances using the sandbox context's intrinsic con
 
 The `using` declaration bypasses the transformer because Acorn's `ecmaVersion: 2022` does not parse ES2024 syntax -- the implicit catch semantics of `using` are invisible to instrumentation.
 
-Note: `Error.cause` is a related concern -- it can carry host references -- but since `Error.cause` is set by user code (not V8 internals), `ensureThis` handles it through normal property access on proxied errors.
+Note: `Error.cause` (ES2022) is a related concern that **was** assumed safe because the bridge `get` trap wraps property reads. It is not: the wrap is functional, so the sandbox can pivot through `e.cause.mainModule.require(...)` even after wrapping. See [Category 38](#attack-category-38-errorcause-host-reference-leak-to-sandbox) for the full analysis and the chokepoint extension in `handleException` that strips `.cause` from host-wrapped carriers.
 
 ### Mitigation
 
@@ -3231,6 +3231,214 @@ async function f() {
 Both layers are **mechanism-independent** — they do not care *how* the chain was severed (direct bridge call, stacked indirection, or fully host-side `bind`/`map` laundering), only that the result is a foreign severed host object. Either layer alone blocks the escape; they sit at independent chokepoints (bridge re-entry vs. transformer catch sanitizer). The discriminator is sound because the raw sandbox `Object.prototype` only exists in the sandbox realm — host-side code can never hold it (it crosses the bridge as a proxy), so a host object's chain can never falsely appear to pass through it. This restores **[Defense Invariant #1](#defense-invariants)** ("Never expose host constructors or prototypes") at the *payoff* — the universal `e.constructor.constructor === host.Function` pivot — independent of the delivery or invocation mechanism, and **supersedes** the positional v6mx peel and the identity-based delivery refusal for the severance-payoff class (both retained as complementary earlier-layer defenses).
 
 A rejected alternative was tracking `bind`-derivatives of the applicators in the apply trap (refuse any `bind`-of-an-applicator as call target/`this`/argument). It blocks the laundering earlier but is mechanism-specific (a novel host-side execution vector that does not use `bind`-of-applicator would slip), higher-collateral on legitimate `.call`/`.apply`/`.bind`, and unnecessary given the payoff hardening already closes the class.
+
+---
+
+## Attack Category 38: `Error.cause` Host Reference Leak to Sandbox
+
+**Uses**: [Category 4: Error Object Exploitation](#attack-category-4-error-object-exploitation), [Category 16: SuppressedError via Explicit Resource Management](#attack-category-16-suppressederror-via-explicit-resource-management)
+
+### Description
+
+ES2022 added `Error.cause`, a free-form property carrying an arbitrary object reference describing the underlying reason for an error (`new Error('wrap', { cause: original })`). When an embedder-exposed host helper throws an Error with `.cause` set to a powerful host reference (canonically `process`, but anything reachable from the embedder's closure qualifies — `require('child_process')`, a host `Module` instance, an internal config containing keys), the host Error crosses the bridge via `thisFromOtherForThrow` and reaches the sandbox catch block as a bridge proxy.
+
+The bridge `get` trap wraps `.cause` on read — the resulting proxy passes `isProxy === true` — but **the wrap is functional**. The bridge's design goal is realm isolation, not capability restriction: sandbox code can chain `e.cause.mainModule.require('child_process').execSync(...)` through proxy `apply` traps and reach host RCE. The proxy hands off arguments and return values through the bridge correctly; it does not block the embedder-exposed function from being called.
+
+The embedder almost never intends `.cause` to expose live host references. Error chaining is idiomatic in modern Node — `try { x() } catch (e) { throw new Error('wrap', { cause: e }) }` — and the chained `e` is frequently a Node-internal error whose own internal fields point at `process`, `Module`, or other powerful host objects. CVE class is sandbox escape via an under-audited ES2022 channel.
+
+CVSS 3.1: 9.9 / Critical (CVSS:3.1/AV:N/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H). CWE-693 (Protection Mechanism Failure).
+
+### Attack Flow
+
+1. Embedder exposes a host function via `sandbox: { hostFn: () => { throw new Error('msg', { cause: process }) } }`. The cause may be set by the embedder directly or by Node-internal error chaining the embedder wraps.
+2. Sandbox calls the function; host throws.
+3. `thisFromOtherForThrow` wraps the host `Error` as a bridge proxy. The proxy's underlying object is the raw host Error.
+4. Sandbox catch block reads `e.cause`. The proxy `get` trap fetches the host `.cause` (`process`) and wraps it through `thisFromOther`, returning a bridge proxy of `process` to sandbox code.
+5. Sandbox code drives the wrapped `process` through proxy `get` / `apply` traps: `e.cause.mainModule.require('child_process').execSync('...')`. Each step routes through host realm; `execSync` runs with host privileges.
+
+### Canonical Examples
+
+```javascript
+// Direct host process leak
+const vm = new VM({
+    sandbox: { hostFn: () => { throw new Error('fail', { cause: process }); } },
+});
+vm.run(`
+    try { hostFn(); } catch (e) {
+        e.cause.mainModule.require('child_process').execSync('id');
+    }
+`);
+
+// Indirect leak via Node-internal error chaining
+const vm = new VM({
+    sandbox: {
+        hostFn: () => {
+            try { require('fs').readFileSync('/no/such'); }
+            catch (inner) { throw new Error('wrap', { cause: inner }); }
+        },
+    },
+});
+// Inner ENOENT carries no powerful reference here, but other Node-internal
+// errors (e.g. `vm`, `module`, `worker_threads` paths) do.
+
+// Frozen / non-configurable cause — bypasses naive `delete e.cause` fixes
+const vm = new VM({
+    sandbox: {
+        hostFn: () => {
+            const e = new Error('frozen');
+            Object.defineProperty(e, 'cause', { value: process, configurable: false, writable: false });
+            throw e;
+        },
+    },
+});
+
+// Accessor-shaped cause — bypasses fixes that only delete data properties
+const vm = new VM({
+    sandbox: {
+        hostFn: () => {
+            const e = new Error('getter');
+            Object.defineProperty(e, 'cause', { get: () => process, configurable: true });
+            throw e;
+        },
+    },
+});
+
+// Nested cause chain — fix must recurse
+const vm = new VM({
+    sandbox: {
+        hostFn: () => {
+            const inner = new Error('inner', { cause: process });
+            throw new Error('outer', { cause: inner });
+        },
+    },
+});
+// e.cause.cause.mainModule... still pivots without recursive sanitization.
+
+// SuppressedError / AggregateError sub-error with cause — must inherit walk
+const vm = new VM({
+    sandbox: { hostFn: () => { throw new Error('h', { cause: process }); } },
+});
+vm.run(`
+    try {
+        try { hostFn(); } catch (i) { throw new SuppressedError(i, new Error('s'), 'm'); }
+    } catch (e) { e.error.cause.mainModule.require('child_process').execSync('...') }
+`);
+
+// TOCTOU getter — bypasses fixes that read .cause once and skip the strip on
+// primitives. The first read returns undefined (defeating the guard); every
+// subsequent read returns process. Defended by stripping unconditionally with
+// a sealed (non-configurable, non-writable) descriptor.
+const vm = new VM({
+    sandbox: {
+        hostFn: () => {
+            let reads = 0;
+            const e = new Error('toctou');
+            Object.defineProperty(e, 'cause', {
+                get() { return reads++ === 0 ? undefined : process; },
+                configurable: true,
+            });
+            throw e;
+        },
+    },
+});
+
+// Lying Proxy host-carrier — bypasses fixes that trust defineProperty's
+// boolean return value. The Proxy's defineProperty trap returns true without
+// modifying the target. The configurable-strip would proceed thinking it
+// succeeded; subsequent .cause reads still go through the get trap to the
+// underlying process. Defended by the non-configurable seal: ECMA-262 §10.5.6
+// forces an invariant throw because Desc.configurable is false but target's
+// existing descriptor is configurable.
+const vm = new VM({
+    sandbox: {
+        hostFn: () => {
+            const realErr = new Error('proxy-lies');
+            realErr.cause = process;
+            throw new Proxy(realErr, {
+                defineProperty(t, p, d) { return p === 'cause' ? true : Reflect.defineProperty(t, p, d); },
+            });
+        },
+    },
+});
+
+// SuppressedError.error / .suppressed / AggregateError.errors accessor TOCTOU
+// — bypasses the read-then-recurse-then-assign pattern. The recursive call
+// reads the accessor once (benign), recurses harmlessly. The assign back is a
+// SET, which silently no-ops on a getter-only accessor. Subsequent sandbox
+// reads invoke the accessor again and return process. Defended by snapshot-
+// and-rebuild: on host-wrapped carriers, sub-errors are read once each and a
+// fresh sandbox-realm SuppressedError / AggregateError is constructed as the
+// replacement, dropping the original carrier.
+const vm = new VM({
+    sandbox: {
+        hostFn: () => {
+            const e = new SuppressedError(new Error('a'), new Error('b'), 'msg');
+            let reads = 0;
+            Object.defineProperty(e, 'error', {
+                get() { return reads++ === 0 ? new Error('benign') : process; },
+                configurable: true,
+            });
+            throw e;
+        },
+    },
+});
+```
+
+### Why It Works
+
+The bridge invariant ["No host-realm object reaches sandbox code unwrapped"](#defense-invariants) (Defense Invariant #1) was satisfied — `.cause` returned a bridge proxy. But the related invariant ["All caught exceptions are sanitized"](#defense-invariants) (Defense Invariant #2) and especially #3 (cross-realm error containers are recursively sanitized) had a documented gap: the `handleException` chokepoint only recursed into `SuppressedError.{error,suppressed}` and `AggregateError.errors[]`. `.cause` was the third ES2022 / 2024 error-chain channel and went unaudited.
+
+A second misconception in the prior architecture: wrapping a host reference is sufficient to neutralize it. For sandbox-exposed values (`sandbox: { someConfig }`), this is true by intent — the embedder explicitly granted access. For `.cause`, the embedder did not. The wrap therefore must be supplemented by stripping the property entirely from host-realm carriers.
+
+### Mitigation
+
+Centralize in `handleException` (the existing exception chokepoint). The new helper `sanitizeErrorCause` runs **before** the SuppressedError / AggregateError proto walk, so SuppressedError / AggregateError carriers also get their `.cause` stripped, and the recursive walks pick up `.cause` on every sub-error.
+
+Two branches by carrier realm:
+
+1. **Host-wrapped carrier** (`e.isProxy === true`) — overwrite host-side `.cause` with `undefined` via `localReflectDefineProperty` using a **sealed descriptor** (`writable: false, configurable: false`). This routes through the proxy `defineProperty` trap to `otherReflectDefineProperty` and pins a fresh data property on the underlying host Error. The non-configurable + non-writable choice is load-bearing: it weaponizes two ECMA-262 Proxy invariants against attacker-controlled host carriers:
+
+   - **§10.5.6 ProxyDefineOwnProperty**: if `Desc.[[Configurable]]` is false and the target's existing descriptor is configurable, the engine throws regardless of the trap's return value. A lying `defineProperty` trap (e.g., `new Proxy(realErr, { defineProperty: () => true })`) cannot pretend success without actually modifying the target — the engine catches the invariant violation and the fallback substitution fires.
+
+   - **§10.5.8 ProxyGet**: once the property is non-configurable and non-writable, the trap MUST return `SameValue(target.value)`. A `get` trap that lies about the value triggers `TypeError`. So subsequent sandbox reads of `.cause` either return `undefined` or throw — both safe.
+
+2. **Strip fails** (engine threw on invariant violation, host property is sealed non-configurable, or any other failure) — the carrier itself is unsafe, so a **fresh sandbox-realm `Error` is substituted**, preserving only the textual `.message`. Sandbox catch code sees a different error type but no pivot reference.
+
+3. **Sandbox-realm carrier** — recursively sanitize: read `e.cause` once, recurse via `handleException`, then re-install the sanitized value as a data property to defeat sandbox-side accessor `.cause` definitions. Cycle detection via the existing `visited` `WeakMap` prevents infinite recursion on `a.cause = b; b.cause = a`.
+
+For **`SuppressedError` and `AggregateError` carriers**, the same TOCTOU class applies to `.error`, `.suppressed`, and `.errors[]` slots. The original recursive pattern was `e.error = handleException(e.error, visited)` — a single read invoked the host getter (returning a benign value that recursed harmlessly), and the assignment back silently no-op'd against a getter-only accessor. The accessor remained live; the next sandbox read returned a host reference.
+
+The fix on host-wrapped carriers **snapshots sub-errors via a single read each, sanitizes them, and constructs a fresh sandbox-realm replacement of the same type** (`new LocalSuppressedError(...)` / `new LocalAggregateError(...)`). The original carrier — which may have any number of attacker-controlled accessors — is dropped entirely. Sandbox receives a stable sandbox-realm carrier whose sub-error slots are plain data properties on the new instance, immune to host-side TOCTOU.
+
+For **arbitrary own properties** on host-wrapped error carriers (`err.detail = process`, `err.originalError = require('child_process')`, etc.), the spec-defined-slot fixes above do not generalize. Node libraries routinely attach host references via custom property names as part of error-chaining conventions, and any such property reaches sandbox as a functional bridge proxy — same escape primitive as the original `.cause` channel. `sanitizeHostOwnProps` runs on every host-wrapped non-Suppressed/non-Aggregate carrier reaching `handleException`, enumerates own keys via `Reflect.ownKeys`, and seals each property with the same non-configurable + non-writable descriptor used for `.cause`: primitive values are locked to the first-read primitive (preserves `message`/`stack`/`name`/`code`/`errno`/`syscall`/`path` and any other diagnostic primitive), non-primitives are replaced with `undefined`. The ECMA-262 §10.5.6 invariant catches lying-Proxy carriers on every key; the §10.5.8 invariant locks subsequent reads to the sealed value. Seal failure substitutes the carrier with a fresh sandbox-realm Error preserving the captured message.
+
+For **prototype-inherited host references**, own-key sealing is structurally insufficient. `Reflect.ownKeys` does not report inherited properties, so a host carrier whose prototype was replaced — `Object.setPrototypeOf(hostErr, { leak: process })` — passed through `sanitizeHostOwnProps` untouched, and `e.leak` still resolved to a live bridge proxy: `e.leak.mainModule.require('child_process').execSync(...)` is full RCE, and `e.leak.pid` / `e.leak.env` are host information disclosure on their own.
+
+The enumeration cannot simply be widened to walk the chain: the chain is attacker-shaped, arbitrarily deep, and each link may itself be a lying Proxy, so any walk is a TOCTOU surface rather than a fix. Instead the carrier is **rebuilt in the sandbox realm**. `sanitizeHostOwnProps` constructs a fresh sandbox-realm error and copies across only the primitive own properties it has already sealed (`message` through the constructor, plus `name` / `stack` / `code` / `errno` / `syscall` / `path` and any other primitive the host attached). The host prototype chain is discarded wholesale, so the returned object is *structurally incapable* of referencing the host realm — no enumeration, and therefore no enumeration gap. This is the same snapshot-and-rebuild strategy already applied to `SuppressedError` / `AggregateError` carriers, generalized to every host-wrapped carrier.
+
+Two details in the rebuild are load-bearing:
+
+- **The error constructors are captured at module load** (`LocalTypeError`, `LocalRangeError`, `LocalReferenceError`, `LocalSyntaxError`, `LocalEvalError`, `LocalURIError`), beside `LocalError` and for the same reason `localStringStartsWith` is captured for [Category 8](#attack-category-8-cross-realm-symbol-extraction-from-host-objects). The rebuild runs at exception-handling time, long after guest code has executed; reading the mutable sandbox globals there would let `RangeError = function () { ... }` from inside the sandbox execute attacker code *inside the sanitizer* and dictate the value it returns — reintroducing the very escape the helper exists to prevent. See [Defense Invariant #6](#defense-invariants).
+
+- **The subclass is resolved from the carrier's `name` string, not `instanceof`.** A host-wrapped carrier's prototype chain terminates at the *host* `RangeError.prototype`, never the sandbox's, so `instanceof` against a sandbox constructor is false for every host error and the subclass would silently collapse to plain `Error`. Name matching is also prefix-based, because Node ≤ 11 reports internal errors as `"RangeError [ERR_INVALID_OPT_VALUE]"`; an exact comparison degrades every Node-internal error to plain `Error` on those runtimes. `name` is attacker-controllable, but the only thing it can influence is which of six benign sandbox-realm constructors is used.
+
+The fix restores **[Defense Invariant #3](#defense-invariants)** at the right chokepoint: `Error.cause` joins `SuppressedError.{error,suppressed}` and `AggregateError.errors[]` as a recognized sub-error channel, and all four channels are now defended against the same TOCTOU / lying-Proxy class. The published wording of Invariant #3 was already aspirationally correct — this fix makes the implementation match. The carrier rebuild extends that guarantee from *enumerated channels* to *the whole object graph reachable from a host carrier*.
+
+### Detection Rules
+
+- **`{ cause: process }` / `{ cause: require('...') }` in any host-exposed throw site** — direct leak of a powerful host reference through the ES2022 channel.
+- **`throw new Error('msg', { cause: e })` in embedder code that wraps caught Node-internal errors** — Node-internal errors carry references to `Module`, `process`, internal config; chaining them propagates the leak.
+- **`Object.defineProperty(err, 'cause', { ... })` in host code** — both the non-configurable and accessor variants are bypass primitives if the fix is naive (`delete`-only).
+- **`e.cause.X.Y(...)` pattern in sandbox code** — pivot chain through proxy-wrapped `.cause`.
+- **`e.error.cause.X` / `e.errors[i].cause.X` patterns** — pivot chains through SuppressedError / AggregateError sub-errors carrying their own `.cause`.
+- **`Object.setPrototypeOf(err, { ... })` on any host error before it crosses the bridge** — moves the payload out of own-key range; the reference is reachable in sandbox as an ordinary inherited property (`e.leak`), including via accessors and symbol keys.
+- **`e.<anyKey>.mainModule` / `.env` / `.pid` in sandbox code where `<anyKey>` is not a spec-defined error slot** — pivot through an arbitrary own *or inherited* carrier property.
+
+### Considered Variants
+
+- **Arbitrary `.foo = process` on host-wrapped errors** — now covered by `sanitizeHostOwnProps`. Originally argued out of scope on the assumption that embedders setting arbitrary properties were exposing references intentionally; in practice, Node-internal error chaining and library wrappers routinely attach host references to custom property names (`err.detail`, `err.originalError`, `err.context`, etc.) without considering the sandbox trust boundary. The own-property enumeration covers all string and symbol keys uniformly; primitive diagnostic info survives, non-primitive host references are stripped.
+- **`.cause` set by V8 internals** — not currently a known path. If a future Node version starts populating `.cause` on internal errors with host references (analogous to how SuppressedError carries them), the fix already covers it because the recursion runs on every error reaching `handleException`.
+- **Read via `Reflect.get(err, 'cause')` from a host-side script the sandbox can invoke** — same path through the proxy `get` trap; same defense. Reflect identity is captured at init time (Defense Invariant #8), so sandbox cannot substitute a host Reflect.
 
 ---
 

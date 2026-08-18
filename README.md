@@ -146,6 +146,8 @@ VM is a simple sandbox to synchronously run untrusted code without the `require`
 
 **IMPORTANT**: Timeout is only effective on synchronous code that you run through `run`. Timeout does **NOT** work on any method returned by VM. There are some situations when timeout doesn't work - see [#244](https://github.com/patriksimek/vm2/pull/244).
 
+**IMPORTANT (GHSA-r4fx-v8hh-22mv — GC-scheduled callbacks)**: The `timeout` option bounds only the synchronous execution of `VM#run()`. It cannot bound code that the V8 garbage collector invokes on its own schedule after `run()` has already returned. Before vm2 v3.11.7, `FinalizationRegistry` was accessible inside the sandbox, allowing sandboxed code to register a cleanup callback that would fire at an unpredictable future moment — completely outside any timeout enforcement — and block the entire Node.js event loop for as long as the attacker's loop ran. As of v3.11.7, `FinalizationRegistry` and `WeakRef` are removed from the default sandbox global scope (mirroring how `setTimeout`/`setInterval`/`setImmediate` are withheld). Embedders who need these APIs for trusted code can re-expose them via the `sandbox` option.
+
 ```js
 import { VM } from 'vm2';
 

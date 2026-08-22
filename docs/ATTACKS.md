@@ -1553,6 +1553,7 @@ NodeVM's `require.builtin` allowlist defends sandbox code from reaching dangerou
 - `repl` exposes `repl.start({eval, input, output})` — constructs an interactive evaluator attached to host streams.
 - `inspector` (and `inspector/promises`, subpath family) exposes the inspector protocol — attaches a debugger to the host process and runs `Session().post('Runtime.evaluate', { expression })` against host JS.
 - `process` exposes `process.getBuiltinModule(name)` (Node 22+) — reloads ANY core module regardless of the embedder's allow/deny list — plus `process.binding(...)`, `process.dlopen(...)`, `process._linkedBinding(...)`, and the raw host `process.env`. The sandbox global `process` is a sanitized shim defined in `setup-node-sandbox.js`; the raw host module is never safe to expose.
+- `test` (and `test/reporters`, subpath family) exposes `test.run({ files, execArgv })` — the test runner's process-isolated mode spawns a SEPARATE host Node process and forwards `execArgv` to it verbatim, so `execArgv: ['--eval=<js>']` executes attacker JavaScript in an unsandboxed host process. Same class as `cluster.fork()`. It is easy to misread `test` as inert tooling, but its documented API is a host-process launcher with caller-controlled command-line flags.
 
 ### Attack Flow
 
@@ -1623,6 +1624,19 @@ vm.run(`
 `, 'poc.js');
 ```
 
+```javascript
+// (advisory GHSA-qhwx-74w5-xhxq) — `node:test` spawns a host process for you
+const vm = new NodeVM({
+  require: { builtin: ['node:test'], external: false }
+});
+vm.run(`
+  // fs / child_process / module / process are all denied in this config.
+  const test = require('node:test');          // also reachable as 'node:node:test'
+  // run() forwards execArgv to a freshly spawned, unsandboxed host Node process.
+  test.run({ files: ['noop.js'], execArgv: ['--eval=require("fs").writeFileSync("/tmp/pwned","host rce")'] });
+`, 'poc.js');
+```
+
 ### Why It Works
 
 The user's mental model of `['*', '-child_process']` is "every builtin except `child_process`". That model assumes every builtin is either fully sandboxed or fully blocked — but `module` (and its peers above) are neither. They're *meta-builtins* that load other builtins by name. The generic `vm.readonly()` wrapper cannot make them safe because the sandbox-bypass primitive is the very thing the user is calling.
@@ -1643,6 +1657,8 @@ Three-layer denylist enforcement in `lib/builtin.js` (restores **[Invariant 13 �
 5. **Deny-token `node:` normalization** (GHSA-8686-vhfx-7r3j) — the `'*'` wildcard's negative-token check in `makeBuiltinsFromLegacyOptions` now tests both `-${name}` and `-node:${name}`, so the two spellings of a deny token are equivalent and either one denies both spellings of the module. This is the deny-side mirror of the `node:`-prefix stripping the resolver and `isDangerousBuiltin` already do on the require side. It only ever *removes* a builtin the exact-match check would have added, so no previously-allowed module becomes unreachable.
 
 6. **Deny-token family coverage** (GHSA-6rh5-qq4q-97xh) — the same negative-token check now treats `<family>/<sub>` as denied whenever `-<family>` is present, so `-fs` denies `fs/promises`, `-path` denies `path/posix` / `path/win32`, `-stream` denies `stream/promises` / `stream/web` / `stream/consumers`. This is the user-deny-token mirror of the family-prefix matching `isDangerousBuiltin` already applies to the hard `DANGEROUS_BUILTINS` denylist. Points 5 and 6 are composed in a single chokepoint, `isBuiltinDenied(builtins, name)`, which normalizes the `node:` prefix off *both* the module name and the token before matching and then applies the family split to the normalized name — so `-node:fs` denies all four of `fs`, `node:fs`, `fs/promises`, `node:fs/promises`. Coverage is strictly additive: a family with no deny token keeps every subpath, and the explicit (non-wildcard) allowlist branch is untouched, so `builtin: ['fs']` behaves exactly as before.
+
+7. **`test` family denied** (GHSA-qhwx-74w5-xhxq) — `test` joins `DANGEROUS_BUILTINS`, which is the whole fix: no new code path is needed. Because `BUILTIN_MODULES` is built by filtering `nmod.builtinModules` through `isDangerousBuiltin`, the family disappears from the source list, so it is absent from `'*'` expansion *and* from the explicit-allowlist branch — `builtin: ['node:test']` now names a module that is not in the list, exactly as `builtin: ['cluster']` already behaved. (`child_process` is deliberately *not* on this denylist and remains grantable by explicit request; `test` is denylisted because, unlike `child_process`, no embedder reaches for it expecting process-spawning authority.) `addDefaultBuiltin` refuses it a second time for the low-level registration path. Subpath coverage (`test/reporters`) falls out of the existing family-prefix match added for `inspector/promises`; no special case was required. `isDangerousBuiltin` additionally strips *repeated* `node:` prefixes, so the doubled spelling `node:node:test` — which the resolver normalizes down to a single prefix before lookup — cannot survive as an unnormalized denylist miss. Note this is `isDangerousBuiltin` (the hard, non-configurable denylist), which is a separate chokepoint from `isBuiltinDenied` (points 5 and 6, user-supplied deny tokens); the two do not interact.
 
 The fix does not affect the `mocks` / `overrides` escape hatches — users who genuinely need a stub for one of these names can register a sandbox-safe replacement.
 
@@ -1667,6 +1683,8 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 - **`trace_events.createTracing({categories: [...]})`** — host process abort via C++ assertion failure.
 - **`new (require('wasi').WASI)({...})`** — preview1 syscall surface.
 - **`builtin: ['*', '-node:X']`** — a `node:`-prefixed deny token. Historically a silent no-op that denied nothing; now equivalent to `-X`. Configs written this way were never enforcing what they appeared to.
+- **`require('test')` / `require('node:test')` / `require('node:node:test')` / `require('node:test/reporters')`** — the test runner is a host-process launcher, not inert tooling. Denied outright since GHSA-qhwx-74w5-xhxq.
+- **`test.run({ execArgv: [...] })`, or any `execArgv` / `--eval` / `--require` / `--import` string reaching a builtin's process-spawning option bag** — caller-controlled Node command-line flags on a spawned host process are equivalent to host RCE.
 - **`require('<family>/<sub>')` where the config denies `-<family>`** — `fs/promises`, `path/posix`, `stream/web`, `timers/promises`, `dns/promises`. Historically reachable despite the family deny token; now denied with the family. A config relying on `-fs` for filesystem isolation on an unpatched version was not enforcing it.
 
 ### Considered Attack Surfaces
@@ -3708,6 +3726,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Property descriptor extraction | `containsDangerousConstructor` + `preventUnwrap` blocks unwrapping |
 | SuppressedError | `handleException` detects and recursively sanitizes `.error`/`.suppressed` |
 | WebAssembly JSTag | `WebAssembly.JSTag` deleted from sandbox |
+| `node:test` host RCE via `run({execArgv})` (GHSA-qhwx-74w5-xhxq) | On Node 18+ `builtinModules` lists `node:test` with the `node:` prefix and `test` was not in `DANGEROUS_BUILTINS`, so `builtin: ['node:test']` admitted the real host module; `test.run({files, execArgv:['--eval=<js>']})` spawns a separate host process running attacker code (host RCE). `test` is added to `DANGEROUS_BUILTINS` (family-matched, covers `node:test/reporters`) and `isDangerousBuiltin` now strips ALL leading `node:` prefixes so `node:node:test` normalizes too — `node:test` is excluded from `'*'`, rejected on explicit allow, and absent from the builtins map. |
 | WebAssembly JSPI cross-realm Promise | `WebAssembly.promising` and `WebAssembly.Suspending` deleted from sandbox; JSPI promises (sandbox allocation with host-realm `Promise.prototype` and no bridge proxy) cannot be produced, so the species channel on a cross-realm-prototype Promise is structurally unreachable |
 | Array species self-return | set/defineProperty traps + neutralizeArraySpecies + SPECIES_ATTACK_SENTINEL |
 | Host prepareStackTrace fallback | Safe default always set; setter resets to safe default instead of `undefined` |

@@ -3877,7 +3877,7 @@ Note that `Object.freeze` on a read-only proxy still throws ("trap returned fals
 
 ## Attack Category 45: NodeVM External-Package Allowlist Bypass via Unanchored Matcher and `..` Traversal
 
-**Related**: [Category 21: NodeVM Builtin Allowlist Bypass via Host-Passthrough Builtins](#attack-category-21-nodevm-builtin-allowlist-bypass-via-host-passthrough-builtins) (the *builtin* allowlist; this category is the *external package* allowlist), [Category 24: NodeVM `require.root` Symlink Bypass (Path Check/Use TOCTOU)](#attack-category-24-nodevm-requireroot-symlink-bypass-path-checkuse-toctou) (the filename-side boundary check this specifier-side check composes with)
+**Related**: [Category 21: NodeVM Builtin Allowlist Bypass via Host-Passthrough Builtins](#attack-category-21-nodevm-builtin-allowlist-bypass-via-host-passthrough-builtins) (the *builtin* allowlist; this category is the *external package* allowlist), [Category 24: NodeVM `require.root` Symlink Bypass (Path Check/Use TOCTOU)](#attack-category-24-nodevm-requireroot-symlink-bypass-path-checkuse-toctou) (the filename-side boundary check this specifier-side check composes with), [Category 46: NodeVM External-Package Allowlist Bypass via Unanchored Module-Path Prefix](#attack-category-46-nodevm-external-package-allowlist-bypass-via-unanchored-module-path-prefix) (the filename-space sibling of this specifier-space check)
 
 ### Description
 
@@ -3942,6 +3942,97 @@ Two composed layers in `lib/resolver-compat.js`, restoring the external-allowlis
 - **Percent-encoded and dot-padded forms are *not* `..` segments and are not rejected by this check — they do not need to be.** `left-pad/..%2fevil`, `left-pad/%2e%2e/evil` and `left-pad/....//evil` reach the resolver, but `require()` performs no URL-decoding and `path.resolve` treats `....` as an ordinary directory name, so none of them traverses; each fails as module-not-found. Verified empirically. Were a future custom resolver to decode percent-escapes itself, that decoding would happen inside embedder code and outside this boundary — an embedder-side concern, noted here so the asymmetry is not mistaken for a gap.
 
 ---
+
+
+## Attack Category 46: NodeVM External-Package Allowlist Bypass via Unanchored Module-Path Prefix
+
+**Related**: [Category 45: NodeVM External-Package Allowlist Bypass via Unanchored Matcher and `..` Traversal](#attack-category-45-nodevm-external-package-allowlist-bypass-via-unanchored-matcher-and--traversal) (the *specifier*-space sibling of this check; see **Composition** below), [Category 24: NodeVM `require.root` Symlink Bypass (Path Check/Use TOCTOU)](#attack-category-24-nodevm-requireroot-symlink-bypass-path-checkuse-toctou) (the `realpath()` boundary this check delegates to first)
+
+### Description
+
+`LegacyResolver.isPathAllowedForModule(path, mod)` is the authorization decision for a `require()` **originating inside** an already-allowlisted external module `mod`. Under `transitive: false` the intent is "`mod` may load its own files, but not other packages". It implemented that as a raw prefix test:
+
+```javascript
+if (path.startsWith(mod.path)) {
+    const rem = path.slice(mod.path.length);
+    if (!/(?:^|[\\/])node_modules(?:$|[\\/])/.test(rem)) return true;
+}
+```
+
+`startsWith` is a *containment* test on a string, not a *boundary* test on a path. For an allowlisted module at `.../node_modules/foo`, the sibling `.../node_modules/foo2/index.js` starts with `.../node_modules/foo`, so the test passed. The `node_modules` guard on the remainder did not catch it: that guard exists to stop a genuine *nested* dependency (`foo/node_modules/bar`), and a **sibling's** remainder (`2/index.js`) never contains a `node_modules` segment at all. The one check that would have caught it — requiring a separator after the prefix — was absent.
+
+CWE-22 (Improper Limitation of a Pathname to a Restricted Directory). CWE-863 (Incorrect Authorization).
+
+### Attack Flow
+
+1. **Embedder allowlists one package, transitive loading off** — `new NodeVM({require: {external: {modules: ['foo'], transitive: false}, root: appDir}})`. Intended policy: "`foo` only, and `foo` may not pull in anything else".
+2. **A prefix-sharing sibling exists in the same `node_modules`** — `foo2`, `foo-evil`, `foobar`. The attacker does not create this; they find a deployment where it already exists.
+3. **An allowlisted package has a reachable relative-require path** — `foo/index.js` does `require('../foo2')` on some code path the sandbox can trigger.
+4. **The prefix test approves the sibling** — `path.startsWith(mod.path)` is true, the remainder `2/index.js` has no `node_modules` segment, so `isPathAllowedForModule` returns `true`.
+5. **The un-allowlisted sibling loads**, its top-level code runs, and its exports reach sandbox code — a package the embedder never authorized, with `transitive: false` explicitly set.
+
+### Canonical Example
+
+```javascript
+// Embedder: exactly one external package, no transitive loading.
+new NodeVM({require: {external: {modules: ['foo'], transitive: false},
+                      context: 'sandbox', root: '/app'}});
+
+// /app/node_modules/foo/index.js (allowlisted) contains:
+//     exports.reach = n => require('../' + n);
+// Sandbox:
+require('foo').reach('foo2');   // loads un-allowlisted /app/node_modules/foo2
+```
+
+### Why This Works
+
+The check compares two strings that both happen to be paths, using an operator that knows nothing about path structure. `foo` and `foo2` are unrelated packages, but `"foo2"` contains `"foo"` at offset 0, and `startsWith` reports only that. Package-name namespaces are attacker-populatable and prefix collisions are common in practice (`foo` / `foo2`, `lodash` / `lodash.merge`, `react` / `react-dom`), so containment at a path prefix is never a containment guarantee about *directories*. This is the same failure class as Category 45 one layer down, and the base `CustomResolver.isPathAllowed` already had the correct idiom a few lines above — it simply was not applied here.
+
+**Scoped packages carry no separate semantics and were affected identically.** `@scope/pkg` vs `@scope/pkg-evil` is the same shape (`mod.path` = `.../node_modules/@scope/pkg`), and was likewise reachable via relative require before this fix — verified empirically. The scope prefix is just more path text; the boundary requirement is unchanged.
+
+### Mitigation
+
+`lib/resolver-compat.js` — `isPathAllowedForModule` now requires a **path boundary** after `mod.path`, exactly mirroring the idiom in the base `CustomResolver.isPathAllowed`: the path either equals `mod.path`, or `mod.path` already ends in a separator, or the character at `mod.path.length` is a separator.
+
+```javascript
+const len = mod.path.length;
+if (path.startsWith(mod.path) &&
+    (path.length === len || (len > 0 && this.fs.isSeparator(mod.path[len - 1])) || this.fs.isSeparator(path[len]))) {
+```
+
+Separator testing goes through `this.fs.isSeparator`, the same filesystem-aware predicate the rest of the resolver uses, so Windows backslash separators are handled by the `VMFileSystem` in force rather than by a hardcoded character. (Note that the obvious one-line form `path.startsWith(mod.path + path.sep)` is **wrong** in this function: the parameter `path` shadows the `path` module, so `path.sep` is `undefined` on a string and the comparison silently degrades.) The `node_modules` remainder test, the `mod.allowTransitive` short-circuit, and the `this.externals` fallback are unchanged — this fix only tightens the prefix into a boundary.
+
+**Path space — the check is deliberately lexical on BOTH sides.** `isPathAllowedForModule` calls `super.isPathAllowed(path)` first, which is where Category 24's `realpath()` lives — but that call canonicalizes into a *local* variable purely to test against `rootPaths`; it neither returns nor rewrites `path`. So the `path` and `mod.path` this boundary check sees are both the resolver's lexically-resolved paths (verified empirically: on macOS the observed path is `/tmp/…`, not the canonical `/private/tmp/…`). That symmetry is the point. Both operands come from the same resolver in the same space, so the comparison is like-for-like; canonicalizing only one side would introduce a fresh mismatch — a legitimate subpath reached through a symlinked `node_modules` would stop matching its own `mod.path` and be over-blocked. Escape *through* a symlink is a filename-space concern and is already held by the `realpath()` gate against `require.root` (Category 24), which runs first and independently. Neither check subsumes the other.
+
+### Composition with Category 45
+
+The two external-allowlist defenses are orthogonal and operate in different value spaces at different times:
+
+| | Category 45 (GHSA-c48m-32m9-vx93) | Category 46 (GHSA-7q3f-wx44-378m) |
+|---|---|---|
+| Function | `LegacyResolver.customResolve` | `LegacyResolver.isPathAllowedForModule` |
+| Space | Specifier (bare module name as written) | Filename (resolved absolute path) |
+| Timing | Before the custom resolver, before any `realpath()` | After resolution, at the authorization decision |
+| Precondition | A custom `require.resolve` is configured | None — the ordinary loader path |
+| Guards against | Lexical escape of the package *name* boundary | Escape of the package *directory* boundary |
+
+Neither weakens the other: Category 45's rejection is a `return undefined` that makes resolution fall through without appending to `this.externals`, and Category 46 only narrows an existing `true`-returning branch. A request must satisfy both, plus Category 24's `realpath()` root check, to load.
+
+### Detection Rules
+
+- `startsWith` (or `indexOf(x) === 0`) applied to a filesystem path where directory containment is intended, without a following separator test.
+- A containment guard on the *remainder* of a prefix strip (here, the `node_modules` test) being relied upon to catch cases the prefix test itself should have rejected — the remainder of a sibling match is not structurally distinguishable from the remainder of a legitimate subpath.
+- Any authorization comparison where one operand is canonicalized and the other is not.
+
+### Residual Risk
+
+- **Case-insensitive filesystems.** `.../node_modules/FOO/index.js` does not match `mod.path` of `.../node_modules/foo` and is denied. Safe direction; an embedder relying on macOS/Windows case-insensitivity gets a denial rather than a load.
+- **A genuinely nested `foo/foo2`** (a directory literally inside the allowlisted package) is still allowed, correctly — it is part of `foo`.
+- **`transitive: true` is unaffected, by design.** That option sets `mod.allowTransitive`, which short-circuits `isPathAllowedForModule` *before* the prefix check, so an allowlisted package may still load sibling directories. This is what the option means — npm flattens `node_modules`, so a genuine transitive dependency *is* a sibling — and it is unchanged before and after this fix (verified against the pre-fix control). The advisory's configuration, and the only one this fix alters, is `transitive: false`.
+- **The `this.externals` regex fallback is unchanged** and remains the authorization record for paths the resolver has already approved; this fix does not narrow it. A path appended there by Category 45's route stays allowed by design.
+
+---
+
 
 ---
 
@@ -4072,6 +4163,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | WebAssembly JSTag | `WebAssembly.JSTag` deleted from sandbox |
 | `node:test` host RCE via `run({execArgv})` (GHSA-qhwx-74w5-xhxq) | On Node 18+ `builtinModules` lists `node:test` with the `node:` prefix and `test` was not in `DANGEROUS_BUILTINS`, so `builtin: ['node:test']` admitted the real host module; `test.run({files, execArgv:['--eval=<js>']})` spawns a separate host process running attacker code (host RCE). `test` is added to `DANGEROUS_BUILTINS` (family-matched, covers `node:test/reporters`) and `isDangerousBuiltin` now strips ALL leading `node:` prefixes so `node:node:test` normalizes too — `node:test` is excluded from `'*'`, rejected on explicit allow, and absent from the builtins map. |
 | External-package allowlist bypass via unanchored matcher / `..` traversal (Category 45: GHSA-c48m-32m9-vx93) | `LegacyResolver.customResolve`'s allowlist pre-check tested the bare specifier against `externalCache` regexes built WITHOUT anchors, so `external: ['left-pad']` matched `evil-left-pad` / `left-pad-evil` / `xleft-padx` as a substring and handed the colliding host package to the custom resolver (top-level code then ran in host context). Two layers: `externalCache` is anchored `^(?:<pattern>)(?:[\\/].*)?$` so a specifier must EQUAL the allowlisted name or be a subpath under it (wildcard `*` / `**` segment semantics preserved); and, because the permitted subpath tail can itself carry traversal (`left-pad/../evil`, `left-pad/sub/../../evil` — deeper than any regex lookahead can catch), the specifier is split on `[\\/]` and rejected outright if any segment is `..`, BEFORE the resolver is consulted. Denied specifiers fall through to the standard loader, whose resolved path is never appended to `this.externals`, so `isPathAllowedForModule` denies it as module-not-found. Orthogonal to the `require.root` realpath check below, which guards resolved FILENAMES against symlinks; this one guards SPECIFIERS against lexical escape of the package boundary. |
+| External-package allowlist bypass via unanchored module-path prefix (Category 46: GHSA-7q3f-wx44-378m) | `LegacyResolver.isPathAllowedForModule` authorized a require from an allowlisted module `mod` with a raw `path.startsWith(mod.path)` and no boundary, so a prefix-sharing sibling (`.../node_modules/foo2/index.js` vs allowlisted `.../node_modules/foo`) loaded as if it were `foo`. The check now requires a path boundary after `mod.path` (exact match, trailing separator, or next char a separator), mirroring the base `CustomResolver.isPathAllowed`. |
 | WebAssembly JSPI cross-realm Promise | `WebAssembly.promising` and `WebAssembly.Suspending` deleted from sandbox; JSPI promises (sandbox allocation with host-realm `Promise.prototype` and no bridge proxy) cannot be produced, so the species channel on a cross-realm-prototype Promise is structurally unreachable |
 | WebAssembly streaming-compile cross-realm Promise (GHSA-wjwh-qqvp-g4p4 / GHSA-m3pp-qgq7-gwm6) | `WebAssembly.compileStreaming` / `instantiateStreaming` also return a host-realm-prototype Promise on Node 26; both deleted from the sandbox alongside the JSPI constructors, closing the identical species-`constructor` + `p.finally()` → raw host rejection → host `process` flow. Non-streaming `WebAssembly.compile` / `instantiate` (sandbox-realm Promises) remain. |
 | Stale `PromiseThenLookupChain` protector across `finally` (Category 43: GHSA-27g9-p43v-cw3v) | On Node 26 / V8 14.6 a direct `Promise.prototype.then = fn` assignment updates the existing data property WITHOUT invalidating the `PromiseThenLookupChain` protector, so `Promise.prototype.finally` took an internal `InvokeThen` fast path to the ORIGINAL native `then`, bypassing vm2's wrapper and its `resetPromiseSpecies` — an attacker `constructor[Symbol.species]` survived `p.finally()` on an ordinary async-function Promise and gained control of a native reaction (→ raw host `RangeError` → host `Function`). Two layers: the `then`/`catch` wrappers are installed with `localReflectDefineProperty` (`[[DefineOwnProperty]]` invalidates the protector), and `Promise.prototype.finally` is itself wrapped to run `resetPromiseSpecies(this)` before delegating to the cached native `finally`, so the species channel on `finally` is closed independently of any engine protector quirk. |

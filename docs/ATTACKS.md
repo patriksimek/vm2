@@ -3791,6 +3791,90 @@ Layer 2 is the durable one: it turns `finally` from a species-sensitive intrinsi
 
 ---
 
+## Attack Category 44: `vm.freeze()` Read-Only Bypass via Accessor Setter Leak
+
+**Uses**: [Category 6: Proxy Trap Exploitation](#attack-category-6-proxy-trap-exploitation), [Category 15: Property Descriptor Value Extraction](#attack-category-15-property-descriptor-value-extraction)
+
+### Description
+
+`vm.freeze(hostObject, name)` is documented to expose a **read-only** view of a host object to the sandbox. `ReadOnlyHandler` makes the write traps inert: `cfg.level = x` throws `'set' on proxy: trap returned falsish`, and `Object.defineProperty(cfg, ...)` / `delete cfg.level` return `false`.
+
+But when the host object carries an **accessor** property (`get` / `set`), the descriptor-read path leaks an operative setter. `BaseHandler.getOwnPropertyDescriptor` wraps both `desc.get` and `desc.set` into live, bridged functions. `ReadOnlyHandler` overrode the write *traps* but not the *descriptor read*, so the sandbox could pull the wrapped setter off the frozen proxy and call it:
+
+```javascript
+const d = Object.getOwnPropertyDescriptor(cfg, 'level');
+d.set.call(cfg, 'PWNED');                 // wrapped setter → BaseHandler.apply → raw host setter
+cfg.__lookupSetter__('level').call(cfg, 'PWNED-2');   // same descriptor, different reader
+```
+
+The wrapped setter's call lands in `BaseHandler.apply`, which unwraps `context` (the proxy) back to the raw host object and invokes the host setter on it — mutating host state through a view the embedder declared read-only. This is a **read-only contract violation / host-state write**, not (by itself) a full realm escape, but it is a capability the embedder explicitly withheld: `vm.freeze` is the API embedders reach for precisely to hand the sandbox observable-but-immutable config, and any host setter (cache invalidation, privilege flags, path allow-lists, feature toggles) becomes sandbox-writable.
+
+### Attack Flow
+
+1. Embedder exposes a host object with an accessor property via `vm.freeze(cfg, 'cfg')`, intending read-only access.
+2. Sandbox reads the property descriptor through any channel that reaches the `getOwnPropertyDescriptor` trap: `Object.getOwnPropertyDescriptor`, `Reflect.getOwnPropertyDescriptor`, `Object.getOwnPropertyDescriptors`, or `Object.prototype.__lookupSetter__`.
+3. The returned descriptor's `set` is a live bridge-wrapped function whose target is the raw host setter.
+4. Sandbox calls `desc.set.call(cfg, value)`. The apply trap forwards to the host setter with `this` = the unwrapped host object.
+5. Host state mutates; every inert write trap was bypassed because no write trap was on the path.
+
+### Canonical Examples
+
+```javascript
+const cfg = {
+    _level: 'safe',
+    get level() { return this._level; },
+    set level(v) { this._level = v; },
+};
+const vm = new VM();
+vm.freeze(cfg, 'cfg');
+
+vm.run(`
+    // Channel 1 — Object.getOwnPropertyDescriptor
+    Object.getOwnPropertyDescriptor(cfg, 'level').set.call(cfg, 'PWNED-a');
+    // Channel 2 — __lookupSetter__ (reads the same descriptor)
+    cfg.__lookupSetter__('level').call(cfg, 'PWNED-b');
+    // Channel 3 — Reflect.getOwnPropertyDescriptor
+    Reflect.getOwnPropertyDescriptor(cfg, 'level').set.call(cfg, 'PWNED-c');
+    // Channel 4 — Object.getOwnPropertyDescriptors (bulk)
+    Object.getOwnPropertyDescriptors(cfg).level.set.call(cfg, 'PWNED-d');
+`);
+// Before the fix: cfg._level === 'PWNED-d'. Direct cfg.level = x stayed blocked,
+// masking the leak from write-trap-only tests.
+```
+
+### Why It Works
+
+`ReadOnlyHandler` inherited `BaseHandler.getOwnPropertyDescriptor` unchanged. That method's job is realm-crossing fidelity, not policy: it faithfully wraps whatever `get` / `set` the host descriptor has so the sandbox sees a working accessor. Read-only policy lived only in the `set` / `defineProperty` / `deleteProperty` traps — the *direct* write paths. The descriptor-read path is an *indirect* write path: it hands the sandbox a callable that, when invoked, routes through `apply` (an unguarded-for-read-only trap) to the host setter. `__lookupSetter__`, `Reflect.getOwnPropertyDescriptor`, and `Object.getOwnPropertyDescriptors` are all readers of the same descriptor, so all four share the single leak.
+
+The getter side (`desc.get`, `__lookupGetter__`) is **not** a violation — reads are permitted under the read-only contract — so the fix must be asymmetric: neutralize `set`, preserve `get`.
+
+### Mitigation
+
+`ReadOnlyHandler.getOwnPropertyDescriptorDesc` (the descriptor hook `BaseHandler.getOwnPropertyDescriptor` invokes *before* wrapping `get` / `set`) is overridden to drop the `set` accessor from every host-side descriptor on the sandbox→host direction (`!isHost`). With `desc.set` removed before wrapping, the descriptor the sandbox receives is a getter-only accessor: `desc.get` still works, `desc.set === undefined`. Because all four extraction channels funnel through the same `getOwnPropertyDescriptor` trap → same hook, one override closes every channel simultaneously. A setter-only accessor collapses to `{ value: undefined, writable: false }`, which carries no write capability and reads as `undefined` — consistent with read-only semantics.
+
+The tightening is `ReadOnly`-specific: `BaseHandler` (non-frozen exposed host objects) is untouched, so an accessor on an ordinary `sandbox: { cfg }` object still exposes an operative setter, exactly as before.
+
+The same hook must also govern the *other* writer of the proxy target. `doPreventExtensions` copies own descriptors onto the proxy target so V8's non-configurable-property invariant can be checked, and it originally wrapped `get` / `set` directly instead of going through the hook. That left a live `set` on the target while the trap reported `set: undefined`, so the first `isExtensible` / `preventExtensions` / `Object.keys` on a frozen object holding a **non-configurable** accessor tripped V8's "trap returned descriptor ... incompatible with the existing property" `TypeError` and poisoned spread, `Object.assign` and `JSON.stringify` on that object. `doPreventExtensions` now routes each copied descriptor through `handler.getOwnPropertyDescriptorDesc(...)` before defining it, so target and trap agree for every handler variant (`BaseHandler` leaves `set` intact and is unaffected). The non-configurable accessor branch rebuilds a clean accessor-only descriptor, because the hook can leave a stray `value` on function `caller` / `arguments` / `callee` and `defineProperty` rejects a descriptor carrying both an accessor and a value.
+
+Note that `Object.freeze` on a read-only proxy still throws ("trap returned falsish"): `defineProperty` is inert on a read-only view. That is pre-existing read-only behavior for any frozen object with properties, not a consequence of this fix.
+
+### Detection Rules
+
+- **`Object.getOwnPropertyDescriptor(frozen, k).set` / `.__lookupSetter__(k)` returning a callable inside the sandbox** — a read-only view must never yield an operative setter.
+- **`desc.set.call(frozen, v)` / `setter.call(frozen, v)` pattern in sandbox code** — indirect write through a leaked accessor setter.
+- **`Object.getOwnPropertyDescriptors(frozen)` / `Reflect.getOwnPropertyDescriptor(frozen, k)` feeding a later `.set(...)` call** — bulk / Reflect variants of the same leak.
+- **Any new read-only handler that overrides write *traps* but inherits `getOwnPropertyDescriptor`** — descriptor reads are an indirect write path and must be neutralized alongside the direct traps.
+
+### Considered Variants
+
+- **Getter side (`desc.get`, `__lookupGetter__`)** — intentionally left operative; reads are permitted under the read-only contract. Over-blocking here would break the documented `vm.freeze` read behavior.
+- **Data-property `writable` flag** — a data descriptor's `writable: true` is cosmetic under ReadOnly, not a channel: writing `frozen.k = v` still routes through the inert `set` trap. Only the *callable* `set` accessor is a real write primitive, so only it is stripped.
+- **`ReadOnlyMockHandler`** — extends `ReadOnlyHandler`, so it inherits the override; the `readonly` API is covered by the same fix.
+
+---
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -3882,6 +3966,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 24. **Promise Species Hijack + Stack-Overflow Realm Skew** [Categories 4, 7, 18, 29, 31] (NOW FIXED): `class FakePromise extends Promise { static get [Symbol.species]() { return ct } }` reroutes the swallow-tail child constructor inside `localPromise` to a sandbox-controlled `ct`. `ct` rebinds V8's internal `(resolve, reject)` capability to a sandbox collector; trigger a host-realm `RangeError` via `e.stack` after deep recursion (binary-searched depth) inside the downstream chain; V8's `PromiseResolveThenableJob` delivers the raw host Error to the collector — `ex.constructor.constructor("return process")()` then yields RCE. Closed by adding `resetPromiseSpecies(this)` immediately before the swallow-tail `apply(globalPromisePrototypeThen, this, ...)` call so the species protocol always resolves to `localPromise` regardless of the user's subclass `Symbol.species` override.
 25. **WebAssembly JSPI Cross-Realm Promise + Species Hijack** [Categories 3, 7, 33] (NOW FIXED): JSPI returns a sandbox-realm Promise with host-realm `Promise.prototype` in its `[[Prototype]]` chain — bypassing both the sandbox-side `.then`/`.catch` overrides and the bridge `apply`-trap callback wrapping. Install `Object.defineProperty(p, 'constructor', {get(){return F}})` directly on the raw object; `p.finally(()=>{})` calls host `Promise.prototype.finally`, whose internal SpeciesConstructor reads F and dispatches the eventual host-realm rejection (host `TypeError` from `WebAssembly.compileStreaming(Promise.resolve(0))`) through F's reject closure with **no bridge wrapping**. `e.constructor.constructor("return process")()` evaluates in host realm because `Function.[[Realm]]` is host → RCE. Closed by deleting `WebAssembly.promising` and `WebAssembly.Suspending` at sandbox bootstrap, mirroring the `WebAssembly.JSTag` removal.
 26. **Stale Engine Protector + Species Hijack + Stack-Overflow Realm Skew** [Categories 3, 4, 7, 43] (NOW FIXED): On Node 26 / V8 14.6, vm2's `Promise.prototype.then`/`catch` overrides were installed by plain assignment, which left the `PromiseThenLookupChain` protector valid; `p.finally()` on an ordinary `(async () => 1)()` Promise took the `InvokeThen` fast path to the native `then` and never entered vm2's wrapper, so `resetPromiseSpecies` never ran. An own `constructor` with `Symbol.species` pointing at a sandbox class then received the native reaction's resolve/reject; driving that reaction into a calibrated stack overflow delivered a raw host-realm `RangeError` to the attacker's reject closure → `e.constructor.constructor` → host `Function` → host `process`, with `eval: false` and `wasm: false`. Closed by installing the wrappers via `Reflect.defineProperty` (which invalidates the protector) and by wrapping `Promise.prototype.finally` to run `resetPromiseSpecies(this)` before the cached native call.
+27. **Read-Only View Setter Leak via Descriptor Extraction** [Categories 6, 15, 44] (NOW FIXED): `vm.freeze(cfg, 'cfg')` exposes a host object with an accessor property. The direct write traps (`set` / `defineProperty` / `deleteProperty`) are inert, but `Object.getOwnPropertyDescriptor(cfg, 'level').set` (or `__lookupSetter__`, `Reflect.getOwnPropertyDescriptor`, `Object.getOwnPropertyDescriptors`) returns a live bridge-wrapped host setter. `desc.set.call(cfg, value)` routes through `BaseHandler.apply` onto the unwrapped host object, mutating host state through a read-only view. Closed by overriding `ReadOnlyHandler.getOwnPropertyDescriptorDesc` to strip the `set` accessor before it is wrapped, leaving the getter operative — a single hook that closes all four descriptor-read channels.
 
 ### How The Bridge Defends
 
@@ -3905,6 +3990,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Monkey-patching | Uses cached `Reflect.*` methods, not prototype methods |
 | Transformer bypass | Validates against internal variable name patterns |
 | Dynamic import | Throws `VMError` unconditionally |
+| `vm.freeze` accessor setter leak | `ReadOnlyHandler.getOwnPropertyDescriptorDesc` strips `set` from every descriptor before wrapping (GHSA-633r-hq9m-c4ff); `getOwnPropertyDescriptor` / `__lookupSetter__` / `Reflect.getOwnPropertyDescriptor` / `Object.getOwnPropertyDescriptors` yield getter-only descriptors, getter preserved; `doPreventExtensions` routes copied descriptors through the same hook so the proxy target stays consistent with the trap |
 | Prototype trap pollution | Handlers use null-prototype objects |
 | Cross-realm symbols | Bridge proxy traps filter dangerous symbols; sandbox overrides reflection APIs. `isDangerousCrossRealmSymbol` (bridge.js) / `isDangerousSymbol` (setup-sandbox.js) flag any REGISTERED symbol whose `Symbol.keyFor` is in the reserved `nodejs.` namespace — a namespace catch-all (not a fixed list) so extraction and write-traps block current AND future `nodejs.*` internals (e.g. stream brand/state `nodejs.stream.{readable,…,disturbed,errored}`) without going stale; well-known symbols and benign registered symbols still cross (GHSA-m5q2-4fm3-vfqp, GHSA-jf8q-945g-9q4c) |
 | Host built-in identity leak | `thisAddIdentityMapping` pre-caches every well-known prototype + constructor in `mappingOtherToThis`/`mappingThisToOther`; cache check in `thisFromOtherWithFactory` short-circuits before wrapping. Function-family prototypes intentionally NOT cached so the dangerous-constructor sentinel still fires. |

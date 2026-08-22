@@ -1599,9 +1599,23 @@ vm.run(`
 `, 'poc.js');
 ```
 
+```javascript
+// (advisory GHSA-8686-vhfx-7r3j) — `node:`-spelled deny token is a no-op
+const vm = new NodeVM({
+  require: { builtin: ['*', '-node:child_process'] }
+});
+vm.run(`
+  // Neither spelling was denied: the deny token never matched anything.
+  const cp = require('child_process');        // also: require('node:child_process')
+  module.exports = cp.execSync('id').toString();
+`, 'poc.js');
+```
+
 ### Why It Works
 
 The user's mental model of `['*', '-child_process']` is "every builtin except `child_process`". That model assumes every builtin is either fully sandboxed or fully blocked — but `module` (and its peers above) are neither. They're *meta-builtins* that load other builtins by name. The generic `vm.readonly()` wrapper cannot make them safe because the sandbox-bypass primitive is the very thing the user is calling.
+
+A second, quieter failure of the same mental model is **spelling**. `require()` accepts a builtin under two names — `child_process` and `node:child_process` — and the resolver normalizes the `node:` prefix away before loading. The `'*'` wildcard expansion did not: it matched negative deny tokens against `BUILTIN_MODULES` by exact string, and `BUILTIN_MODULES` holds only canonical names. So `-node:child_process` matched nothing, denied nothing, and produced no warning — the embedder read their config as a denial while the sandbox got the full host module. A deny token that silently does nothing is worse than one that errors: the misconfiguration is invisible in review.
 
 ### Mitigation
 
@@ -1611,6 +1625,8 @@ Three-layer denylist enforcement in `lib/builtin.js` (restores **[Invariant 13 �
 2. **Family-prefix check** via `isDangerousBuiltin(key)` — any `<family>/...` whose family is in the denylist is also blocked (e.g. `inspector/promises`, future `inspector/foo`, hypothetical `process/foo`, `module/foo`). The check also strips the optional `node:` URL-style prefix so `node:process` and `node:inspector/promises` are caught.
 3. **Filter from `BUILTIN_MODULES`** — closes the `'*'` wildcard expansion path. `'*'` will never auto-allow these names regardless of the user's exclusion list.
 4. **Reject in `addDefaultBuiltin`** — closes the explicit-allowlist path (`builtin: ['module']`, `builtin: ['process']`, `builtin: ['inspector/promises']`) and the lower-level `makeBuiltins([...])` API used by custom resolvers. The `SPECIAL_MODULES` escape hatch is preserved: a future safe wrapper (e.g. a `module` shim that exposes only `builtinModules` metadata) can be registered there if a real consumer needs it.
+
+5. **Deny-token `node:` normalization** (GHSA-8686-vhfx-7r3j) — the `'*'` wildcard's negative-token check in `makeBuiltinsFromLegacyOptions` now tests both `-${name}` and `-node:${name}`, so the two spellings of a deny token are equivalent and either one denies both spellings of the module. This is the deny-side mirror of the `node:`-prefix stripping the resolver and `isDangerousBuiltin` already do on the require side. It only ever *removes* a builtin the exact-match check would have added, so no previously-allowed module becomes unreachable.
 
 The fix does not affect the `mocks` / `overrides` escape hatches — users who genuinely need a stub for one of these names can register a sandbox-safe replacement.
 
@@ -1634,11 +1650,12 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 - **`require('process').binding('spawn_sync')` / `.dlopen(module, path)`** — raw C++ binding surface and native add-on loader.
 - **`trace_events.createTracing({categories: [...]})`** — host process abort via C++ assertion failure.
 - **`new (require('wasi').WASI)({...})`** — preview1 syscall surface.
+- **`builtin: ['*', '-node:X']`** — a `node:`-prefixed deny token. Historically a silent no-op that denied nothing; now equivalent to `-X`. Configs written this way were never enforcing what they appeared to.
 
 ### Considered Attack Surfaces
 
 - **`async_hooks`, `diagnostics_channel`, `perf_hooks`, `v8`** are now denied as process-wide observability primitives — see [Category 30](#attack-category-30-nodevm-process-wide-observability-builtins-host-data-info-leak). They expose host-process state rather than host-code-loading primitives, but are functionally identical from the embedder's perspective: any allowlist that includes them leaks per-request user data, auth tokens, and heap contents into the sandbox.
-- **`child_process`** is NOT on the auto-denylist because users may legitimately want it for trusted scripts (e.g., dev tooling running known scripts in vm2 for hot-reload isolation). For untrusted code, `child_process` is a full-host-RCE primitive — embedders MUST exclude it explicitly (`['*', '-child_process']`) or, better, use an explicit allowlist of just the modules they need. The README's "Hardening recommendations" section calls this out.
+- **`child_process`** is NOT on the auto-denylist because users may legitimately want it for trusted scripts (e.g., dev tooling running known scripts in vm2 for hot-reload isolation). For untrusted code, `child_process` is a full-host-RCE primitive — embedders MUST exclude it explicitly (`['*', '-child_process']`, or equivalently `['*', '-node:child_process']` since GHSA-8686-vhfx-7r3j) or, better, use an explicit allowlist of just the modules they need. The README's "Hardening recommendations" section calls this out.
 - **`fs`** is allowed under `'*'` because file-system access can be a legitimate sandbox capability for many use cases (e.g., user-script template engines reading templates). Users who want filesystem isolation use `VMFileSystem` or exclude `fs` explicitly. Same caveat as `child_process` — `'*'` is not sandbox-safe for untrusted code.
 - **`dgram`, `net`, `http`, `https`, `dns`** are network-IO builtins, allowed under `'*'`. Any of them give untrusted code outbound network access from the host. Embedders should explicitly exclude or allowlist.
 
@@ -3688,6 +3705,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Bridge `set` trap ignores spec `Receiver` (GHSA-c4cf-2hgv-2qv6) | `BaseHandler.set` gates host-write forwarding on `receiver === mappingOtherToThis.get(object)`; non-canonical receivers (inherited-receiver writes via `Object.create(proxy)`, forged-receiver `Reflect.set` calls, `Object.assign(child, src)` loops) install on `receiver` via `Reflect.defineProperty`, mirroring `ReadOnlyHandler.set` |
 | NodeVM builtin denylist bypass via `process` / `inspector/promises` (GHSA-rp36-8xq3-r6c4) | `DANGEROUS_BUILTINS` extended to include `process`; matching promoted to family-prefix via `isDangerousBuiltin(key)` so subpath builtins (`inspector/promises`, future `inspector/*`, `process/*`, `module/*`) share fate with their canonical name. `node:` URL prefix stripped before lookup. Enforced at both `BUILTIN_MODULES` source and `addDefaultBuiltin`. Supersedes the GHSA-947f-4v7f-x2v8 exact-match mitigation. |
 | NodeVM wildcard exposes underscored network builtins (GHSA-r9pm-gxmw-wv6p) | `BUILTIN_MODULES` filter in `lib/builtin.js` now excludes any name starting with `_`; `'*'` no longer expands to `_http_client`/`_http_server`/`_tls_wrap`/`_stream_*` etc. Explicit opt-in (`builtin: ['_http_client']`) and `mock`/`override` paths still work via `addDefaultBuiltin`. |
+| NodeVM `node:`-prefixed negative deny token no-op (GHSA-8686-vhfx-7r3j) | The `builtin: ['*']` wildcard expansion in `makeBuiltinsFromLegacyOptions` matched negative deny tokens by exact string, so `-node:child_process` never equalled `-child_process` and silently denied nothing — leaving host `child_process` (RCE) exposed. The deny check now matches both spellings (`-${name}` and `-node:${name}`), mirroring how the resolver already normalizes the `node:` prefix on the require side. Benign builtins remain available; the canonical `-child_process` token is unchanged. |
 | NodeVM process-wide observability builtins (GHSA-9g8x-92q2-p28f, GHSA-m5w8-4gq2-6f8x) | `DANGEROUS_BUILTINS` denylist extended with `diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8` and (GHSA-m5w8-4gq2-6f8x) `os`, `dns`; filtered out of `BUILTIN_MODULES` (closes `'*'` wildcard) and rejected in `addDefaultBuiltin` via `isDangerousBuiltin` (closes explicit allowlist and `makeBuiltins([...])`). `node:` prefix normalized and family-prefix subpath matching applied (covers `node:os`, `node:dns`, `dns/promises`). `os.setPriority` / `dns.setServers` / `dns.setDefaultResultOrder` host-process writes closed alongside the read leaks. `mocks`/`overrides` escape hatch preserved for sandbox-local replacements |
 | Host-Promise rejection sanitizer bypass via `call`/`apply` indirection (GHSA-647f-g98j-qq25) | The direct-target-only apply-trap gate is replaced by `normalizeHostPromiseCallbacks` in `lib/bridge.js`, which peels `Function.prototype.call`/`.apply` indirection (including stacked and mixed nestings) to the effective host `then`/`catch` and wraps the callbacks through `makeSanitizedPromiseCallback`, so the GHSA-m283 rejection rebuild runs regardless of invocation shape. `.apply` nested argument arrays are snapshotted into fresh getter-free storage (TOCTOU-safe) before write-back; the peel is bounded (`MAX_PROMISE_PEEL = 64`) and throws `VMError` on exceed rather than forwarding an unwrapped callback (fail-closed). `bind` and `Reflect.apply` re-enter the trap with the direct target and were already covered. |
 | Host-authority builtin members survive the read-only wrap (GHSA-46pr-c5wc-xffx, GHSA-6w8r-xxw2-g3hx, GHSA-98xx-8mx4-x7cm, GHSA-h85j-hv3c-qfgq) | `vm.readonly()` blocks property *assignment* but forwards every *call* with host authority, so `lib/builtin.js` applies `sanitizeBuiltinMembers(key, mod)` (table: `BUILTIN_MEMBER_SANITIZERS`, `node:` prefix stripped so both spellings share fate) *before* the wrap, returning a shallow copy with only the escaping member neutralized: `crypto.setEngine` and `tls.setDefaultCACertificates` become throwing stubs (native library loading via the OS dynamic loader; process-wide CA trust-store replacement); `node:sqlite`'s `DatabaseSync` is subclassed to force `allowExtension` off for object- **and function-typed** options args, so Node throws `ERR_INVALID_STATE` from `loadExtension()`/`enableLoadExtension()`; `http`/`https` `globalAgent` is replaced with a sandbox-dedicated `Agent`, with `request()`/`get()` defaulting to it so `req.agent` cannot re-expose the host singleton. Member-level neutralization complements the whole-module `DANGEROUS_BUILTINS` denylist — the useful parts of each builtin stay available. `lib/setup-node-sandbox.js` also rejects repeated `node:` prefixes (the `node:node:sqlite` alias) and falls back to the full `node:`-prefixed builtin-map key so canonical `require('node:sqlite')` resolves. |

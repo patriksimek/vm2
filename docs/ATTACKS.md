@@ -3608,6 +3608,73 @@ This complements the existing whole-module `DANGEROUS_BUILTINS` denylist (`modul
 
 ---
 
+## Attack Category 41: Shared Buffer Pool Discloses / Corrupts Host Memory
+
+**Uses**: [Category 15: Property Descriptor Value Extraction](#attack-category-15-property-descriptor-value-extraction) (in spirit — a getter, `Uint8Array.prototype.buffer`, hands back more than the sandbox should see)
+
+**Advisory**: GHSA-fcqc-726x-5wfc. CWE-200 (Information Exposure) + CWE-787 (Out-of-bounds Write). This is a **confidentiality + integrity** escape, not a DoS — distinct from the `bufferAllocLimit` DoS categories (23, 36) that share the `Buffer.*` chokepoint.
+
+### Description
+
+Node serves small `Buffer.from(...)`, `Buffer.concat(...)`, `Buffer.of(...)`, `Buffer.copyBytesFrom(...)` and `Buffer.allocUnsafe(...)` allocations out of **one shared backing `ArrayBuffer`** of `Buffer.poolSize` bytes (64 KiB on modern Node; 8 KiB on Node 8). Many small buffers are packed into that single pool at different `byteOffset`s. A pooled buffer's `.buffer` getter (`Uint8Array.prototype.buffer`) returns the **whole pool** — not just the buffer's own slice. Any host-realm buffer that happens to share the pool (`Buffer.from(secret)`, DB rows, session tokens, decrypted material) is therefore both **readable and writable** from inside the sandbox:
+
+```javascript
+const ab = Buffer.from([0]).buffer;                 // the ENTIRE 64 KiB pool ArrayBuffer
+const view = Buffer.from(ab, 0, ab.byteLength);     // a Buffer over every pooled byte
+view.toString('latin1');                            // DISCLOSE neighbouring host buffers
+view.fill(0x41);                                    // CORRUPT them
+```
+
+`Buffer.from([0]).buffer.byteLength === 65536` inside the sandbox proved the leak: the returned ArrayBuffer is 64 KiB while the buffer is 1 byte. The `.buffer` reference never crosses a capability check — it is an ordinary getter on a bridge-proxied Uint8Array — so the bridge's realm isolation does not help: the bytes it exposes are genuinely the sandbox's to touch *and* everyone else's that landed in the same pool.
+
+### Attack Flow
+
+1. Host code (embedder or a Node-internal on the same tick) creates a small buffer holding a secret; Node places it in the shared pool.
+2. Sandbox allocates any small buffer via a pooling factory (`Buffer.from([0])`).
+3. Sandbox reads `.buffer` → the full pool ArrayBuffer.
+4. Sandbox builds a full-width view with the `Buffer.from(arrayBuffer, 0, byteLength)` overload (which legitimately shares the passed ArrayBuffer).
+5. Sandbox reads the view (disclosure) or writes it (corruption), reaching every byte of every buffer currently pooled.
+
+### Canonical Examples
+
+```javascript
+// Disclosure
+const secret = Buffer.from('SESSION=deadbeef');   // host, lands in pool
+new VM().run(`
+    const pool = Buffer.from([0]).buffer;
+    Buffer.from(pool, 0, pool.byteLength).toString('latin1');  // contains SESSION=deadbeef
+`);
+
+// Corruption
+new VM().run(`
+    const pool = Buffer.from([0]).buffer;
+    Buffer.from(pool, 0, pool.byteLength).fill(0x41);          // overwrites host buffers
+`);
+```
+
+### Why It Works
+
+`Buffer.from(array | string | typedarray | arrayLike)`, `Buffer.concat`, `Buffer.of`, and `Buffer.copyBytesFrom` return **pool-backed** buffers (`byteOffset !== 0` and/or `buffer.byteLength === poolSize`). The `bufferAllocLimit` chokepoint (Categories 23/36) only guarded *how many bytes* these factories allocate; it never constrained *which backing store* they return. `Buffer.alloc` / `allocUnsafe` / `allocUnsafeSlow` were already safe here only incidentally — the sandbox wrappers route them to the non-pooled `LocalBuffer.alloc`.
+
+### Mitigation
+
+`lib/setup-sandbox.js` enforces a **backing-store ownership invariant**: a buffer handed to the sandbox must own its entire backing store — `byteOffset === 0` **and** `buffer.byteLength === length`. Then `.buffer` can reveal nothing beyond the buffer's own bytes.
+
+- `depoolBuffer(buf)` returns `buf` when it already owns an exact-size backing store, otherwise copies it into a standalone `LocalBuffer.alloc(n)` (non-pooled, zero-filled, byteOffset 0) via the raw host `Buffer.prototype.copy` primitive.
+- Applied at every sandbox-facing pooling factory: `bufferFrom` (the non-ArrayBuffer overloads), `concat`, `copyBytesFrom`, a new `bufferOf` wrapper, and the deprecated `Buffer(...)` / `new Buffer(...)` call forms (`BufferHandler` now routes its non-numeric path through `bufferFrom`).
+- The `Buffer.from(arrayBuffer | sharedArrayBuffer, byteOffset, length)` **sharing** overload is preserved (copying it would break the documented shared-memory contract). It is detected by a spoof-proof brand test — `apply`ing the captured `ArrayBuffer.prototype`/`SharedArrayBuffer.prototype` `byteLength` getter, whose internal-slot check a sandbox cannot fake. This is safe because, once small allocations no longer pool, the only ArrayBuffer a sandbox can pass is one it already owns, and every sandbox buffer's `.buffer` is now exact-size — so the shared view can only ever span the sandbox's own bytes.
+
+Views derived from a depooled buffer (`slice`, `subarray`, `map`, `filter`, species-constructed results) are safe: they either view the parent's now-exact-size, sandbox-owned backing store, or are freshly constructed through the Category-36-capped TypedArray constructors. No copy is needed for them.
+
+### Detection Rules
+
+- `Buffer.from([0]).buffer.byteLength !== 1` inside a sandbox → pooling leak is open.
+- Any sandbox-facing `Buffer`/typed-array factory whose result has `byteOffset !== 0` or `buffer.byteLength !== length`.
+- Reading `.buffer` on a pooled buffer and passing it to the `Buffer.from(ab, off, len)` overload.
+- New `Buffer.*` factories in future Node versions must be checked for pool-backing, not just alloc-size (the `BUFFER_STATIC_CLASSIFIED` fail-closed gate from Category 23 catches *unclassified* methods, but a method classified SAFE for alloc-size could still return a pooled buffer — reclassify with pooling in mind).
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -3749,6 +3816,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | NodeVM process-wide observability builtins (GHSA-9g8x-92q2-p28f, GHSA-m5w8-4gq2-6f8x) | `DANGEROUS_BUILTINS` denylist extended with `diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8` and (GHSA-m5w8-4gq2-6f8x) `os`, `dns`; filtered out of `BUILTIN_MODULES` (closes `'*'` wildcard) and rejected in `addDefaultBuiltin` via `isDangerousBuiltin` (closes explicit allowlist and `makeBuiltins([...])`). `node:` prefix normalized and family-prefix subpath matching applied (covers `node:os`, `node:dns`, `dns/promises`). `os.setPriority` / `dns.setServers` / `dns.setDefaultResultOrder` host-process writes closed alongside the read leaks. `mocks`/`overrides` escape hatch preserved for sandbox-local replacements |
 | Host-Promise rejection sanitizer bypass via `call`/`apply` indirection (GHSA-647f-g98j-qq25) | The direct-target-only apply-trap gate is replaced by `normalizeHostPromiseCallbacks` in `lib/bridge.js`, which peels `Function.prototype.call`/`.apply` indirection (including stacked and mixed nestings) to the effective host `then`/`catch` and wraps the callbacks through `makeSanitizedPromiseCallback`, so the GHSA-m283 rejection rebuild runs regardless of invocation shape. `.apply` nested argument arrays are snapshotted into fresh getter-free storage (TOCTOU-safe) before write-back; the peel is bounded (`MAX_PROMISE_PEEL = 64`) and throws `VMError` on exceed rather than forwarding an unwrapped callback (fail-closed). `bind` and `Reflect.apply` re-enter the trap with the direct target and were already covered. |
 | Host-authority builtin members survive the read-only wrap (GHSA-46pr-c5wc-xffx, GHSA-6w8r-xxw2-g3hx, GHSA-98xx-8mx4-x7cm, GHSA-h85j-hv3c-qfgq) | `vm.readonly()` blocks property *assignment* but forwards every *call* with host authority, so `lib/builtin.js` applies `sanitizeBuiltinMembers(key, mod)` (table: `BUILTIN_MEMBER_SANITIZERS`, `node:` prefix stripped so both spellings share fate) *before* the wrap, returning a shallow copy with only the escaping member neutralized: `crypto.setEngine` and `tls.setDefaultCACertificates` become throwing stubs (native library loading via the OS dynamic loader; process-wide CA trust-store replacement); `node:sqlite`'s `DatabaseSync` is subclassed to force `allowExtension` off for object- **and function-typed** options args, so Node throws `ERR_INVALID_STATE` from `loadExtension()`/`enableLoadExtension()`; `http`/`https` `globalAgent` is replaced with a sandbox-dedicated `Agent`, with `request()`/`get()` defaulting to it so `req.agent` cannot re-expose the host singleton. Member-level neutralization complements the whole-module `DANGEROUS_BUILTINS` denylist — the useful parts of each builtin stay available. `lib/setup-node-sandbox.js` also rejects repeated `node:` prefixes (the `node:node:sqlite` alias) and falls back to the full `node:`-prefixed builtin-map key so canonical `require('node:sqlite')` resolves. |
+| Shared Buffer pool discloses/corrupts host memory (GHSA-fcqc-726x-5wfc) | `depoolBuffer` in `lib/setup-sandbox.js` enforces backing-store ownership (`byteOffset === 0 && buffer.byteLength === length`): every pooling factory (`Buffer.from` non-ArrayBuffer overloads, `concat`, `of`, `copyBytesFrom`, deprecated `Buffer(...)`/`new Buffer(...)`) copies a pool-backed result into a standalone non-pooled `LocalBuffer.alloc(n)` before it reaches the sandbox, so `.buffer` can never expose Node's shared 64 KiB pool (neighbouring host buffers). The `Buffer.from(arrayBuffer, off, len)` sharing overload is preserved, detected via a spoof-proof `ArrayBuffer.prototype.byteLength`-getter brand test |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

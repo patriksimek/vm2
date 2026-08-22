@@ -3875,6 +3875,77 @@ Note that `Object.freeze` on a read-only proxy still throws ("trap returned fals
 
 ---
 
+## Attack Category 45: NodeVM External-Package Allowlist Bypass via Unanchored Matcher and `..` Traversal
+
+**Related**: [Category 21: NodeVM Builtin Allowlist Bypass via Host-Passthrough Builtins](#attack-category-21-nodevm-builtin-allowlist-bypass-via-host-passthrough-builtins) (the *builtin* allowlist; this category is the *external package* allowlist), [Category 24: NodeVM `require.root` Symlink Bypass (Path Check/Use TOCTOU)](#attack-category-24-nodevm-requireroot-symlink-bypass-path-checkuse-toctou) (the filename-side boundary check this specifier-side check composes with)
+
+### Description
+
+`NodeVM`'s `require.external` option names the npm packages sandbox code may load. When it is combined with a custom resolver (`require.resolve`) — the common shape in plugin hosts, user-script platforms, and multi-tenant sandboxes, where the embedder points resolution at the application's own dependency directory — `LegacyResolver.customResolve` decides whether to consult that resolver by testing the **bare specifier** against `this.externalCache`.
+
+Those regexes were built by `makeExternalMatcherRegex(pattern)` with **no anchors**. `external: ['left-pad']` compiled to `/left\-pad/`, which `.test()` matches anywhere in the string. Any specifier merely *containing* the allowlisted name therefore passed the pre-check. The resolver was then consulted, the returned path was pushed onto `this.externals` (making it permanently allowed), and with the default `context: 'host'` the package's top-level code was executed by the host `require()` — outside every sandbox restriction the embedder configured, including `builtin: []`.
+
+Anchoring alone is not sufficient. The matcher must permit a subpath tail (`left-pad/utils` is a legitimate require), and a permitted tail can itself carry `..` segments that walk back out of the package directory under ordinary path semantics. `left-pad/../evil-package` satisfies `^left-pad[\\/].*$` yet resolves to a sibling package that was never allowlisted, restoring the original impact in full.
+
+CWE-863 (Incorrect Authorization). CWE-706 (Use of Incorrectly-Resolved Name or Reference). CWE-829 (Inclusion of Functionality from Untrusted Control Sphere).
+
+### Attack Flow
+
+1. **Embedder configures a narrow allowlist plus a custom resolver** — `new NodeVM({ require: { external: ['left-pad'], resolve: id => require.resolve(id, {paths: [appDeps]}), builtin: [], context: 'host' } })`. The intended policy is "only `left-pad`".
+2. **Sandbox requires a colliding or traversing specifier** — `require('evil-left-pad')` (substring collision) or `require('left-pad/../evil-package')` (traversal out of the package boundary).
+3. **The unanchored / tail-permissive pre-check passes**, so `customResolve` calls the embedder's resolver with the attacker's specifier.
+4. **The resolver locates a real file** — the colliding package is present in the application's dependency directory (plugin upload dir, private-registry mirror, user-controllable `node_modules`), or the traversal lands on any sibling package already installed there.
+5. **`customResolve` pushes the resolved path onto `this.externals`** and calls `loadNodeModules`, so `isPathAllowedForModule` now approves it.
+6. **Host `require()` executes the module's top-level code in host context** → host `child_process`, host `fs`, host env/secrets. Sandbox escape.
+
+### Canonical Example
+
+```javascript
+// Embedder: allowlist is exactly one package, no builtins.
+new NodeVM({require: {external: ['left-pad'], builtin: [], context: 'host',
+                      resolve: id => require.resolve(id, {paths: [appDeps]})}});
+
+// Sandbox — both reach an un-allowlisted host package:
+require('evil-left-pad');            // substring collision: /left\-pad/ matches
+require('left-pad/../evil-package'); // traversal: matches ^left-pad[\/].*$
+```
+
+### Why This Works
+
+`externalCache` is a *pre-check* whose only job is to decide whether the embedder's resolver is trusted to speak for this specifier. It was written as a containment test rather than an identity test, so it answered "does the allowlist appear in this name" instead of "is this name the allowlisted package". Package names are an unstructured namespace an attacker can populate freely, so containment is not a boundary. The traversal variant is the same failure one level down: the pre-check treated everything after the first separator as opaque, but the loader interprets it as a path with `..` semantics — the classic check/use disagreement, here between a string matcher and `path.resolve`.
+
+A regex-only fix does not close the traversal: a negative lookahead such as `(?:[/](?!\.\.).*)?$` only rejects `..` immediately after the *first* separator. `left-pad/sub/../evil` keeps `sub` in that position and passes.
+
+### Mitigation
+
+Two composed layers in `lib/resolver-compat.js`, restoring the external-allowlist boundary:
+
+1. **Anchor the matcher** (`LegacyResolver` constructor) — `externalCache` entries are built as `^(?:<pattern>)(?:[\\/].*)?$`. A bare specifier must *equal* the allowlisted name, or be that name followed by a separator and a subpath. Wildcard semantics inside `<pattern>` are untouched (`*` → `[^/]*`, `**` → `.*`), so `@scope/*` still matches `@scope/pkg` and `@scope/pkg/sub` but no longer matches `x@scope/pkg` or `@scope-evil/pkg`. `this.externals` (the *filename*-side matcher, built by `makeExternalMatcher`) is deliberately not changed — it matches resolved absolute paths, a different namespace.
+2. **Reject `..` path segments** (`LegacyResolver.customResolve`) — after the anchored check passes and only on the bare-specifier branch (`!pathIsAbsolute(x) && !pathIsRelative(x)`), the specifier is split on `[\\/]` and rejected if any segment is exactly `..`. Segment-splitting rather than substring search is what makes this depth-independent, and it deliberately does not reject names that merely *contain* dots (`lodash.merge`, `..foo` as a package name component is not a `..` segment).
+
+**Ordering — the `..` check runs on the raw, un-canonicalized specifier, before the resolver and therefore long before any `realpath()`.** This is the only correct placement. Canonicalization *removes* `..` segments by definition, so a lexical `..` check placed after `realpath()` would be a guaranteed no-op. The two checks defend different things and must both exist: this one is a *specifier*-space check that keeps a request from ever escaping the allowlisted package's name boundary; `CustomResolver.isPathAllowed`'s `realpath()` (Category 24, GHSA-cp6g-6699-wx9c) is a *filename*-space check that keeps a resolved file from escaping `require.root` through a symlink, which no lexical inspection can see. Neither subsumes the other, and this fix adds no new path to `isPathAllowed`.
+
+**Fail-safe fallback.** Rejection returns `undefined` from `customResolve`, which makes the resolver fall through to the standard `loadNodeModules` path. Because the rejected specifier's resolved path is never appended to `this.externals`, `isPathAllowedForModule` denies it and the sandbox observes an ordinary module-not-found error. There is no separate error channel to probe.
+
+### Detection Rules
+
+- Any allowlist/denylist matcher built with `new RegExp(pattern)` and consumed via `.test()` without `^`/`$` — containment where identity was intended.
+- Any check that validates a *name* and then hands that name to something that interprets it as a *path*.
+- Any subpath-permitting matcher (`.*` tail) that does not separately constrain the tail's segments.
+- New code appending to `this.externals` — that array is the authorization record; anything reaching it is permanently allowed.
+
+### Residual Risk
+
+- **The embedder's resolver is still trusted for allowlisted names.** A `require.resolve` that itself maps `left-pad` to an arbitrary file is outside vm2's control by design; this fix constrains only which specifiers reach it.
+- **Case-insensitive filesystems.** `LEFT-PAD` does not match the allowlist and is denied, which is the safe direction, but on macOS/Windows an embedder expecting case-insensitive matching gets a denial rather than a load.
+- **Separator handling is platform-independent, deliberately.** The segment split is `[\\/]` on every platform, so `left-pad\\..\\evil` and `left-pad/..\\evil` are rejected on POSIX too — verified empirically on darwin. On POSIX a backslash is a legal filename character and `path.resolve` would *not* treat those as traversal, so this is a conservative over-rejection: the specifier is refused although it could not have escaped. That is the safe direction (the alternative — splitting only on `/` under POSIX — would leave the Windows traversal open in any cross-platform deployment), and the cost is that a package whose name genuinely contains a literal `..` between backslashes becomes unrequirable. No such package name is valid on npm.
+- **Percent-encoded and dot-padded forms are *not* `..` segments and are not rejected by this check — they do not need to be.** `left-pad/..%2fevil`, `left-pad/%2e%2e/evil` and `left-pad/....//evil` reach the resolver, but `require()` performs no URL-decoding and `path.resolve` treats `....` as an ordinary directory name, so none of them traverses; each fails as module-not-found. Verified empirically. Were a future custom resolver to decode percent-escapes itself, that decoding would happen inside embedder code and outside this boundary — an embedder-side concern, noted here so the asymmetry is not mistaken for a gap.
+
+---
+
+---
+
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -3967,6 +4038,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 25. **WebAssembly JSPI Cross-Realm Promise + Species Hijack** [Categories 3, 7, 33] (NOW FIXED): JSPI returns a sandbox-realm Promise with host-realm `Promise.prototype` in its `[[Prototype]]` chain — bypassing both the sandbox-side `.then`/`.catch` overrides and the bridge `apply`-trap callback wrapping. Install `Object.defineProperty(p, 'constructor', {get(){return F}})` directly on the raw object; `p.finally(()=>{})` calls host `Promise.prototype.finally`, whose internal SpeciesConstructor reads F and dispatches the eventual host-realm rejection (host `TypeError` from `WebAssembly.compileStreaming(Promise.resolve(0))`) through F's reject closure with **no bridge wrapping**. `e.constructor.constructor("return process")()` evaluates in host realm because `Function.[[Realm]]` is host → RCE. Closed by deleting `WebAssembly.promising` and `WebAssembly.Suspending` at sandbox bootstrap, mirroring the `WebAssembly.JSTag` removal.
 26. **Stale Engine Protector + Species Hijack + Stack-Overflow Realm Skew** [Categories 3, 4, 7, 43] (NOW FIXED): On Node 26 / V8 14.6, vm2's `Promise.prototype.then`/`catch` overrides were installed by plain assignment, which left the `PromiseThenLookupChain` protector valid; `p.finally()` on an ordinary `(async () => 1)()` Promise took the `InvokeThen` fast path to the native `then` and never entered vm2's wrapper, so `resetPromiseSpecies` never ran. An own `constructor` with `Symbol.species` pointing at a sandbox class then received the native reaction's resolve/reject; driving that reaction into a calibrated stack overflow delivered a raw host-realm `RangeError` to the attacker's reject closure → `e.constructor.constructor` → host `Function` → host `process`, with `eval: false` and `wasm: false`. Closed by installing the wrappers via `Reflect.defineProperty` (which invalidates the protector) and by wrapping `Promise.prototype.finally` to run `resetPromiseSpecies(this)` before the cached native call.
 27. **Read-Only View Setter Leak via Descriptor Extraction** [Categories 6, 15, 44] (NOW FIXED): `vm.freeze(cfg, 'cfg')` exposes a host object with an accessor property. The direct write traps (`set` / `defineProperty` / `deleteProperty`) are inert, but `Object.getOwnPropertyDescriptor(cfg, 'level').set` (or `__lookupSetter__`, `Reflect.getOwnPropertyDescriptor`, `Object.getOwnPropertyDescriptors`) returns a live bridge-wrapped host setter. `desc.set.call(cfg, value)` routes through `BaseHandler.apply` onto the unwrapped host object, mutating host state through a read-only view. Closed by overriding `ReadOnlyHandler.getOwnPropertyDescriptorDesc` to strip the `set` accessor before it is wrapped, leaving the getter operative — a single hook that closes all four descriptor-read channels.
+28. **External Allowlist Substring Collision + Subpath Traversal** [Categories 21, 24, 45] (NOW FIXED): With `require: {external: ['left-pad'], resolve, context: 'host'}`, the `externalCache` pre-check in `LegacyResolver.customResolve` used unanchored regexes, so `require('evil-left-pad')` passed by substring containment; the embedder's custom resolver then located the colliding package in the application's dependency directory, `customResolve` appended the resolved path to `this.externals`, and host `require()` ran its top-level code in host context (host `child_process` from a sandbox configured with `builtin: []`). Anchoring the matcher to `^(?:<pattern>)(?:[\\/].*)?$` closed the collision but not the second stage: the permitted subpath tail accepts `..` segments, so `left-pad/../evil-package` and `left-pad/sub/../../evil-package` walked out of the package boundary to the same effect, at a depth no regex lookahead can reach. Closed by both layers together — anchored matcher plus a segment-split rejection of any `..` in the bare specifier, applied before the resolver is consulted and before any canonicalization (`realpath` would erase the `..` evidence).
 
 ### How The Bridge Defends
 
@@ -3999,6 +4071,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | SuppressedError | `handleException` detects and recursively sanitizes `.error`/`.suppressed` |
 | WebAssembly JSTag | `WebAssembly.JSTag` deleted from sandbox |
 | `node:test` host RCE via `run({execArgv})` (GHSA-qhwx-74w5-xhxq) | On Node 18+ `builtinModules` lists `node:test` with the `node:` prefix and `test` was not in `DANGEROUS_BUILTINS`, so `builtin: ['node:test']` admitted the real host module; `test.run({files, execArgv:['--eval=<js>']})` spawns a separate host process running attacker code (host RCE). `test` is added to `DANGEROUS_BUILTINS` (family-matched, covers `node:test/reporters`) and `isDangerousBuiltin` now strips ALL leading `node:` prefixes so `node:node:test` normalizes too — `node:test` is excluded from `'*'`, rejected on explicit allow, and absent from the builtins map. |
+| External-package allowlist bypass via unanchored matcher / `..` traversal (Category 45: GHSA-c48m-32m9-vx93) | `LegacyResolver.customResolve`'s allowlist pre-check tested the bare specifier against `externalCache` regexes built WITHOUT anchors, so `external: ['left-pad']` matched `evil-left-pad` / `left-pad-evil` / `xleft-padx` as a substring and handed the colliding host package to the custom resolver (top-level code then ran in host context). Two layers: `externalCache` is anchored `^(?:<pattern>)(?:[\\/].*)?$` so a specifier must EQUAL the allowlisted name or be a subpath under it (wildcard `*` / `**` segment semantics preserved); and, because the permitted subpath tail can itself carry traversal (`left-pad/../evil`, `left-pad/sub/../../evil` — deeper than any regex lookahead can catch), the specifier is split on `[\\/]` and rejected outright if any segment is `..`, BEFORE the resolver is consulted. Denied specifiers fall through to the standard loader, whose resolved path is never appended to `this.externals`, so `isPathAllowedForModule` denies it as module-not-found. Orthogonal to the `require.root` realpath check below, which guards resolved FILENAMES against symlinks; this one guards SPECIFIERS against lexical escape of the package boundary. |
 | WebAssembly JSPI cross-realm Promise | `WebAssembly.promising` and `WebAssembly.Suspending` deleted from sandbox; JSPI promises (sandbox allocation with host-realm `Promise.prototype` and no bridge proxy) cannot be produced, so the species channel on a cross-realm-prototype Promise is structurally unreachable |
 | WebAssembly streaming-compile cross-realm Promise (GHSA-wjwh-qqvp-g4p4 / GHSA-m3pp-qgq7-gwm6) | `WebAssembly.compileStreaming` / `instantiateStreaming` also return a host-realm-prototype Promise on Node 26; both deleted from the sandbox alongside the JSPI constructors, closing the identical species-`constructor` + `p.finally()` → raw host rejection → host `process` flow. Non-streaming `WebAssembly.compile` / `instantiate` (sandbox-realm Promises) remain. |
 | Stale `PromiseThenLookupChain` protector across `finally` (Category 43: GHSA-27g9-p43v-cw3v) | On Node 26 / V8 14.6 a direct `Promise.prototype.then = fn` assignment updates the existing data property WITHOUT invalidating the `PromiseThenLookupChain` protector, so `Promise.prototype.finally` took an internal `InvokeThen` fast path to the ORIGINAL native `then`, bypassing vm2's wrapper and its `resetPromiseSpecies` — an attacker `constructor[Symbol.species]` survived `p.finally()` on an ordinary async-function Promise and gained control of a native reaction (→ raw host `RangeError` → host `Function`). Two layers: the `then`/`catch` wrappers are installed with `localReflectDefineProperty` (`[[DefineOwnProperty]]` invalidates the protector), and `Promise.prototype.finally` is itself wrapped to run `resetPromiseSpecies(this)` before delegating to the cached native `finally`, so the species channel on `finally` is closed independently of any engine protector quirk. |

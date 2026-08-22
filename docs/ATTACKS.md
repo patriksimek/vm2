@@ -3728,6 +3728,66 @@ Remove `FinalizationRegistry` and `WeakRef` from the default sandbox globals in 
 
 ---
 
+## Attack Category 43: Stale `PromiseThenLookupChain` Protector — Species Survives `finally`
+
+### Description
+
+vm2 neutralizes the Promise species channel by overriding `Promise.prototype.then` / `.catch` with wrappers that call `resetPromiseSpecies(this)` before delegating to the cached natives. Those overrides were installed by **plain assignment** (`globalPromise.prototype.then = fn`). On Node 26 / V8 14.6 the `proto_assign_seq_opt` optimization folds such a consecutive assignment sequence into `SetPrototypeProperties`, whose existing-data-property branch calls `Object::SetDataProperty` **without** `UpdateProtector()`. The JavaScript property holds vm2's wrapper, but V8's `PromiseThenLookupChain` protector is left incorrectly valid.
+
+`Promise.prototype.finally` performs an internal `InvokeThen`. Trusting the stale protector, V8 skips the observable `then` lookup and calls the **original native `then`** directly — the wrapper never runs, so `resetPromiseSpecies` never runs. An ordinary fulfilled Promise from an async function therefore carries an attacker `constructor[Symbol.species]` across `p.finally()`, and V8's `SpeciesConstructor` hands the attacker class control of a native Promise reaction's resolve/reject capability. A calibrated stack overflow at that native reaction boundary produces a raw host-realm `RangeError` delivered straight to the attacker's reject closure, giving `e.constructor.constructor` → host `Function` → host `process`.
+
+This is an engine-level *reachability* failure of an existing vm2 defense, distinct from [Category 31](#attack-category-31-promise-species-hijack-in-localpromise-swallow-tail) (a vm2 code path that genuinely omitted the reset) and from [Category 33](#attack-category-33-webassembly-jspi-cross-realm-promise-prototype) (a Promise whose `[[Prototype]]` never reaches the sandbox overrides at all). Here the override exists, is installed on the right prototype, and is simply not dispatched to.
+
+### Attack Flow
+
+1. Sandbox obtains an ordinary intrinsic Promise: `const p = (async () => 1)();`.
+2. Sandbox installs an own `constructor` whose `Symbol.species` is an attacker class: `Object.defineProperty(p, 'constructor', { value: { [Symbol.species]: Evil } })`.
+3. Sandbox calls `p.finally()`. V8 takes the `InvokeThen` fast path on the stale protector, bypassing vm2's `then` wrapper and its `resetPromiseSpecies(this)`.
+4. `SpeciesConstructor(p, Promise)` resolves to `Evil`; `new Evil(executor)` runs attacker code with the native reaction's `resolve` / `reject`.
+5. The attacker drives the reaction to a stack-overflow boundary; V8 constructs a **host-realm** `RangeError` and passes it to the attacker's `reject` without traversing `handleException`.
+6. `err.constructor.constructor('return this')()` evaluates in the host realm — reached even with `eval: false` and `wasm: false`.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-27g9-p43v-cw3v) — Node 26 / V8 14.6, default `new VM()`
+const vm = new VM({ allowAsync: true, eval: false, wasm: false });
+vm.run(`
+    class Evil {
+        constructor(executor) { executor(v => {}, hostErr => { /* raw host RangeError */ }); }
+    }
+    const p = (async () => 1)();
+    Object.defineProperty(p, 'constructor', { value: { [Symbol.species]: Evil } });
+    p.finally();          // wrapper skipped; Evil receives the reaction capability
+`);
+```
+
+Negative control: running the same payload under `node --no-proto-assign-seq-opt` disables the optimization, the protector is invalidated correctly, and the escape does not occur.
+
+### Why It Works
+
+The defense was correct in content but installed through an operation the engine mis-accounted. Protectors are V8's mechanism for "nobody has patched this intrinsic"; every property-installation path is supposed to invalidate them. The assignment path in this V8 version does not, so the engine keeps using a cached direct reference to the native `then` for its own internal invocations while user-visible lookups return vm2's wrapper. No amount of sandbox-side logic inside the wrapper helps when the wrapper is never entered — the fix has to change *how* the property is installed, and additionally defend the specific consumer (`finally`) that the fast path served.
+
+### Mitigation
+
+Two independent layers in `lib/setup-sandbox.js`:
+
+1. **Install through `[[DefineOwnProperty]]`.** The `then` / `catch` wrappers are installed with `localReflectDefineProperty(globalPromise.prototype, …)` rather than assignment. `Reflect.defineProperty` invalidates `PromiseThenLookupChain`, so `finally` (and any other native consumer of `then`) dispatches through the wrapper again. The descriptors preserve the intrinsics' shape (`writable: true, enumerable: false, configurable: true`).
+2. **Wrap `finally` itself.** `globalPromise.prototype.finally` is replaced (also via `localReflectDefineProperty`) with a wrapper that runs `resetPromiseSpecies(this)` before delegating to the cached native `finally`. This closes the species channel on the `finally` path directly, so the defense does not depend on any engine protector being accounted correctly. The wrapper is installed behind a `typeof` guard because `Promise.prototype.finally` does not exist before Node 10.
+
+Layer 2 is the durable one: it turns `finally` from a species-sensitive intrinsic into a species-neutralizing one, matching `then` and `catch`. Layer 1 restores correct dispatch generally, which also protects any future internal `then` consumer.
+
+**Residual:** neither layer helps a Promise whose `[[Prototype]]` chain never reaches the sandbox `Promise.prototype` — such a Promise dispatches to the *host* `finally`. That class is handled by removing the intrinsics that produce them (see [Category 33](#attack-category-33-webassembly-jspi-cross-realm-promise-prototype)), and any new such source must still be removed there.
+
+### Detection Rules
+
+- **`p.finally()` on a Promise with an own `constructor` / `Symbol.species`** — the canonical shape of this attack.
+- **Prototype-method installation by plain assignment** on an intrinsic whose lookup V8 protects (`Promise.prototype.then`, `Array.prototype[Symbol.iterator]`, …). Install via `Reflect.defineProperty` so protector invalidation is guaranteed.
+- **Any sandbox constructor invoked as a species** — a frozen host callback inside the species constructor is a sound oracle: under a correct install it must never run.
+- More broadly, **a defense that lives inside a wrapper whose dispatch the engine may shortcut**. Prefer defenses that also neutralize the underlying state (here, the promise's `constructor`) over ones that only intercept a call.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -3818,6 +3878,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 23. **Host Prototype Mutation via Apply-Trap Indirection + WebAssembly Rejection** [Categories 2, 4, 7, 30] (NOW FIXED): Resolve host `Object.prototype.__proto__` setter via `Buffer.call.call({}.__lookupSetter__, Buffer, "__proto__")` (the `connect()`-aliased sandbox `__lookupSetter__` walks back to host). Trigger a host-realm `TypeError` (e.g., `await WebAssembly.compileStreaming()`). Inside `catch(e)`, call `setProto.call(getProto.call(e), null)` — the apply trap unwraps `context` and forwards to the host setter, severing host `TypeError.prototype.[[Prototype]]` without any write trap firing. The next host `TypeError` from `await WebAssembly.compileStreaming()` walks back into sandbox code through V8 async internals; the bridge's proto-walk no longer finds the registered mapping at the right level and the value falls through unwrapped. `e.constructor.constructor` is then host `Function`. Closed structurally by (A) caching host prototype-mutating intrinsics (`Object.prototype.__proto__` setter, `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.{defineProperty,defineProperties}`, `Reflect.defineProperty`, `Object.prototype.__define{Getter,Setter}__`) and refusing them in the apply trap with one layer of indirection peel for `Function.prototype.{call,apply,bind}` and `Reflect.{apply,construct}`; (B) cache-check on `mappingOtherToThis` before the proto-walk in `thisEnsureThis` so any previously-bridged host value returns the existing proxy even with a tampered proto chain.
 24. **Promise Species Hijack + Stack-Overflow Realm Skew** [Categories 4, 7, 18, 29, 31] (NOW FIXED): `class FakePromise extends Promise { static get [Symbol.species]() { return ct } }` reroutes the swallow-tail child constructor inside `localPromise` to a sandbox-controlled `ct`. `ct` rebinds V8's internal `(resolve, reject)` capability to a sandbox collector; trigger a host-realm `RangeError` via `e.stack` after deep recursion (binary-searched depth) inside the downstream chain; V8's `PromiseResolveThenableJob` delivers the raw host Error to the collector — `ex.constructor.constructor("return process")()` then yields RCE. Closed by adding `resetPromiseSpecies(this)` immediately before the swallow-tail `apply(globalPromisePrototypeThen, this, ...)` call so the species protocol always resolves to `localPromise` regardless of the user's subclass `Symbol.species` override.
 25. **WebAssembly JSPI Cross-Realm Promise + Species Hijack** [Categories 3, 7, 33] (NOW FIXED): JSPI returns a sandbox-realm Promise with host-realm `Promise.prototype` in its `[[Prototype]]` chain — bypassing both the sandbox-side `.then`/`.catch` overrides and the bridge `apply`-trap callback wrapping. Install `Object.defineProperty(p, 'constructor', {get(){return F}})` directly on the raw object; `p.finally(()=>{})` calls host `Promise.prototype.finally`, whose internal SpeciesConstructor reads F and dispatches the eventual host-realm rejection (host `TypeError` from `WebAssembly.compileStreaming(Promise.resolve(0))`) through F's reject closure with **no bridge wrapping**. `e.constructor.constructor("return process")()` evaluates in host realm because `Function.[[Realm]]` is host → RCE. Closed by deleting `WebAssembly.promising` and `WebAssembly.Suspending` at sandbox bootstrap, mirroring the `WebAssembly.JSTag` removal.
+26. **Stale Engine Protector + Species Hijack + Stack-Overflow Realm Skew** [Categories 3, 4, 7, 43] (NOW FIXED): On Node 26 / V8 14.6, vm2's `Promise.prototype.then`/`catch` overrides were installed by plain assignment, which left the `PromiseThenLookupChain` protector valid; `p.finally()` on an ordinary `(async () => 1)()` Promise took the `InvokeThen` fast path to the native `then` and never entered vm2's wrapper, so `resetPromiseSpecies` never ran. An own `constructor` with `Symbol.species` pointing at a sandbox class then received the native reaction's resolve/reject; driving that reaction into a calibrated stack overflow delivered a raw host-realm `RangeError` to the attacker's reject closure → `e.constructor.constructor` → host `Function` → host `process`, with `eval: false` and `wasm: false`. Closed by installing the wrappers via `Reflect.defineProperty` (which invalidates the protector) and by wrapping `Promise.prototype.finally` to run `resetPromiseSpecies(this)` before the cached native call.
 
 ### How The Bridge Defends
 
@@ -3851,6 +3912,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | `node:test` host RCE via `run({execArgv})` (GHSA-qhwx-74w5-xhxq) | On Node 18+ `builtinModules` lists `node:test` with the `node:` prefix and `test` was not in `DANGEROUS_BUILTINS`, so `builtin: ['node:test']` admitted the real host module; `test.run({files, execArgv:['--eval=<js>']})` spawns a separate host process running attacker code (host RCE). `test` is added to `DANGEROUS_BUILTINS` (family-matched, covers `node:test/reporters`) and `isDangerousBuiltin` now strips ALL leading `node:` prefixes so `node:node:test` normalizes too — `node:test` is excluded from `'*'`, rejected on explicit allow, and absent from the builtins map. |
 | WebAssembly JSPI cross-realm Promise | `WebAssembly.promising` and `WebAssembly.Suspending` deleted from sandbox; JSPI promises (sandbox allocation with host-realm `Promise.prototype` and no bridge proxy) cannot be produced, so the species channel on a cross-realm-prototype Promise is structurally unreachable |
 | WebAssembly streaming-compile cross-realm Promise (GHSA-wjwh-qqvp-g4p4 / GHSA-m3pp-qgq7-gwm6) | `WebAssembly.compileStreaming` / `instantiateStreaming` also return a host-realm-prototype Promise on Node 26; both deleted from the sandbox alongside the JSPI constructors, closing the identical species-`constructor` + `p.finally()` → raw host rejection → host `process` flow. Non-streaming `WebAssembly.compile` / `instantiate` (sandbox-realm Promises) remain. |
+| Stale `PromiseThenLookupChain` protector across `finally` (Category 43: GHSA-27g9-p43v-cw3v) | On Node 26 / V8 14.6 a direct `Promise.prototype.then = fn` assignment updates the existing data property WITHOUT invalidating the `PromiseThenLookupChain` protector, so `Promise.prototype.finally` took an internal `InvokeThen` fast path to the ORIGINAL native `then`, bypassing vm2's wrapper and its `resetPromiseSpecies` — an attacker `constructor[Symbol.species]` survived `p.finally()` on an ordinary async-function Promise and gained control of a native reaction (→ raw host `RangeError` → host `Function`). Two layers: the `then`/`catch` wrappers are installed with `localReflectDefineProperty` (`[[DefineOwnProperty]]` invalidates the protector), and `Promise.prototype.finally` is itself wrapped to run `resetPromiseSpecies(this)` before delegating to the cached native `finally`, so the species channel on `finally` is closed independently of any engine protector quirk. |
 | Array species self-return | set/defineProperty traps + neutralizeArraySpecies + SPECIES_ATTACK_SENTINEL |
 | Host prepareStackTrace fallback | Safe default always set; setter resets to safe default instead of `undefined` |
 | NodeVM `require.root` symlink bypass | `isPathAllowed` realpaths candidate before prefix check; `rootPaths` canonicalized at construction; deny-by-default if realpath throws |

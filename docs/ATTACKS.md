@@ -3675,11 +3675,64 @@ Views derived from a depooled buffer (`slice`, `subarray`, `map`, `filter`, spec
 
 ---
 
+## Attack Category 42: `FinalizationRegistry` Cleanup Callback — `timeout` Protection-Mechanism Failure
+
+### Description
+
+The `timeout` option only bounds the **synchronous body** of `run()`. It is implemented with V8's `TerminateExecution`, an interrupt watchdog that unblocks the single in-flight `run()` call and nothing else — as the README states, *"Timeout is only effective on synchronous code that you run through `run`."* A `FinalizationRegistry` cleanup callback is invoked by the garbage collector at an unpredictable later time, **after `run()` has already returned**, so a busy-loop inside it executes sandbox code entirely outside any timeout accounting and blocks the host's single-threaded event loop for an arbitrary duration with no relationship to the configured `timeout`. This is in scope as a **protection-mechanism failure of the documented `timeout` control** — not as a general DoS-prevention claim. vm2 does not and never has claimed to prevent every form of resource exhaustion (see the README Hardening recommendations / Known Issues), and this is not a realm escape: sandbox code stays in its own realm throughout.
+
+### Attack Flow
+
+1. Sandbox registers a cleanup callback against an object it creates, then drops the only strong reference: `registry.register(target, x); target = null;`.
+2. `run()` returns almost instantly (registration is O(1)), well inside `timeout` — vm2 believes execution completed safely.
+3. At a later GC (forceable under memory pressure or `--expose-gc`), V8 invokes the cleanup callback on its own native callback path — not a new `run()` call, so `doWithTimeout` never wraps it.
+4. The callback busy-loops; the entire host event loop is frozen for its duration.
+
+### Canonical Example
+
+```javascript
+// (advisory GHSA-r4fx-v8hh-22mv)
+const vm = new VM({ timeout: 200 });
+vm.run(`
+    let target = {};
+    const registry = new FinalizationRegistry(() => {
+        const s = Date.now(); while (Date.now() - s < 3000) {}   // block 3s
+    });
+    registry.register(target, 'x');
+    target = null;                                               // GC-eligible
+`);
+// run() returns in ~0ms. A host setTimeout(10) does not fire for ~3000ms.
+```
+
+### Why It Works
+
+`timeout` bounds only the synchronous `run()` body. Any execution the engine schedules to run *after* `run()` returns is outside that window. The other out-of-band schedulers are already handled: timers (`setTimeout`/`setInterval`/`setImmediate`) and `queueMicrotask` are not exposed to the `VM` sandbox at all, and `Promise` continuations (the same class) are closed by `allowAsync: false`. `FinalizationRegistry` was the one out-of-band executor still reachable in the default configuration — and, unlike Promise continuations, **`allowAsync: false` does not close it** because the GC, not the sandbox's async machinery, fires the callback.
+
+### Mitigation
+
+Remove `FinalizationRegistry` and `WeakRef` from the default sandbox globals in `lib/setup-sandbox.js` (`localReflectDeleteProperty(global, …)`), the same way timers are withheld. `NodeVM` inherits the removal (it extends `VM` and shares the bootstrap). Neither constructor has literal syntax, so once the global binding is deleted it cannot be reconstructed from within the sandbox — verified against `Function`/`GeneratorFunction`/`eval` (all resolve free identifiers against the sandbox global → `ReferenceError`), constructor-chain climbs off surviving weak collections (`WeakMap`/`Promise` → `undefined`), and `Reflect.get` / `getOwnPropertyDescriptor` on `globalThis`. `WeakRef` cannot itself schedule a callback (`deref` is synchronous) and is removed only for tidiness alongside its registry. Embedders who genuinely need these for trusted code can re-expose them explicitly through the `sandbox` option (mirrors the timers story). **Residual, by design:** an embedder that re-exposes `FinalizationRegistry` through `sandbox` re-opens this vector in full — the removal is the default-configuration defense, not a wrapper that re-times the callback. The general caveat still holds: `timeout` bounds only the synchronous `run()` body, so any future global that can invoke sandbox code after `run()` returns re-opens the class.
+
+### Detection Rules
+
+- **`new FinalizationRegistry(cb)`** in sandbox code where `cb` performs a busy-loop or any expensive synchronous work.
+- Any sandbox use of a GC-scheduled callback (`FinalizationRegistry.prototype.register`) whose callback is attacker-controlled.
+- More broadly, any newly-exposed global that can invoke sandbox code **after `run()` returns** (a new timer-like or GC-like primitive) re-opens this class and must be withheld or wrapped in a re-timed host dispatcher.
+
+### Considered Attack Surfaces
+
+- **`WeakRef` alone**: cannot schedule execution — `deref()` is synchronous and returns within the `run()` timeout window. Removed only as the pair to `FinalizationRegistry`; keeping it would be safe.
+- **`Promise` continuations** (`Promise.resolve().then(busyLoop)`): same after-`run()` class, but already closed by `allowAsync: false`, which the README pairs with `timeout`. `Promise` cannot be removed (fundamental primitive).
+- **`Atomics.wait(ta, i, v)` on a `SharedArrayBuffer`**: parks the thread synchronously *inside* `run()`, so V8's `TerminateExecution` **does** interrupt it — verified it throws `Script execution timed out` at the configured limit. Bounded; not in this class.
+- **Buffer/TypedArray/`WebAssembly.Memory` allocation**: synchronous native work, a different DoS class already capped by `bufferAllocLimit` — see [Category 23](#attack-category-23-unbounded-bufferallocn--host-heap-dos) and [Category 36](#attack-category-36-bufferalloclimit-bypass-via-arraybuffer--typedarray--webassemblymemory).
+- **Objects returned from `run()` with sandbox `valueOf`/`toString`/`Symbol.toPrimitive`**: run sandbox code when the *host* later touches them — already documented in the README `timeout` warning ("operating on returned objects can run arbitrary code and circumvent the timeout"). Out of band via the host, not the GC.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
 
-- **WeakRef / FinalizationRegistry**: Held values are specified at registration time. `thisFromOther` always re-wraps values when they cross the boundary, so the weak reference cannot leak a raw host object.
+- **WeakRef / FinalizationRegistry**: For the *object-leak* surface these are safe — held values are specified at registration time, and `thisFromOther` always re-wraps values crossing the boundary, so a weak reference cannot leak a raw host object. However, `FinalizationRegistry` opened a separate *timeout-bypass / DoS* surface (its cleanup callback runs after `run()` returns, outside the timeout) — see [Category 42](#attack-category-42-finalizationregistry-cleanup-callback--timeout-protection-mechanism-failure). Both are now **removed from the default sandbox globals** (GHSA-r4fx-v8hh-22mv).
 
 - **structuredClone**: Not available in default `vm` context globals. Even if available, `structuredClone` strips prototype chains and creates plain objects, which cannot carry host constructors.
 
@@ -3817,6 +3870,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Host-Promise rejection sanitizer bypass via `call`/`apply` indirection (GHSA-647f-g98j-qq25) | The direct-target-only apply-trap gate is replaced by `normalizeHostPromiseCallbacks` in `lib/bridge.js`, which peels `Function.prototype.call`/`.apply` indirection (including stacked and mixed nestings) to the effective host `then`/`catch` and wraps the callbacks through `makeSanitizedPromiseCallback`, so the GHSA-m283 rejection rebuild runs regardless of invocation shape. `.apply` nested argument arrays are snapshotted into fresh getter-free storage (TOCTOU-safe) before write-back; the peel is bounded (`MAX_PROMISE_PEEL = 64`) and throws `VMError` on exceed rather than forwarding an unwrapped callback (fail-closed). `bind` and `Reflect.apply` re-enter the trap with the direct target and were already covered. |
 | Host-authority builtin members survive the read-only wrap (GHSA-46pr-c5wc-xffx, GHSA-6w8r-xxw2-g3hx, GHSA-98xx-8mx4-x7cm, GHSA-h85j-hv3c-qfgq) | `vm.readonly()` blocks property *assignment* but forwards every *call* with host authority, so `lib/builtin.js` applies `sanitizeBuiltinMembers(key, mod)` (table: `BUILTIN_MEMBER_SANITIZERS`, `node:` prefix stripped so both spellings share fate) *before* the wrap, returning a shallow copy with only the escaping member neutralized: `crypto.setEngine` and `tls.setDefaultCACertificates` become throwing stubs (native library loading via the OS dynamic loader; process-wide CA trust-store replacement); `node:sqlite`'s `DatabaseSync` is subclassed to force `allowExtension` off for object- **and function-typed** options args, so Node throws `ERR_INVALID_STATE` from `loadExtension()`/`enableLoadExtension()`; `http`/`https` `globalAgent` is replaced with a sandbox-dedicated `Agent`, with `request()`/`get()` defaulting to it so `req.agent` cannot re-expose the host singleton. Member-level neutralization complements the whole-module `DANGEROUS_BUILTINS` denylist — the useful parts of each builtin stay available. `lib/setup-node-sandbox.js` also rejects repeated `node:` prefixes (the `node:node:sqlite` alias) and falls back to the full `node:`-prefixed builtin-map key so canonical `require('node:sqlite')` resolves. |
 | Shared Buffer pool discloses/corrupts host memory (GHSA-fcqc-726x-5wfc) | `depoolBuffer` in `lib/setup-sandbox.js` enforces backing-store ownership (`byteOffset === 0 && buffer.byteLength === length`): every pooling factory (`Buffer.from` non-ArrayBuffer overloads, `concat`, `of`, `copyBytesFrom`, deprecated `Buffer(...)`/`new Buffer(...)`) copies a pool-backed result into a standalone non-pooled `LocalBuffer.alloc(n)` before it reaches the sandbox, so `.buffer` can never expose Node's shared 64 KiB pool (neighbouring host buffers). The `Buffer.from(arrayBuffer, off, len)` sharing overload is preserved, detected via a spoof-proof `ArrayBuffer.prototype.byteLength`-getter brand test |
+| `timeout` bypass via `FinalizationRegistry` cleanup callback (GHSA-r4fx-v8hh-22mv) | `timeout` is implemented with V8's `TerminateExecution` and bounds only the synchronous body of `run()`; a `FinalizationRegistry` cleanup callback is fired by the GC *after* `run()` returns, so sandbox code inside it ran with no timeout accounting and could block the host event loop indefinitely — and `allowAsync: false`, which closes the equivalent `Promise`-continuation path, does not close this one. `lib/setup-sandbox.js` deletes `FinalizationRegistry` and `WeakRef` from the sandbox global (guarded by `typeof` so pre-Node-14 is unaffected), the same withholding used for timers/`queueMicrotask`; neither constructor has literal syntax, so the binding cannot be reconstructed from inside. `NodeVM` inherits it. Scope: this restores the documented `timeout` control in the default configuration — it is not a general DoS guarantee, and an embedder re-exposing either global via the `sandbox` option re-opens the vector by choice. |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

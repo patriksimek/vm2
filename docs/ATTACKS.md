@@ -4037,6 +4037,62 @@ Neither weakens the other: Category 45's rejection is a `return undefined` that 
 ---
 
 
+## Attack Category 47: Sandbox Rebuilt an Unrestricted NodeVM by Requiring vm2 From Disk; Shipped CLI Ran Untrusted Scripts With No Effective Sandbox Boundary
+
+### Description
+
+`lib/cli.js` — the `npx vm2 ./script.js` entry point documented as a way to run a script under vm2 — constructed `NodeVM.file(path, { require: { external: true } })` with **no `require.root`** and the default `require.context: 'host'`.
+
+`CustomResolver.isPathAllowed` returns `true` for every candidate when `rootPaths === undefined`, and `context: 'host'` loads each admitted module through the real host `require()`. The script handed to the CLI could therefore `require(__filename)` — or any other absolute path — and have that file executed in the **host** realm with full host authority (`child_process`, `fs`, `process`). Running `vm2 ./untrusted.js` was, for a self-requiring script, equivalent to running `node ./untrusted.js`: the CLI advertised isolation it did not provide (GHSA-jxxv-8r27-vm4p).
+
+### Why It Works
+
+The insecure combination is not reached by an exotic trick — it was the shipped default of the tool whose entire purpose is isolation. `require.external: true` is *documented* as permissive, but the CLI is the one caller for which "permissive" is never the intended posture, and it never set the two options (`require.root`, `require.context`) that bound the primitive.
+
+### Mitigation
+
+`lib/cli.js` now constructs the `NodeVM` with both bounds:
+
+1. **`root: pa.dirname(script)`** — requires are confined to the target script's own directory, so an arbitrary absolute path is no longer loadable.
+2. **`context: 'sandbox'`** — admitted modules are compiled and executed *inside* the sandbox, not in the host realm. A script that `require()`s itself or a sibling now runs sandboxed.
+
+Verified end-to-end: under the shipped CLI, the target script cannot reach host `fs` (`require('fs')` → `Cannot find module 'fs'`) and cannot write a host marker file by re-requiring itself.
+
+### Closing the Nesting-Default Bypass (GHSA-j3hm-6rg5-mchv)
+
+Two changes land alongside the CLI fix in `lib/resolver-compat.js`. The first closes GHSA-j3hm-6rg5-mchv; the second is a migration aid for the accepted residual documented below:
+
+1. **Sandbox `require()` of vm2 itself is denied — this is the GHSA-j3hm-6rg5-mchv fix.** `isVm2SelfRequire`, consulted at the top of `CustomResolver.isPathAllowed` (inherited by `LegacyResolver`), blocks vm2's importable surface — its `lib/` directory and its package main entry — matched by realpath so a symlinked candidate cannot dodge the boundary. This closes the reported mechanism: `require('vm2')` → real `VM`/`NodeVM` classes → nested *unrestricted* sandbox running `child_process`, which defeated the guarantee `nesting: false` is supposed to provide. Scoped to `lib/` + the main entry rather than the whole package root, because in the source tree that root also holds fixtures (`test/node_modules/*`) an embedder's `require.root` may legitimately point at. Legitimate `nesting: true` is unaffected — it uses the builtin-override mechanism, not an external file require.
+2. **A one-time `console.warn`** is emitted when `require.external` is truthy, `require.root` is unset, and the context is host. It steers embedders toward `require.root` / `context: 'sandbox'` without breaking existing configurations. A construction-time *throw* was deliberately **not** used: it would reverse the shipped [Category 32](#attack-category-32-nodevm-nesting--non-configuration-require-value) / GHSA-cp6g-6699-wx9c invariant that construction does not throw when `root` is unset.
+
+### Accepted Residual — `require.external` Without `require.root` (by design; warn-only until the next major)
+
+**`isPathAllowed`'s `if (this.rootPaths === undefined) return true;` is deliberately unchanged.** A `NodeVM({ require: { external: true } })` with no `require.root` and the default host context still host-`require()`s any attacker-named path, and that path's top-level code executes in the host realm with full authority. That breadth is the documented meaning of `require.external` without a root boundary — the option asks vm2 to load modules through the real host `require()` — not a separate defect.
+
+It is held deliberately, for backwards compatibility:
+
+- Refusing the `external` + no-`root` + host-context combination at construction is a **breaking change** for existing embedders (roughly twenty in-repo call sites alone depend on the current no-throw behavior), and it would reverse the shipped GHSA-cp6g-6699-wx9c invariant that construction does not throw when `root` is unset.
+- The one-time warning above ships instead, steering embedders toward `require.root` / `context: 'sandbox'` without breaking working configurations.
+- **Deny-by-default is deferred to the next major version**, where a breaking change is acceptable.
+
+What GHSA-j3hm-6rg5-mchv reported is narrower, and is fixed: sandboxed code could `require('vm2')` from disk and rebuild an *unrestricted* nested `NodeVM`, defeating the nesting default. That route is denied by every spelling — bare `vm2`, the `lib/` path, `index.js`, and the package main entry — and matched by realpath, so a symlink cannot dodge it.
+
+Embedders wanting the boundary today should set `require.root`, `context: 'sandbox'`, or both.
+
+### Detection Rules
+
+- `NodeVM.file(...)` / `new NodeVM(...)` with `require.external` truthy and no `require.root` — in particular any shipped tool or CLI wrapper.
+- `require.root` pointing at a tree containing `node_modules/vm2` (e.g. the `root: './'` pattern), combined with `context: 'host'`.
+- Sandbox `require('vm2')` / `require('.../node_modules/vm2')` / `require('.../vm2/lib/...')`.
+
+### Considered Attack Surfaces
+
+- **Transitive re-export** — an allowed host-context module under `root` that itself `require('vm2')` would hand the classes back to the sandbox. This is the inherent "external + `context: 'host'` runs host code" property; the self-require block covers only the *direct* sandbox path.
+- **Hardlink to vm2 under `root`** — `realpath` does not resolve hardlinks, so a hardlink to `lib/main.js` placed under `root` would not match the boundary. Creating it requires filesystem control, outside the sandbox-JS threat model.
+- **Every other path under the open `require.external`-without-`root` primitive** — explicitly *not* covered; see the Status section above.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -4176,6 +4232,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Bridge-internal container via `Array.prototype[N]` setter (Category 28: GHSA-9qj6-qjgg-37qq Variant A + GHSA-q3fm-4wcw-g57x Variant B) | Variant A — `neutralizeArraySpeciesBatch` in `lib/bridge.js` writes saved entries via `thisReflectDefineProperty`; appended slot is an own data property and no sandbox-installed setter is invoked while the bridge holds raw saved state. Variant B — `defaultSandboxPrepareStackTrace` in `lib/setup-sandbox.js` accumulates frames in a string via primitive concatenation rather than an array, removing every reachable `Array.prototype` slot (index setter, getter, and `.join`); `makeCallSiteGetters` installs entries via `localReflectDefineProperty` for symmetry |
 | Host prototype mutation via apply trap (GHSA-v6mx-mf47-r5wg) | Apply trap caches the host prototype-mutating intrinsics (`Object.prototype.__proto__` setter, `Object.setPrototypeOf`, `Reflect.setPrototypeOf`, `Object.{defineProperty,defineProperties}`, `Reflect.defineProperty`, `__defineSetter__`, `__defineGetter__`) in `dangerousHostProtoMutators` and refuses any invocation reaching them — direct or via one-layer indirection through `Function.prototype.{call,apply,bind}` / `Reflect.{apply,construct}`. Read-side defense-in-depth in `thisEnsureThis` cache-checks `mappingOtherToThis` before the proto-walk so any previously-bridged host value returns the existing proxy even when its prototype chain has been tampered with by some other route. |
 | Stacked indirection bypass of host prototype mutator peel (GHSA-cfcw-xp6x-25gj) | `thisFromOtherWithFactory`, `thisFromOtherForThrow`, and `thisEnsureThis` consult `isDangerousHostProtoMutator(other)` after the `mappingOtherToThis` cache check and return `emptyFrozenObject` for raw, uncached host references. The sandbox can no longer obtain a callable reference to a host prototype mutator regardless of how many `.call`/`.apply`/`.bind`/`Reflect.apply` indirection layers it stacks — the v6mx apply-trap peel remains as a complementary invocation-side check, but the structural class is closed at delivery time. Cache-first ordering preserves `connect()`-registered sandbox surrogates for `__defineGetter__`/`__defineSetter__` (issue #176). |
+| Shipped CLI ran untrusted scripts unsandboxed (Category 47: GHSA-jxxv-8r27-vm4p) | `lib/cli.js` built `NodeVM.file(path, {require:{external:true}})` with no `require.root` and the default `context:'host'`, so `isPathAllowed` admitted every path and the target could `require(__filename)` into the HOST realm — the CLI provided no isolation. The CLI now sets `root: pa.dirname(script)` (requires confined to the script's own directory) and `context: 'sandbox'` (admitted modules execute inside the sandbox). Defense-in-depth alongside it, in `lib/resolver-compat.js`: `isVm2SelfRequire` denies a sandbox `require()` of vm2's own `lib/` directory or package main entry by realpath (removing the `require('vm2')` → real `VM`/`NodeVM` → nested unrestricted sandbox escalation route), and a one-time `console.warn` fires on `external` + no `root` + host context. **Not a general fix**: `isPathAllowed`'s `if (this.rootPaths === undefined) return true;` is unchanged, so `require.external` without `require.root` still host-requires arbitrary attacker-named paths — tracked as GHSA-j3hm-6rg5-mchv, still OPEN. |
 | Host-side laundering of prototype severance via `bind` + host higher-order method (GHSA-cfcw-xp6x-25gj follow-up) | Mechanism-independent **payoff** hardening: a raw host-realm object whose prototype chain reaches `null` without passing through the sandbox `Object.prototype` is refused at two independent chokepoints — `thisEnsureThis` (the only path that returns a host object raw on proto-walk fall-through) returns `emptyFrozenObject`, and `handleException` (`isForeignSeveredHostValue`, the transformer's sole catch sanitizer) replaces it with a benign sandbox `Error`. Closes severance laundered entirely host-side (`apply.bind(call,call)` over a genuine host array's `.map`) that never re-crosses the bridge, independent of the severance mechanism. The sandbox `Object.prototype` is unforgeable host-side (it crosses as a proxy), so the discriminator cannot be spoofed. Primordial `Object.create(null)` values are exempt (GHSA-9vg3 preserved). |
 | Bridge `set` trap ignores spec `Receiver` (GHSA-c4cf-2hgv-2qv6) | `BaseHandler.set` gates host-write forwarding on `receiver === mappingOtherToThis.get(object)`; non-canonical receivers (inherited-receiver writes via `Object.create(proxy)`, forged-receiver `Reflect.set` calls, `Object.assign(child, src)` loops) install on `receiver` via `Reflect.defineProperty`, mirroring `ReadOnlyHandler.set` |
 | NodeVM builtin denylist bypass via `process` / `inspector/promises` (GHSA-rp36-8xq3-r6c4) | `DANGEROUS_BUILTINS` extended to include `process`; matching promoted to family-prefix via `isDangerousBuiltin(key)` so subpath builtins (`inspector/promises`, future `inspector/*`, `process/*`, `module/*`) share fate with their canonical name. `node:` URL prefix stripped before lookup. Enforced at both `BUILTIN_MODULES` source and `addDefaultBuiltin`. Supersedes the GHSA-947f-4v7f-x2v8 exact-match mitigation. |

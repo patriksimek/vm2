@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Security fixes
+
+- **GHSA-647f-g98j-qq25** — patch bypass of the GHSA-m283-3h24-438v host-Promise rejection sanitizer, allowing sandbox-to-host RCE. The apply-trap gate identity-checked only the *direct* apply target, so registering an `onRejected` handler through `Function.prototype.call`/`.apply` indirection skipped the capability-stripping rebuild and delivered the raw host rejection to sandbox code. `lib/bridge.js` now peels `call`/`apply` indirection to the effective host `then`/`catch` and wraps the callbacks regardless of invocation shape, snapshotting `.apply` argument arrays getter-free and failing closed past a bounded peel depth. ATTACKS.md Category 39; tests in `test/ghsa/GHSA-647f-g98j-qq25/`.
+
 ## [3.11.6]
 
 Five advisories closed. Patch release — no API changes for valid configurations.

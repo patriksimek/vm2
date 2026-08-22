@@ -3442,6 +3442,77 @@ The fix restores **[Defense Invariant #3](#defense-invariants)** at the right ch
 
 ---
 
+## Attack Category 39: Host-Promise Rejection Sanitizer Bypass via `call`/`apply` Indirection
+
+**Uses**: [Category 38: `Error.cause` Host Reference Leak to Sandbox](#attack-category-38-errorcause-host-reference-leak-to-sandbox)
+
+**Supersedes**: closes the delivery gap in the [Category 38](#attack-category-38-errorcause-host-reference-leak-to-sandbox) fix. The `handleException`-based rebuild in Category 38 only runs when the bridge's host-Promise sanitizer actually wraps the sandbox callback; this category is the invocation path where that wrap was skipped. Structurally identical in shape to [Category 37: Stacked Indirection Bypass of Host Prototype Mutator Peel](#attack-category-37-stacked-indirection-bypass-of-host-prototype-mutator-peel) — a direct-target-only identity check at the apply trap, defeated by `Function.prototype.call`/`.apply` indirection.
+
+### Description
+
+The Category 38 fix rebuilds capability-bearing host rejection values as fresh sandbox-realm errors (stripping own properties such as `err.detail = process`, the host prototype, and the `Error.cause`/`SuppressedError`/`AggregateError` side-channels) before a sandbox `onRejected` callback runs. That rebuild is delivered by the bridge apply trap: when the sandbox calls `.then` / `.catch` on a host Promise, the trap wraps the sandbox-supplied callbacks so their argument flows through `hostPromiseSanitizeReject` (`handleException(from(e))`) first.
+
+The gate identity-checked only the **direct** apply target — `isHostPromiseThen(object)` / `isHostPromiseCatch(object)`. The sandbox's `Function.prototype.call` / `.apply` are `connect()`ed to the host's, so registering the handler through indirection (`p.then.call(p, undefined, cb)`, `p.then.apply(p, [undefined, cb])`, stacked `p.then.call.call(...)`, and mixed `call`/`apply` nestings) makes the apply-trap target host `Function.prototype.call`/`.apply` — not `then`/`catch`. The gate misses, no callback is wrapped, and the raw host rejection reaches the sandbox `onRejected` as a functional bridge proxy. A rejection whose own property references a host object then pivots to RCE: `e.detail.mainModule.require('child_process').execSync(...)`.
+
+Only `call`/`apply` indirection is affected. Sandbox `Reflect.apply(p.then, …)` and `p.then.bind(p, …)()` re-enter the apply trap with the **direct** target already resolved to host `then`/`catch`, so they were always covered.
+
+CVSS 3.1: 10.0 / Critical (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H). CWE-94 (Code Injection), CWE-693 (Protection Mechanism Failure).
+
+### Attack Flow
+
+1. Embedder exposes an async host helper — `sandbox: { fetchUser: async () => { const e = new Error('x'); e.detail = process; throw e; } }` — or a NodeVM external module's async method. The returned host Promise crosses the bridge as a proxy.
+2. Sandbox obtains the host-Promise proxy `p` and registers `onRejected` through `call`/`apply` indirection: `p.then.call(p, undefined, cb)`.
+3. The apply trap fires with `object = ` host `Function.prototype.call`, `context = ` the host `then`, `args = [p, undefined, cb]`. The direct-target check `isHostPromiseThen(object)` is false → callbacks not wrapped.
+4. Host Promise machinery (`PromiseReactionJob`) runs `cb` with the **raw** host rejection value in a microtask after `run()` returns.
+5. `cb` reads `e.detail` — a functional bridge proxy of host `process` — and drives `e.detail.mainModule.require('child_process').execSync(...)` to host RCE.
+
+### Canonical Examples
+
+```javascript
+const vm = new VM({ sandbox: {
+    fetchUser: async () => { const err = new Error('db'); err.detail = process; throw err; },
+}});
+vm.run(`
+    const p = fetchUser();
+    p.then.call(p, undefined, (e) => {                 // .call indirection skips the sanitizer
+        e.detail.mainModule.require('child_process').execSync('id');
+    });
+`);
+// Equivalent bypasses: p.then.apply(p, [undefined, cb]);
+//                      p.then.call.call(p.then, p, undefined, cb);   (stacked)
+//                      p.then.apply.call(p.then, p, [undefined, cb]);(mixed)
+//                      p.catch.call(p, cb);  p.catch.apply(p, [cb]);
+```
+
+### Mitigation
+
+The direct-target-only gate is replaced by `normalizeHostPromiseCallbacks` in the `lib/bridge.js` apply trap. Because the apply trap is the single chokepoint every sandbox-initiated host-function call passes through, indirection only repacks `(object, context, args)` — the trap can reconstruct the *effective* call:
+
+- **Peel `call`/`apply` in a bounded loop.** Host `Function.prototype.call`/`.apply` are cached individually (`otherFunctionCall`/`otherFunctionApply`) — they must be distinguished because their argument shapes differ (`call(this, ...args)` keeps the callbacks in the same list, shifted; `apply(this, argsArray)` nests them one array deeper). Each iteration unwinds one layer via cached function identity (`otherFromThis`), never by reading an attacker getter (TOCTOU-safe).
+- **Wrap at the effective slots.** When the peel resolves to host `then` (wrap `onFulfilled` + `onRejected`) or `catch` (wrap `onRejected`), the callbacks are wrapped through the same `makeSanitizedPromiseCallback` used for the direct call, so the Category 38 rebuild runs regardless of invocation shape.
+- **`.apply` nested arrays are snapshotted** into fresh, trap-owned, getter-free storage (`copyPromiseArgArray`, `length > 65535` bail) before the wrapped callbacks are written back, so the host machinery cannot observe a value different from the one vetted, and no raw sandbox object is mutated.
+- **Fail closed on depth.** The peel loop is bounded (`MAX_PROMISE_PEEL = 64`); exceeding it **throws `VMError`** rather than forwarding a possibly-unwrapped callback. Legitimate code never stacks `call`/`apply` anywhere near that deep, and a silent bail would be fail-open.
+
+This restores **[Defense Invariant #3](#defense-invariants)** (host-realm error carriers reaching sandbox callbacks are sanitized) at the *invocation* layer rather than the direct-call-site layer — every sandbox callback bound to a host Promise's `then`/`catch` is now sanitized regardless of how `then`/`catch` was invoked. It mirrors Category 37's promotion of the v6mx proto-mutator peel from positional to mechanism-independent.
+
+### Detection Rules
+
+- Sandbox source invoking a host-Promise method through indirection: `.then.call(`, `.then.apply(`, `.catch.call(`, `.catch.apply(`, or stacked `.call.call` / `.apply.call` chains terminating at a host Promise's `then`/`catch`.
+- A host `onRejected`/`onFulfilled` reached via such indirection reading a non-`message` own property of the received error (`e.detail`, `e.originalError`, `e.context`, …) and dereferencing it as an object/function.
+- A `call`/`apply` chain on a bridged host method exceeding a small depth (deny-on-exceed is the tripwire).
+
+### Considered Attack Surfaces
+
+- **`bind` / `Reflect.apply` / `Reflect.construct`** — verified already-safe: `bind` re-enters the trap with the direct target when the bound function is called; sandbox `Reflect.apply` invokes the target directly (direct-gate wraps it); `Reflect.construct(then)` throws (Promise methods are not constructors). All asserted in `test/ghsa/GHSA-647f-g98j-qq25/repro.js`.
+- **Descriptor extraction** — `Object.getOwnPropertyDescriptor(proto, 'then').value` then `.call` re-enters the apply trap and is normalized identically; on current Node it additionally trips the "incompatible receiver" brand check.
+- **Fulfillment values carrying host objects** — a host function that *resolves* with `{ secret: process }` yields a functional proxy on the fulfill path. This is unchanged, pre-existing, documented vm2 behavior (the bridge wraps host objects functionally, not capability-restricted) and identical on the direct `p.then(cb)` path — **not** in scope of this category, which concerns the rejection *rebuild* channel only.
+
+### Fix shape
+
+`lib/bridge.js` — `normalizeHostPromiseCallbacks` (+ helpers `makeSanitizedPromiseCallback`, `copyPromiseArgArray`, `isHostFunctionCall`/`isHostFunctionApply`, cached `otherFunctionCall`/`otherFunctionApply`). Node 8+ compatible (no post-ES2022 syntax). Tests: `test/ghsa/GHSA-647f-g98j-qq25/repro.js` (6 indirection vectors + 3 mixed/stacked siblings + 4 already-safe controls + 3 over-block guards).
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -3577,6 +3648,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | NodeVM builtin denylist bypass via `process` / `inspector/promises` (GHSA-rp36-8xq3-r6c4) | `DANGEROUS_BUILTINS` extended to include `process`; matching promoted to family-prefix via `isDangerousBuiltin(key)` so subpath builtins (`inspector/promises`, future `inspector/*`, `process/*`, `module/*`) share fate with their canonical name. `node:` URL prefix stripped before lookup. Enforced at both `BUILTIN_MODULES` source and `addDefaultBuiltin`. Supersedes the GHSA-947f-4v7f-x2v8 exact-match mitigation. |
 | NodeVM wildcard exposes underscored network builtins (GHSA-r9pm-gxmw-wv6p) | `BUILTIN_MODULES` filter in `lib/builtin.js` now excludes any name starting with `_`; `'*'` no longer expands to `_http_client`/`_http_server`/`_tls_wrap`/`_stream_*` etc. Explicit opt-in (`builtin: ['_http_client']`) and `mock`/`override` paths still work via `addDefaultBuiltin`. |
 | NodeVM process-wide observability builtins (GHSA-9g8x-92q2-p28f, GHSA-m5w8-4gq2-6f8x) | `DANGEROUS_BUILTINS` denylist extended with `diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8` and (GHSA-m5w8-4gq2-6f8x) `os`, `dns`; filtered out of `BUILTIN_MODULES` (closes `'*'` wildcard) and rejected in `addDefaultBuiltin` via `isDangerousBuiltin` (closes explicit allowlist and `makeBuiltins([...])`). `node:` prefix normalized and family-prefix subpath matching applied (covers `node:os`, `node:dns`, `dns/promises`). `os.setPriority` / `dns.setServers` / `dns.setDefaultResultOrder` host-process writes closed alongside the read leaks. `mocks`/`overrides` escape hatch preserved for sandbox-local replacements |
+| Host-Promise rejection sanitizer bypass via `call`/`apply` indirection (GHSA-647f-g98j-qq25) | The direct-target-only apply-trap gate is replaced by `normalizeHostPromiseCallbacks` in `lib/bridge.js`, which peels `Function.prototype.call`/`.apply` indirection (including stacked and mixed nestings) to the effective host `then`/`catch` and wraps the callbacks through `makeSanitizedPromiseCallback`, so the GHSA-m283 rejection rebuild runs regardless of invocation shape. `.apply` nested argument arrays are snapshotted into fresh getter-free storage (TOCTOU-safe) before write-back; the peel is bounded (`MAX_PROMISE_PEEL = 64`) and throws `VMError` on exceed rather than forwarding an unwrapped callback (fail-closed). `bind` and `Reflect.apply` re-enter the trap with the direct target and were already covered. |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

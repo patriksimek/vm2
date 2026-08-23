@@ -4105,6 +4105,56 @@ Embedders wanting the boundary today should set `require.root`, `context: 'sandb
 
 ---
 
+## Attack Category 48: Host Filesystem Path Leak via Host-Realm Error Stack
+
+**Uses**: [Category 4: Error Object Exploitation](#attack-category-4-error-object-exploitation)
+
+**Supersedes**: completes [GHSA-v27g-jcqj-v8rw](#defense-invariants) (`defaultSandboxPrepareStackTrace` / CallSite host-frame redaction). v27g redacts host frames only when the stack is formatted **in the sandbox realm**; this category is the residual where the stack was formatted **host-side** and crosses the bridge pre-formatted.
+
+### Description
+
+`Error.prototype.stack` is a lazily-computed, per-realm string. v27g installs `defaultSandboxPrepareStackTrace` and `applyCallSiteGetters` so that when the sandbox realm formats an Error's `.stack`, host frames (absolute paths, `node:` / `internal/` pseudo-paths) are blanked and only sandbox frames + the message survive. That guarantee covers only sandbox-realm formatting.
+
+A **host-realm** Error carries a `.stack` already formatted by the host (V8's default formatter, embedding absolute host paths, Node internals, and the embedding application's own source path). That string crosses the bridge to the sandbox verbatim — v27g's sandbox-realm formatter never runs on it. This is information disclosure (host filesystem layout, deployment path, vm2 install location); no code execution.
+
+The config-free canonical trigger routes through vm2's own host-side transformer: sandbox `eval("@@@ catch")` (also `new Function(…)`, `GeneratorFunction`/`AsyncFunction` constructors, multi-arg `new Function`) calls `host.transformAndCheck`, which throws a host-realm `SyntaxError` whose `.stack` names `lib/transformer.js`, `lib/vm.js`, `lib/setup-sandbox.js`, `node:vm`, and the embedder's files. But the primitive is general: **any** embedder-exposed host function that throws (`sandbox: { f() { throw new Error() } }`), and any host builtin that throws (`Buffer.from(Symbol())`, `Buffer.alloc(-1)`), delivers a host-formatted `.stack` the sandbox can read.
+
+CVSS 3.1: 5.8 / Moderate (CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:L/I:N/A:N). CWE-209 (Information Exposure Through an Error Message), CWE-497 (Exposure of System Data).
+
+### Delivery paths (why one chokepoint is insufficient)
+
+A host error surfaces to the sandbox in one of two shapes, chosen by V8-lazy-stack timing and by whether the carrier has dangerous own-props:
+
+1. **Live bridge proxy** — the sandbox reads `e.stack` (or `Object.getOwnPropertyDescriptor(e,'stack').value`, `Reflect.get(e,'stack')`) through the bridge `get` / `getOwnPropertyDescriptor` traps.
+2. **`handleException` rebuild** (`sanitizeHostOwnProps`, GHSA-m283) — the carrier is rebuilt as a fresh sandbox-realm Error, and `.stack` is carried across as a **primitive own property via `v = e[k]`, which never crosses the bridge get trap**. A bridge-only patch leaves this path leaking (demonstrated by pairing with the GHSA-cfcw prototype-severance repro: a `Buffer.from(Symbol())` stack leaks with zero bridge fires).
+
+### Mitigation
+
+Three chokepoints, each dropping host frames from a host Error's `.stack` while preserving the message header and clean sandbox frames (a bare filename with no path separator, no URL scheme, no `..`). All reuse a classifier mirroring v27g's `isHostFrameFileName`, extended to also treat `file:` / `wasm:` URL-scheme frames (ESM / WASM host frames) and `..`-traversal relative paths as host:
+
+1. **`lib/bridge.js` — `get` + `getOwnPropertyDescriptor` traps** (`redactHostStack`). Gated by `isOtherErrorObject`, which ORs the `[[ErrorData]]` brand (host `Object.prototype.toString` → `"[object Error]"`, immune to prototype-chain severance) with a proto-walk to host `Error.prototype` (immune to `Symbol.toStringTag` spoofing) — so neither the GHSA-cfcw severance nor a tag override smuggles a host error's stack past redaction. Ordinary bridge-crossing objects (a non-Error host object with a `stack` string) are untouched — the embedder may legitimately expose such data. The descriptor trap must handle both V8 shapes: up to Node 20 `stack` is an own **data** property (redact `desc.value`), but from Node 22 (V8 12.x) it is an own **accessor**, and forwarding that getter would let `Object.getOwnPropertyDescriptor(hostErr, 'stack').get.call(hostErr)` (equally `__lookupGetter__`, `Object.getOwnPropertyDescriptors`) pull the raw host-formatted string through the apply trap. The accessor is therefore collapsed to a redacted data descriptor, and a throwing or non-string getter fails closed to no stack at all.
+2. **`lib/setup-sandbox.js` — `sanitizeHostOwnProps`** (`x6m4RedactHostFramesFromStack`). Redacts the `.stack` primitive on the m283 rebuild path (delivery path 2), which the bridge cannot reach.
+3. **`lib/vm.js` — `transformAndCheck`** (defense in depth). Every transformer/`eval`/`Function` compile error is sandbox-destined, so its whole frame section is truncated to the message header host-side, pre-bridge. Truncating the entire section (rather than line-filtering) makes the highest-frequency, config-free path immune to frame-format evasions (eval-origin nesting, exotic frame shapes) and to `.stack`-getter TOCTOU. Top-level `VM.run` / `VMScript` compile errors are destined for the host embedder and are deliberately untouched.
+
+All redactors use module-load-cached `String.prototype` intrinsics and primitive string accumulation (no Array container, no sandbox-tamperable method reachable — Defense Invariant #11), are bounded against DoS, and fail closed. This restores the v27g guarantee (host frames redacted, sandbox frames + message preserved) independent of the realm that formatted the stack.
+
+### Detection Rules
+
+- Sandbox source reading `.stack` (or a `stack` descriptor) off a value caught from `eval` / `new Function` / a bridged host call.
+- A stack string delivered to the sandbox containing an absolute path, `node:` / `internal/` / `file:` / `wasm:` frame, a `..`-traversal path, or a vm2 `lib/*.js` source path.
+
+### Considered Attack Surfaces
+
+- **`Error.captureStackTrace` / custom `Error.prepareStackTrace` on a caught host error** — cannot re-expose the origin: the caught value is either a bridge proxy (CallSite getters redacted by v27g) or an already-rebuilt sandbox error (host CallSites gone). Asserted in `adversarial.js`.
+- **Non-Error host object with a `.stack` string** — out of scope: that is embedder-supplied data, not a V8-autopopulated error stack; `isOtherErrorObject` excludes it so legitimate data is never corrupted (same boundary as Category 38's "embedder intentionally exposes references").
+- **Relative host frames without `..`** (e.g. a host launched so frames read `foo/bar.js`) — extremely narrow; a sandbox VMScript filename with a separator would be over-redacted if the classifier keyed on separators, so the classifier stays keyed on absolute / scheme / `..` markers to avoid dropping legitimate sandbox frames.
+
+### Fix shape
+
+`lib/bridge.js` (`redactHostStack` + `isOtherErrorObject` + `isHostStackFrameFile`), `lib/setup-sandbox.js` (`x6m4RedactHostFramesFromStack` in `sanitizeHostOwnProps`), `lib/vm.js` (`redactTransformerErrorStack` around `transformAndCheck`). Node 8+ compatible. Tests: `test/ghsa/GHSA-x6m4-chr9-cg97/repro.js` (8) + `adversarial.js` (9: Function-family, captureStackTrace/prepareStackTrace, toString, file://, `..`, host-builtin path-b).
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -4256,6 +4306,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Host-authority builtin members survive the read-only wrap (GHSA-46pr-c5wc-xffx, GHSA-6w8r-xxw2-g3hx, GHSA-98xx-8mx4-x7cm, GHSA-h85j-hv3c-qfgq) | `vm.readonly()` blocks property *assignment* but forwards every *call* with host authority, so `lib/builtin.js` applies `sanitizeBuiltinMembers(key, mod)` (table: `BUILTIN_MEMBER_SANITIZERS`, `node:` prefix stripped so both spellings share fate) *before* the wrap, returning a shallow copy with only the escaping member neutralized: `crypto.setEngine` and `tls.setDefaultCACertificates` become throwing stubs (native library loading via the OS dynamic loader; process-wide CA trust-store replacement); `node:sqlite`'s `DatabaseSync` is subclassed to force `allowExtension` off for object- **and function-typed** options args, so Node throws `ERR_INVALID_STATE` from `loadExtension()`/`enableLoadExtension()`; `http`/`https` `globalAgent` is replaced with a sandbox-dedicated `Agent`, with `request()`/`get()` defaulting to it so `req.agent` cannot re-expose the host singleton. Member-level neutralization complements the whole-module `DANGEROUS_BUILTINS` denylist — the useful parts of each builtin stay available. `lib/setup-node-sandbox.js` also rejects repeated `node:` prefixes (the `node:node:sqlite` alias) and falls back to the full `node:`-prefixed builtin-map key so canonical `require('node:sqlite')` resolves. |
 | Shared Buffer pool discloses/corrupts host memory (GHSA-fcqc-726x-5wfc) | `depoolBuffer` in `lib/setup-sandbox.js` enforces backing-store ownership (`byteOffset === 0 && buffer.byteLength === length`): every pooling factory (`Buffer.from` non-ArrayBuffer overloads, `concat`, `of`, `copyBytesFrom`, deprecated `Buffer(...)`/`new Buffer(...)`) copies a pool-backed result into a standalone non-pooled `LocalBuffer.alloc(n)` before it reaches the sandbox, so `.buffer` can never expose Node's shared 64 KiB pool (neighbouring host buffers). The `Buffer.from(arrayBuffer, off, len)` sharing overload is preserved, detected via a spoof-proof `ArrayBuffer.prototype.byteLength`-getter brand test |
 | `timeout` bypass via `FinalizationRegistry` cleanup callback (GHSA-r4fx-v8hh-22mv) | `timeout` is implemented with V8's `TerminateExecution` and bounds only the synchronous body of `run()`; a `FinalizationRegistry` cleanup callback is fired by the GC *after* `run()` returns, so sandbox code inside it ran with no timeout accounting and could block the host event loop indefinitely — and `allowAsync: false`, which closes the equivalent `Promise`-continuation path, does not close this one. `lib/setup-sandbox.js` deletes `FinalizationRegistry` and `WeakRef` from the sandbox global (guarded by `typeof` so pre-Node-14 is unaffected), the same withholding used for timers/`queueMicrotask`; neither constructor has literal syntax, so the binding cannot be reconstructed from inside. `NodeVM` inherits it. Scope: this restores the documented `timeout` control in the default configuration — it is not a general DoS guarantee, and an embedder re-exposing either global via the `sandbox` option re-opens the vector by choice. |
+| Host filesystem path leak via host-realm error stack (Category 48: GHSA-x6m4-chr9-cg97) | GHSA-v27g's `defaultSandboxPrepareStackTrace` / CallSite redaction only covers stacks formatted **in the sandbox realm**; a host-realm Error arrives with `.stack` already formatted by V8 host-side (absolute paths, `node:` / `internal/` frames, vm2's own `lib/*.js`, the embedding application's source) and crossed verbatim. Redacted at three chokepoints, each preserving the message header and clean sandbox frames: `BaseHandler.get` / `getOwnPropertyDescriptor` in `lib/bridge.js` (`redactHostStack`, gated by `isOtherErrorObject` — the `[[ErrorData]]` brand OR'd with a proto-walk to host `Error.prototype`, so neither GHSA-cfcw prototype severance nor a `Symbol.toStringTag` override smuggles a stack past it; the descriptor trap collapses the Node 22+ own-**accessor** shape of `Error#stack` into a redacted data descriptor so `desc.get.call(hostErr)` / `__lookupGetter__` cannot pull the raw string through the apply trap); `sanitizeHostOwnProps` in `lib/setup-sandbox.js` (`x6m4RedactHostFramesFromStack`), which covers the GHSA-m283 rebuild path where `.stack` is copied as a primitive via `v = e[k]` and never crosses a bridge trap; and `transformAndCheck` in `lib/vm.js`, which truncates the whole frame section of sandbox-destined compile errors (the config-free `eval("@@@ catch")` path) host-side, pre-bridge. The frame classifier extends GHSA-v27g's `isHostFrameFileName` with `file://` / `wasm://` schemes and `..`-traversal paths. Non-Error host objects the embedder deliberately exposes (including a plain object with a `stack`-named string) are untouched. |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

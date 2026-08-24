@@ -75,13 +75,14 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { NodeVM } = require('../../../lib/main.js');
+const {mkdirpSync, rmrfSync} = require('../../fs-compat.js');
 
 describe('GHSA-7q3f-wx44-378m (sibling-prefix bypass through the NodeVM require path)', function () {
 	let root;
 
 	function pkg(name, body) {
 		const dir = path.join(root, 'node_modules', name);
-		fs.mkdirSync(dir, {recursive: true});
+		mkdirpSync(dir);
 		fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({name, version: '1.0.0', main: 'index.js'}));
 		fs.writeFileSync(path.join(dir, 'index.js'), body);
 		return dir;
@@ -93,7 +94,7 @@ describe('GHSA-7q3f-wx44-378m (sibling-prefix bypass through the NodeVM require 
 		root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'vm2-7q3f-')));
 		// The allowlisted package, with a sandbox-reachable relative require.
 		pkg('foo', 'module.exports = {who: "foo", reach: n => require("../" + n)};');
-		fs.mkdirSync(path.join(root, 'node_modules', 'foo', 'lib'), {recursive: true});
+		mkdirpSync(path.join(root, 'node_modules', 'foo', 'lib'));
 		fs.writeFileSync(path.join(root, 'node_modules', 'foo', 'lib', 'x.js'), 'module.exports = "foo-lib-x";');
 		// Prefix-sharing siblings that must stay unreachable.
 		for (const name of ['foo2', 'foo-evil', 'foobar']) pkg(name, `module.exports = {who: ${JSON.stringify(name)}};`);
@@ -103,7 +104,7 @@ describe('GHSA-7q3f-wx44-378m (sibling-prefix bypass through the NodeVM require 
 	});
 
 	after(function () {
-		if (root) fs.rmSync(root, {recursive: true, force: true});
+		if (root) rmrfSync(root);
 	});
 
 	function run(code, modules, transitive) {

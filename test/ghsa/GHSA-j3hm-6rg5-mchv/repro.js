@@ -32,6 +32,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { NodeVM } = require('../../../lib/main.js');
+const {rmrfSync} = require('../../fs-compat.js');
 
 const REPO_ROOT = path.resolve(__dirname, '../../..');
 const VM2_ENTRY = path.resolve(REPO_ROOT, 'lib/main.js');
@@ -77,6 +78,6 @@ describe('GHSA-j3hm-6rg5-mchv — sandbox cannot rebuild an unrestricted NodeVM 
 			const out = vm.run(`module.exports = require(${JSON.stringify(path.join(dir, 'greet.js'))});`,
 				path.join(dir, 'main.js'));
 			assert.strictEqual(out, 'HELLO_ALLOWED');
-		} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+		} finally { rmrfSync(dir); }
 	});
 });

@@ -26,6 +26,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { NodeVM } = require('../../../lib/main.js');
+const {rmrfSync} = require('../../fs-compat.js');
 
 // Build a tiny native library whose constructor writes a marker file. Skip the
 // whole suite if a C compiler / platform support is unavailable.
@@ -69,7 +70,7 @@ describe('GHSA-46pr-c5wc-xffx — crypto.setEngine native code load', function (
 
 	after(function () {
 		delete process.env.VM2_46PR_MARKER;
-		if (dir) try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
+		if (dir) try { rmrfSync(dir); } catch (e) {}
 	});
 
 	it('crypto.setEngine is disabled and never loads the native library', function () {

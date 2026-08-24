@@ -27,6 +27,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { NodeVM, VMError } = require('../../../lib/main.js');
+const {rmrfSync} = require('../../fs-compat.js');
 
 // Each test creates its own scratch tree under tmpdir and tears it down in
 // afterEach. We avoid sharing state across cases.
@@ -38,7 +39,7 @@ function mkdtemp() {
 
 function rmrf(p) {
 	try {
-		fs.rmSync(p, { recursive: true, force: true });
+		rmrfSync(p);
 	} catch (e) {
 		/* ignore */
 	}

@@ -40,8 +40,35 @@
 const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
+// it.cond is set up by test/vm.js when the main suite runs first; if this GHSA
+// regression file is loaded standalone (mocha file-order is undefined), fall
+// back to a local shim so the cond gating still works.
+if (typeof it.cond !== 'function') {
+	it.cond = function (name, cond, fn) {
+		return cond ? it(name, fn) : it.skip(name, fn);
+	};
+}
+
+// `Promise.prototype.finally` is ES2018; Node 8 never shipped it. The attack
+// surface this advisory closes IS `finally` taking a stale-protector fast path
+// to the native `then`, so on a runtime with no `finally` there is no path to
+// exercise and nothing to regress. Gate on the method's observable presence
+// rather than a version number, and assert the alternative outcome below — that
+// the sandbox has no `finally` either, so the primitive is genuinely absent
+// rather than merely untested.
+const HAS_FINALLY = typeof Promise.prototype.finally === 'function';
+
 describe('GHSA-27g9-p43v-cw3v (stale PromiseThenLookupChain protector across finally)', function () {
-	it('attacker Promise species does not survive p.finally()', function (done) {
+	it.cond('sandbox has no Promise.prototype.finally when the host runtime has none', !HAS_FINALLY, function () {
+		const vm = new VM({ allowAsync: true });
+		assert.strictEqual(
+			vm.run('typeof Promise.prototype.finally'),
+			'undefined',
+			'sandbox exposes a finally the host runtime does not have — the advisory path would be reachable',
+		);
+	});
+
+	it.cond('attacker Promise species does not survive p.finally()', HAS_FINALLY, function (done) {
 		this.timeout(4000);
 		let speciesCalled = false;
 		const vm = new VM({ allowAsync: true, eval: false, wasm: false, timeout: 3000 });
@@ -76,7 +103,7 @@ describe('GHSA-27g9-p43v-cw3v (stale PromiseThenLookupChain protector across fin
 		}, 250);
 	});
 
-	it('finally still works correctly for legitimate sandbox code', function (done) {
+	it.cond('finally still works correctly for legitimate sandbox code', HAS_FINALLY, function (done) {
 		this.timeout(4000);
 		let finallyRan = false;
 		let resolvedValue = null;

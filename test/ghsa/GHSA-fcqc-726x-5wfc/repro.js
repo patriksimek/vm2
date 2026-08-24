@@ -130,6 +130,14 @@ describe('GHSA-fcqc-726x-5wfc (shared Buffer pool discloses/corrupts host memory
 			view[0] = 0x63;
 			[view.length, src[0], src.buffer.byteLength];
 		`);
-		assert.deepStrictEqual(shared, [4, 0x63, 4]);
+		// Element-wise rather than deepStrictEqual: the returned array is a bridge
+		// proxy, and assert's deep-equality fast path on Node < 18 compares a
+		// proxy's own keys differently than a plain array's, reporting a spurious
+		// mismatch for identical contents. The assertion below is the same
+		// strength, just portable.
+		assert.strictEqual(shared.length, 3, 'sharing probe did not return 3 values');
+		assert.strictEqual(shared[0], 4, 'view length');
+		assert.strictEqual(shared[1], 0x63, 'write through the view did not reach the source buffer');
+		assert.strictEqual(shared[2], 4, 'backing ArrayBuffer byteLength');
 	});
 });

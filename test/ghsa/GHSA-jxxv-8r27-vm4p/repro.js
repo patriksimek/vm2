@@ -29,6 +29,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { NodeVM } = require('../../../lib/main.js');
+const {rmrfSync} = require('../../fs-compat.js');
 
 // The exact require config lib/cli.js now uses.
 function cliRequireConfig(scriptPath) {
@@ -49,7 +50,7 @@ describe('GHSA-jxxv-8r27-vm4p — CLI sandbox isolation', () => {
 			try { NodeVM.file(scriptPath, { require: cliRequireConfig(scriptPath) }); } catch (e) { /* fine */ }
 			assert.strictEqual(fs.existsSync(marker), false,
 				'script reached host fs — CLI still runs the target in the host realm');
-		} finally { fs.rmSync(dir, { recursive: true, force: true }); }
+		} finally { rmrfSync(dir); }
 	});
 
 	it('the shipped lib/cli.js uses sandbox context and a bounded root', () => {
@@ -58,8 +59,8 @@ describe('GHSA-jxxv-8r27-vm4p — CLI sandbox isolation', () => {
 		// The doesNotThrow below records that construction with external-and-no-root
 		// still succeeds (the still-open GHSA-j3hm-6rg5-mchv hole), NOT that it is safe.
 		const cliSrc = fs.readFileSync(path.resolve(__dirname, '../../../lib/cli.js'), 'utf8');
-		assert.match(cliSrc, /context:\s*'sandbox'/, 'CLI must load requires in sandbox context');
-		assert.match(cliSrc, /root:\s*pa\.dirname/, 'CLI must bound requires to the script directory');
+		assert.ok(/context:\s*'sandbox'/.test(cliSrc), 'CLI must load requires in sandbox context');
+		assert.ok(/root:\s*pa\.dirname/.test(cliSrc), 'CLI must bound requires to the script directory');
 		assert.doesNotThrow(() => new NodeVM({ require: { external: true } }));
 	});
 });

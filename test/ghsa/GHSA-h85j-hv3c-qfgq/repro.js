@@ -26,6 +26,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const https = require('https');
 const { NodeVM } = require('../../../lib/main.js');
+const {rmrfSync} = require('../../fs-compat.js');
 
 function makeCert(dir) {
 	const cert = path.join(dir, 'srv.pem');
@@ -55,7 +56,7 @@ describe('GHSA-h85j-hv3c-qfgq — https.globalAgent host exposure', function () 
 
 	after(function () {
 		if (server) try { server.close(); } catch (e) {}
-		if (dir) try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
+		if (dir) try { rmrfSync(dir); } catch (e) {}
 	});
 
 	it('sandbox cannot observe host requests via https.globalAgent', function (done) {

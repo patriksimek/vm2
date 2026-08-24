@@ -28,6 +28,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const tls = require('tls');
 const { NodeVM } = require('../../../lib/main.js');
+const {rmrfSync} = require('../../fs-compat.js');
 
 const hasApi = typeof tls.setDefaultCACertificates === 'function'
 	&& typeof tls.getCACertificates === 'function';
@@ -57,7 +58,7 @@ function makeCa(dir) {
 	after(function () {
 		// Defensive: restore the host default trust store if anything changed it.
 		try { if (original) tls.setDefaultCACertificates(original); } catch (e) {}
-		if (dir) try { fs.rmSync(dir, { recursive: true, force: true }); } catch (e) {}
+		if (dir) try { rmrfSync(dir); } catch (e) {}
 	});
 
 	it('cannot replace the host default CA trust store', function () {

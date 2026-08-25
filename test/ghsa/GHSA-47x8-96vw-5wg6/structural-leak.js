@@ -30,48 +30,47 @@ const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
 describe('GHSA-47x8-96vw-5wg6 (structural leak: host Object reachable in sandbox)', function () {
-	it('proto-walk via __lookupGetter__ + Buffer.apply terminates at sandbox Object', function () {
+	// GHSA-88hf-g992-jg85 hardened this invariant: rather than relying on the
+	// proto-walk landing on the *remapped* sandbox intrinsic, the raw host
+	// `Object.prototype.__proto__` getter is now DENIED delivery entirely — it
+	// collapses to a non-callable sentinel, so the walk primitive cannot even
+	// start. That is strictly stronger than "terminates at sandbox Object" and
+	// also closes the non-intrinsic case (host EventEmitter.prototype etc.) that
+	// the remapping never covered.
+	it('proto-walk via __lookupGetter__ + Buffer.apply cannot obtain a callable host __proto__ getter', function () {
 		const vm = new VM();
 		const result = vm.run(`
 			const g = ({}).__lookupGetter__;
 			const a = Buffer.apply;
 			const p = a.apply(g, [Buffer, ['__proto__']]);
-			const o = p.call(p.call(a));
+			let threw = false;
+			let leaked = null;
+			try { leaked = p.call(p.call(a)); } catch (_) { threw = true; }
 			({
-				oIsObjectProto: o === Object.prototype,
-				ctorIsSandboxObject: o.constructor === Object,
-				ctorIsSandboxFunction: o.constructor.constructor === Function
+				getterIsCallable: typeof p === 'function',
+				walkThrew: threw,
+				leaked: leaked,
 			});
 		`);
-		assert.strictEqual(result.oIsObjectProto, true, 'walked proto must be sandbox Object.prototype');
-		assert.strictEqual(
-			result.ctorIsSandboxObject,
-			true,
-			'host Object must NOT leak as a wrapped proxy: o.constructor !== sandbox Object',
-		);
-		assert.strictEqual(
-			result.ctorIsSandboxFunction,
-			true,
-			'host Function must NOT leak via Object.constructor.constructor',
-		);
+		assert.strictEqual(result.getterIsCallable, false, 'raw host __proto__ getter must not be delivered as callable');
+		assert.strictEqual(result.walkThrew, true, 'invoking the denied getter must throw, blocking the walk');
+		assert.strictEqual(result.leaked, null, 'no host prototype may be surfaced via the raw getter');
 	});
 
-	it('proto-walk to host Array.prototype terminates at sandbox Array', function () {
+	it('proto-walk to host Array.prototype cannot start (raw getter denied)', function () {
 		const vm = new VM();
 		const result = vm.run(`
 			const g = ({}).__lookupGetter__;
 			const a = Buffer.apply;
 			const p = a.apply(g, [Buffer, ['__proto__']]);
-			// host Array.prototype: Buffer extends Uint8Array extends TypedArray;
-			// or [] gives sandbox Array.prototype directly. Use a host array
-			// returned by a host function:
-			const ho = Object.entries({});
-			const ap = p.call(ho);
-			({
-				ctorIsSandboxArray: ap === Array.prototype || ap.constructor === Array
-			});
+			const ho = Object.entries({}); // host array
+			let threw = false, leaked = null;
+			try { leaked = p.call(ho); } catch (_) { threw = true; }
+			({ getterIsCallable: typeof p === 'function', walkThrew: threw, leaked: leaked });
 		`);
-		assert.strictEqual(result.ctorIsSandboxArray, true, 'host Array constructor must not leak as a wrapped proxy');
+		assert.strictEqual(result.getterIsCallable, false, 'raw host __proto__ getter must not be delivered as callable');
+		assert.strictEqual(result.walkThrew, true, 'invoking the denied getter must throw, blocking the walk to host Array.prototype');
+		assert.strictEqual(result.leaked, null, 'host Array.prototype must not be surfaced via the raw getter');
 	});
 
 	it('host Object.prototype.constructor returns sandbox Object', function () {
@@ -105,18 +104,23 @@ describe('GHSA-47x8-96vw-5wg6 (structural leak: host Object reachable in sandbox
 		const vm = new VM();
 		const result = vm.run(`
 			(() => {
+				// GHSA-88hf-g992-jg85: extracting the host __proto__ getter via the
+				// descriptor of the *sandbox* Object.prototype yields the sandbox
+				// getter (harmless). Extracting it off a *host* proxy would be denied
+				// at delivery. Either way, no host prototype may be surfaced.
 				const d = Object.getOwnPropertyDescriptor(Object.prototype, '__proto__');
 				const get = d && d.get;
 				if (!get) return {ok: true};
-				const op = get.call(get.call(Buffer.apply));
+				let threw = false, op = null;
+				try { op = get.call(get.call(Buffer.apply)); } catch (_) { threw = true; }
 				return {
-					ctorIsSandboxObject: op.constructor === Object,
-					ctorOfCtorIsSandboxFunction: op.constructor.constructor === Function
+					// The sandbox getter walking a host proxy still collapses to the
+					// bridge-flattened view (sandbox Object.prototype) or throws.
+					safe: threw || op === Object.prototype || (op && op.constructor === Object)
 				};
 			})();
 		`);
-		assert.strictEqual(result.ctorIsSandboxObject, true);
-		assert.strictEqual(result.ctorOfCtorIsSandboxFunction, true);
+		assert.strictEqual(result.safe, true, 'no host prototype/constructor may leak via descriptor getter extraction');
 	});
 
 	it('host Number/String/Boolean wrappers cannot leak via primitive proto walk', function () {
@@ -154,8 +158,10 @@ describe('GHSA-47x8-96vw-5wg6 (structural leak: host Object reachable in sandbox
 				const g = ({}).__lookupGetter__;
 				const a = Buffer.apply;
 				const p = a.apply(g, [Buffer, ['__proto__']]);
-				const fp = p.call(a);
 				try {
+					// GHSA-88hf-g992-jg85: p (raw host __proto__ getter) is now a
+					// non-callable sentinel, so fp cannot be obtained at all.
+					const fp = p.call(a);
 					const F = fp.constructor;
 					const r = F('return 1');
 					return {leaked: typeof r === 'function'};
@@ -165,5 +171,6 @@ describe('GHSA-47x8-96vw-5wg6 (structural leak: host Object reachable in sandbox
 			})();
 		`);
 		assert.strictEqual(result.leaked, undefined, 'Function constructor must not produce a callable function');
+		assert.strictEqual(result.blocked, true, 'the raw getter walk must be blocked before reaching any host constructor');
 	});
 });

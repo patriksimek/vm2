@@ -1439,7 +1439,10 @@ describe('VM', () => {
 		const a = Buffer.apply;
 		const p = a.apply(g, [Buffer, ['__proto__']]);
 		p.call(a).constructor('return process')();
-		`), /constructor is not a function/);
+		`),
+		// GHSA-88hf-g992-jg85: p is now the denied getter sentinel, so p.call
+		// itself is not a function — the attack is blocked even earlier.
+		/constructor is not a function|is not a function/);
 	});
 
 	it('getOwnPropertyDescriptor Function constructor bypass attack', () => {
@@ -1458,7 +1461,10 @@ describe('VM', () => {
 			const hostFuncProto = protoGetter.call(apply);
 			const desc = Object.getOwnPropertyDescriptor(hostFuncProto, 'constructor');
 			desc.value('return process')();
-		`), /Cannot read properties of undefined|Cannot read property 'value' of undefined/);
+		`),
+		// GHSA-88hf-g992-jg85: protoGetter is now the denied getter sentinel, so
+		// protoGetter.call is not a function — blocked before reaching desc.
+		/Cannot read properties of undefined|Cannot read property 'value' of undefined|is not a function/);
 	});
 
 	it('getOwnPropertyDescriptor via Object method call bypass attack', () => {
@@ -2489,8 +2495,14 @@ describe('VM', () => {
 			const g = ({}).__lookupGetter__;
 			const a = Buffer.apply;
 			const p = a.apply(g, [Buffer, ['__proto__']]);
-			const op = p.call(p.call(p.call(p.call(Buffer.of()))));
-			const ho = op.constructor;
+			// GHSA-88hf-g992-jg85: p (raw host __proto__ getter) is now denied
+			// delivery and is a non-callable sentinel, so this walk throws — the
+			// forged-target attack cannot even seed its host Function reference.
+			let op, ho;
+			try {
+				op = p.call(p.call(p.call(p.call(Buffer.of()))));
+				ho = op.constructor;
+			} catch (_) { ho = Object; }
 			const obj = {
 				subarray: Buffer.prototype.inspect,
 				slice: Buffer.prototype.slice,

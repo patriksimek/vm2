@@ -4243,6 +4243,74 @@ Restore [Defense Invariant #3](#defense-invariants) at the memo chokepoint by ma
 
 ---
 
+## Attack Category 50: Host Prototype-Chain Climb via Raw `__proto__` Getter (Reader Side)
+
+**Uses**: [Category 2: Prototype Chain Manipulation](#attack-category-2-prototype-chain-manipulation), [Category 20: Host Intrinsic Prototype Pollution via Bridge Write Traps](#attack-category-20-host-intrinsic-prototype-pollution-via-bridge-write-traps), [Category 30: Host Prototype Mutation via Bridged Setter Primitives](#attack-category-30-host-prototype-mutation-via-bridged-setter-primitives).
+
+Advisory: GHSA-88hf-g992-jg85 (NodeVM default config). The reader-side analog of the GHSA-v6mx / GHSA-cfcw setter work.
+
+### Description
+
+The bridge deliberately **flattens** the host prototype chain. When a host object is wrapped, its proxy's target `[[Prototype]]` is set so that `getPrototypeOf` (and the `.__proto__` / `Object.getPrototypeOf` read paths, all of which route through the `getPrototypeOf` trap) reports the host value as inheriting directly from the sandbox `Object.prototype`, then `null`. The intermediate host builtin prototypes — `Socket.prototype`, `Duplex.prototype`, `Readable.prototype`, `Stream.prototype`, `EventEmitter.prototype` — are **invisible** to sandbox code.
+
+This flattening is load-bearing: those intermediate host prototypes are **not** in `protectedHostObjects` (only cached JS intrinsic prototypes + constructors are). If sandbox code could reach one as a bridge proxy, `BaseHandler.set` would forward a write straight to the raw host object — e.g. `EventEmitter.prototype.emit = fn`.
+
+The escape pierces the flattened view by extracting the **raw host `Object.prototype.__proto__` getter** and invoking it directly. `gP.call(x)` bypasses the `getPrototypeOf` trap and returns the *true* host `[[Prototype]]` of `x`, freshly wrapped — exposing each intermediate host prototype one hop at a time. GHSA-v6mx/cfcw classified the `__proto__` **setter** (a mutator) as dangerous but left the **getter** (a reader) deliverable.
+
+CWE-913 (Improper Control of Dynamically-Managed Code Resources).
+
+### Attack Flow
+
+1. Extract the raw host getter: `const gP = Buffer.call.call(({}).__lookupGetter__, 67, '__proto__');`. Host `Function.prototype.call` unwraps the `connect()`-mapped sandbox `__lookupGetter__` to its host counterpart, which (invoked host-side with `this = 67`) walks host `Number.prototype → Object.prototype` and returns the host `__proto__` getter. It crosses back and is wrapped as a callable bridge proxy.
+2. Climb: starting from a host object reachable in NodeVM (`console._stdout`), repeatedly call `gP.call(cur)`. Each call returns the raw host `[[Prototype]]` — Socket → Duplex → Readable → Stream → `EventEmitter.prototype` — as a fresh, writable bridge proxy.
+3. Write a sandbox function onto the reached host prototype: `EventEmitter.prototype.emit = fn`. `EE.prototype` is not protected, so `BaseHandler.set` forwards the write to the real host object.
+4. Later, any host `process.emit(...)` / `console.log(...)` invokes the sandbox `emit` with `this === host object` → arbitrary host code execution.
+
+### Canonical Example
+
+```javascript
+// GHSA-88hf-g992-jg85
+const { NodeVM } = require("vm2");
+new NodeVM().run(`
+  const gP = Buffer.call.call(({}).__lookupGetter__, 67, '__proto__');
+  let cur = console._stdout, ee = null;
+  for (let i = 0; i < 25; i++) {
+    const p = gP.call(cur);
+    if (!p) break;
+    if (Object.prototype.hasOwnProperty.call(p, 'emit')) { ee = p; break; }
+    cur = p;
+  }
+  ee.emit = function () { /* runs later with host 'this' */ };
+`);
+```
+
+Laundering variants (all closed): `Buffer.apply.apply(g, [Buffer, ['__proto__']])`, `Reflect.apply`-based extraction, and the GHSA-cfcw `map`/`bind` host-side applicator `ca` — every one still needs a host-invocable proto-reader **as a value** to climb, and all such readers are denied delivery.
+
+### Why It Works
+
+The `getPrototypeOf` trap returns a flattened chain; but a *directly invoked* raw host getter is a plain host function call whose result is the un-flattened host prototype. The prior mutator defenses (`dangerousHostProtoMutators`) covered only the write primitive. Reading a prototype was deemed harmless — but the reader hands the sandbox a *writable* proxy of a non-intrinsic host prototype, and non-intrinsic host prototypes are outside `protectedHostObjects`.
+
+### Mitigation
+
+`lib/bridge.js`: classify the raw host **proto-readers** as dangerous-to-**deliver**, symmetric to the mutator set. A new identity set `dangerousHostProtoReaders` is populated at bridge init with the host `Object.prototype.__proto__` getter, host `Object.getPrototypeOf`, and host `Reflect.getPrototypeOf`. `isDangerousHostProtoReader(other)` is consulted **after** the `mappingOtherToThis` cache short-circuit in the three host→sandbox delivery chokepoints — `thisFromOtherWithFactory`, `thisEnsureThis`, `thisFromOtherForThrow` — and returns `emptyFrozenObject` (a non-callable; its `.call` is `undefined`). The `apply` trap additionally refuses invocation of a reader (direct, one-layer `Function.prototype.{call,apply,bind}` peel, and `Reflect.{apply,construct}`) as defense-in-depth.
+
+Because the sandbox can never hold a host-invocable proto-reader, it cannot pierce the flattened view by **any** composition — direct, stacked indirection, or host-side laundering (laundering still needs the reader as an array element, which is denied). Cache-first ordering preserves any `connect()`-registered sandbox surrogate. Legitimate `Object.getPrototypeOf(hostProxy)` / `hostProxy.__proto__` / `Reflect.getPrototypeOf(hostProxy)` keep working: they use the **sandbox-realm** intrinsics and route through the `getPrototypeOf` trap, returning the flattened wrapped proto — they never extract or invoke the raw host reader. Enforces [Defense Invariant](#defense-invariants): host callables that read/climb host prototype chains outside the `getPrototypeOf` trap must never reach the sandbox.
+
+**Second layer — the write-side payoff (defense-in-depth).** Independent of *how* a host prototype is reached, the escape only pays off when the sandbox plants a **callable** on a shared host prototype so the host later invokes it with a foreign `this`. That payoff is closed structurally too: host `[[Prototype]]` objects are marked at delivery time (`looksLikeHostPrototype` — an object that owns a data `constructor` whose `.prototype` points back at it, read via `otherSafeGetOwnPropertyDescriptor` so no host getter fires), recorded eagerly in `hostObjectsUsedAsPrototype` before any sandbox write can run. `BaseHandler.set` and `BaseHandler.defineProperty` then divert **function values and accessor descriptors** written to a marked prototype onto the sandbox-side proxy target instead of `otherReflectSet`/`otherReflectDefineProperty`-ing them onto the raw host object. Marking is indirection-independent (decided by the object's shape at delivery, not by how it was obtained) and persistent (later `constructor` corruption cannot clear a mark). Two properties keep the embedder contract intact: **data** writes always flow through to the host, and **leaf** host objects handed to the sandbox are never marked (their `constructor` is inherited, not own), so `test/vm.js`'s `freeze, protect > without freeze` — where the sandbox installs a function on an exposed host object the host reads back — still holds. Either layer alone blocks the canonical PoC; together they close the read primitive *and* the write payoff for any future read path.
+
+### Detection Rules
+
+- **`__lookupGetter__` / `Object.getOwnPropertyDescriptor(..., '__proto__').get` composed with `Buffer.call` / `Buffer.apply` / `Reflect.apply`** — the raw-getter extraction primitive.
+- **Repeated single-hop `getter.call(x)` producing objects with `own` builtin-prototype methods (`emit`, `pipe`, `write`)** — a raw-chain climb, distinct from the flattened `Object.getPrototypeOf` walk that terminates at `Object.prototype`.
+- **A write of a function value onto any object reached through such a climb** — the payoff sink; the reached object is a host builtin prototype outside `protectedHostObjects`.
+
+### Considered Attack Surfaces
+
+- **Direction (B) — protecting the reachable host-prototype set instead of denying the reader**: rejected. Enumerating every non-intrinsic host prototype at init is impossible, and protecting them at the apply-trap result site (à la the v6mx peel) is defeated by host-side `map`/`bind` laundering exactly as the peel was. Denying the reader at *delivery* is the complete, laundering-independent chokepoint.
+- **`Object.getPrototypeOf` / `Reflect.getPrototypeOf` as data-property readers**: not currently extractable as raw host references via `__lookupGetter__` (they are data properties, not accessors), but added to `dangerousHostProtoReaders` defensively so any future host return path that surfaces them is denied.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -4384,6 +4452,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Stacked indirection bypass of host prototype mutator peel (GHSA-cfcw-xp6x-25gj) | `thisFromOtherWithFactory`, `thisFromOtherForThrow`, and `thisEnsureThis` consult `isDangerousHostProtoMutator(other)` after the `mappingOtherToThis` cache check and return `emptyFrozenObject` for raw, uncached host references. The sandbox can no longer obtain a callable reference to a host prototype mutator regardless of how many `.call`/`.apply`/`.bind`/`Reflect.apply` indirection layers it stacks — the v6mx apply-trap peel remains as a complementary invocation-side check, but the structural class is closed at delivery time. Cache-first ordering preserves `connect()`-registered sandbox surrogates for `__defineGetter__`/`__defineSetter__` (issue #176). |
 | Shipped CLI ran untrusted scripts unsandboxed (Category 47: GHSA-jxxv-8r27-vm4p) | `lib/cli.js` built `NodeVM.file(path, {require:{external:true}})` with no `require.root` and the default `context:'host'`, so `isPathAllowed` admitted every path and the target could `require(__filename)` into the HOST realm — the CLI provided no isolation. The CLI now sets `root: pa.dirname(script)` (requires confined to the script's own directory) and `context: 'sandbox'` (admitted modules execute inside the sandbox). Defense-in-depth alongside it, in `lib/resolver-compat.js`: `isVm2SelfRequire` denies a sandbox `require()` of vm2's own `lib/` directory or package main entry by realpath (removing the `require('vm2')` → real `VM`/`NodeVM` → nested unrestricted sandbox escalation route), and a one-time `console.warn` fires on `external` + no `root` + host context. **Not a general fix**: `isPathAllowed`'s `if (this.rootPaths === undefined) return true;` is unchanged, so `require.external` without `require.root` still host-requires arbitrary attacker-named paths — tracked as GHSA-j3hm-6rg5-mchv, still OPEN. |
 | Host-side laundering of prototype severance via `bind` + host higher-order method (GHSA-cfcw-xp6x-25gj follow-up) | Mechanism-independent **payoff** hardening: a raw host-realm object whose prototype chain reaches `null` without passing through the sandbox `Object.prototype` is refused at two independent chokepoints — `thisEnsureThis` (the only path that returns a host object raw on proto-walk fall-through) returns `emptyFrozenObject`, and `handleException` (`isForeignSeveredHostValue`, the transformer's sole catch sanitizer) replaces it with a benign sandbox `Error`. Closes severance laundered entirely host-side (`apply.bind(call,call)` over a genuine host array's `.map`) that never re-crosses the bridge, independent of the severance mechanism. The sandbox `Object.prototype` is unforgeable host-side (it crosses as a proxy), so the discriminator cannot be spoofed. Primordial `Object.create(null)` values are exempt (GHSA-9vg3 preserved). |
+| Host prototype-chain climb via raw `__proto__` getter (GHSA-88hf-g992-jg85) | Reader-side analog of the mutator defenses. A new `dangerousHostProtoReaders` set (host `Object.prototype.__proto__` getter, `Object.getPrototypeOf`, `Reflect.getPrototypeOf`) is consulted after the `mappingOtherToThis` cache check in `thisFromOtherWithFactory` / `thisEnsureThis` / `thisFromOtherForThrow`; a raw host reader collapses to `emptyFrozenObject` (non-callable), so the sandbox can never invoke it to pierce the bridge's flattened prototype view and reach a writable non-intrinsic host prototype (`EventEmitter.prototype`). The `apply` trap refuses reader invocation (direct + `Function.prototype.{call,apply,bind}` peel + `Reflect.{apply,construct}`) as defense-in-depth. Cache-first ordering preserves `connect()` surrogates; legitimate sandbox `Object.getPrototypeOf(hostProxy)` via the `getPrototypeOf` trap still returns the flattened wrapped proto. An independent write-side layer marks host `[[Prototype]]` objects at delivery (`looksLikeHostPrototype` → `hostObjectsUsedAsPrototype`) and diverts sandbox function/accessor writes off them in `BaseHandler.set`/`defineProperty`, so no callable can be planted on a shared host prototype even if a future read path reaches one; data writes and writes to leaf host objects are unaffected (embedder contract preserved). |
 | Bridge `set` trap ignores spec `Receiver` (GHSA-c4cf-2hgv-2qv6) | `BaseHandler.set` gates host-write forwarding on `receiver === mappingOtherToThis.get(object)`; non-canonical receivers (inherited-receiver writes via `Object.create(proxy)`, forged-receiver `Reflect.set` calls, `Object.assign(child, src)` loops) install on `receiver` via `Reflect.defineProperty`, mirroring `ReadOnlyHandler.set` |
 | Host binary-data / iterator intrinsic pollution (GHSA-3vgf-8m4q-q4qr / GHSA-59g5-pmg6-5gr4) | The protected inventory omitted the binary-data and iterator intrinsic families, so the Cat-20 proto-walk from a host `Buffer` reached unprotected host `Uint8Array.prototype` / `%TypedArray%.prototype` / `ArrayBuffer.prototype` / `ArrayIterator.prototype` / `%IteratorPrototype%` and `Reflect.defineProperty` polluted them globally. `globalsList` now includes `ArrayBuffer`/`SharedArrayBuffer`/`DataView` and every `TypedArray`; the abstract `%TypedArray%.prototype`, `%IteratorPrototype%`, and the concrete iterator prototypes are resolved structurally into `thisGlobalPrototypes`. All flow into `protectedHostObjects` (write traps throw `OPNA`), `protoMappings`, and the GHSA-47x8 identity map. |
 | NodeVM builtin denylist bypass via `process` / `inspector/promises` (GHSA-rp36-8xq3-r6c4) | `DANGEROUS_BUILTINS` extended to include `process`; matching promoted to family-prefix via `isDangerousBuiltin(key)` so subpath builtins (`inspector/promises`, future `inspector/*`, `process/*`, `module/*`) share fate with their canonical name. `node:` URL prefix stripped before lookup. Enforced at both `BUILTIN_MODULES` source and `addDefaultBuiltin`. Supersedes the GHSA-947f-4v7f-x2v8 exact-match mitigation. |

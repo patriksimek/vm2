@@ -109,9 +109,12 @@ describe('GHSA-grj5-jjm8-h35p — regression from GHSA-55hx-c926-fr95', function
 				const hostMark = { pid: null, err: null };
 				const vm = new VM({ sandbox: { hostMark } });
 				vm.run(`
+				try {
 				const g = ({}).__lookupGetter__;
 				const a = Buffer.apply;
 				const p = a.apply(g, [Buffer, ['__proto__']]);
+				// GHSA-88hf-g992-jg85: p is now the denied getter sentinel; the
+				// walk throws before fromAsync runs — pid stays null (stronger block).
 				const op = p.call(p.call(p.call(p.call(Buffer.of()))));
 				const ho = op.constructor;
 				const ap = p.call(ho.entries({}));
@@ -128,6 +131,7 @@ describe('GHSA-grj5-jjm8-h35p — regression from GHSA-55hx-c926-fr95', function
 						hostMark.pid = e.error.constructor.constructor("return process.pid")();
 					} catch (ex) { hostMark.err = ex.message; }
 				});
+				} catch (outer) { hostMark.err = outer.message; }
 			`);
 				setTimeout(function () {
 					assert.strictEqual(
@@ -142,16 +146,25 @@ describe('GHSA-grj5-jjm8-h35p — regression from GHSA-55hx-c926-fr95', function
 	);
 
 	it('ha === Array probe: prototype walk lands on sandbox Array (class E invariant)', function () {
+		// GHSA-88hf-g992-jg85: the raw host __proto__ getter is now denied
+		// delivery, so the walk throws before reaching `ha`. Accept either the
+		// class-E remap (`ha === sandbox Array`) or the stronger denial.
 		const r = new VM().run(`
-			const g = ({}).__lookupGetter__;
-			const a = Buffer.apply;
-			const p = a.apply(g, [Buffer, ['__proto__']]);
-			const op = p.call(p.call(p.call(p.call(Buffer.of()))));
-			const ho = op.constructor;
-			const ap = p.call(ho.entries({}));
-			const ha = ap.constructor;
-			ha === Array;
+			(() => {
+				try {
+					const g = ({}).__lookupGetter__;
+					const a = Buffer.apply;
+					const p = a.apply(g, [Buffer, ['__proto__']]);
+					const op = p.call(p.call(p.call(p.call(Buffer.of()))));
+					const ho = op.constructor;
+					const ap = p.call(ho.entries({}));
+					const ha = ap.constructor;
+					return ha === Array;
+				} catch (_) {
+					return 'denied';
+				}
+			})();
 		`);
-		assert.strictEqual(r, true, 'GHSA-grj5 class E trap should force ha === sandbox Array');
+		assert.ok(r === true || r === 'denied', 'GHSA-grj5 class E: ha must be sandbox Array or the raw getter denied; got ' + r);
 	});
 });

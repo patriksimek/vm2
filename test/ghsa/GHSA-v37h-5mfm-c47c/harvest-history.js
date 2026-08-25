@@ -195,7 +195,15 @@ describe('GHSA-v37h-5mfm-c47c — leak harvest history (PoCs #1–6)', function 
 	condit('PoC #6 (reduce/bind chain): host process.pid not extractable', function () {
 		const hostMark = { pid: null, err: null };
 		const vm = new VM({ sandbox: { hostMark } });
-		vm.run(`
+		// GHSA-88hf-g992-jg85: the raw host `Object.prototype.__proto__` getter
+		// extracted below (`a.apply(g, [Buffer, ['__proto__']])`) is now DENIED
+		// delivery — it collapses to a non-callable sentinel, so `p.call(...)` (on
+		// the line *before* the inner try) throws and the whole run aborts before
+		// any pid could be harvested. That is a strictly stronger block than the
+		// GHSA-v37h symbol-filter path this PoC originally probed; tolerate the
+		// bridge-level throw here while keeping the `pid === null` no-leak assert.
+		try {
+			vm.run(`
 			const g = ({}).__lookupGetter__;
 			const a = Buffer.apply;
 			const p = a.apply(g, [Buffer, ['__proto__']]);
@@ -218,6 +226,9 @@ describe('GHSA-v37h-5mfm-c47c — leak harvest history (PoCs #1–6)', function 
 				hostMark.pid = b.reduce(a.apply(a.bind, [a, [a]]), f.get)();
 			} catch (e) { hostMark.err = e.message; }
 		`);
+		} catch (e) {
+			// Bridge-level throw (denied raw __proto__ getter) — escape blocked earlier.
+		}
 		assert.strictEqual(
 			hostMark.pid,
 			null,

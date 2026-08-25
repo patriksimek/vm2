@@ -86,6 +86,20 @@ function safeRun(code) {
 	}
 }
 
+// GHSA-88hf-g992-jg85 note: many of the extraction PoCs below reach host
+// `Object` by first extracting the raw host `Object.prototype.__proto__` getter
+// via `Buffer.apply.apply(({}).__lookupGetter__, [Buffer, ['__proto__']])`. That
+// getter is now DENIED at the bridge delivery chokepoint (it collapses to a
+// non-callable sentinel), so `p.call(...)` throws inside the sandbox and
+// `safeRun` returns `undefined` instead of the boolean `false`. The GHSA-47x8
+// invariant — the dangerous cross-realm symbol must never surface as a usable
+// value — still holds in both cases, so these assertions check that the
+// dangerous outcome (`true`) never occurred, rather than pinning the exact
+// `false` produced by the older symbol-filter path.
+function assertNotSurfaced(value, message) {
+	assert.notStrictEqual(value, true, message);
+}
+
 describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', function () {
 	// ---- Canonical PoCs from the three advisories --------------------------------
 
@@ -205,7 +219,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			}
 			return found;
 		`);
-		assert.strictEqual(seen, false, 'A1: dangerous symbol surfaced via index read');
+		assertNotSurfaced(seen, 'A1: dangerous symbol surfaced via index read');
 	});
 
 	// A2: `Reflect.ownKeys` on a host object via the bridge (mixing strings + symbols).
@@ -221,7 +235,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			}
 			return found;
 		`);
-		assert.strictEqual(seen, false, 'A2: dangerous symbol surfaced via Reflect.ownKeys');
+		assertNotSurfaced(seen, 'A2: dangerous symbol surfaced via Reflect.ownKeys');
 	});
 
 	// A3: host Object.getOwnPropertyDescriptors returns a host object whose OWN KEYS
@@ -246,7 +260,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			}
 			return found;
 		`);
-		assert.strictEqual(seen, false, 'A3: dangerous symbol surfaced via descriptor-object keys');
+		assertNotSurfaced(seen, 'A3: dangerous symbol surfaced via descriptor-object keys');
 	});
 
 	// A4: spread iteration on a host array of symbols (iterator protocol path).
@@ -267,7 +281,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			}
 			return found;
 		`);
-		assert.strictEqual(seen, false, 'A4: dangerous symbol surfaced via spread');
+		assertNotSurfaced(seen, 'A4: dangerous symbol surfaced via spread');
 	});
 
 	// A5: iterate a host Map-like structure. We don't have direct access to a host
@@ -294,7 +308,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			}
 			return found;
 		`);
-		assert.strictEqual(seen, false, 'A5: dangerous symbol surfaced via iterator');
+		assertNotSurfaced(seen, 'A5: dangerous symbol surfaced via iterator');
 	});
 
 	// A6: throw path. A host function that throws a raw symbol must not surface the
@@ -327,7 +341,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			}
 			return harvested !== undefined;
 		`);
-		assert.strictEqual(seen, false, 'A6: dangerous symbol surfaced from throw path');
+		assertNotSurfaced(seen, 'A6: dangerous symbol surfaced from throw path');
 	});
 
 	// ---- Usage-path (B*) bypass variants -----------------------------------------
@@ -352,7 +366,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			}
 			return false;
 		`);
-		assert.strictEqual(result, false, 'B1: dangerous symbol installed as key via assignment');
+		assertNotSurfaced(result, 'B1: dangerous symbol installed as key via assignment');
 	});
 
 	// B2: defineProperty with an extracted symbol also must not install it.
@@ -372,7 +386,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			}
 			return false;
 		`);
-		assert.strictEqual(result, false, 'B2: dangerous symbol installed via defineProperty');
+		assertNotSurfaced(result, 'B2: dangerous symbol installed via defineProperty');
 	});
 
 	// B3: computed key in an object literal `{[sym]: fn}`.
@@ -391,7 +405,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			}
 			return false;
 		`);
-		assert.strictEqual(result, false, 'B3: dangerous symbol installed via literal');
+		assertNotSurfaced(result, 'B3: dangerous symbol installed via literal');
 	});
 
 	// B4: Reflect.set with an extracted symbol.
@@ -411,7 +425,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			}
 			return false;
 		`);
-		assert.strictEqual(result, false, 'B4: dangerous symbol installed via Reflect.set');
+		assertNotSurfaced(result, 'B4: dangerous symbol installed via Reflect.set');
 	});
 
 	// ---- Global invariant check --------------------------------------------------
@@ -438,7 +452,7 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			const viaDescsGOPS = HObject.getOwnPropertySymbols(descs);
 			return scan(viaGOPS) || scan(viaSpread) || scan(viaDescsGOPS);
 		`);
-		assert.strictEqual(result, false, 'invariant violated: dangerous symbol reached sandbox');
+		assertNotSurfaced(result, 'invariant violated: dangerous symbol reached sandbox');
 	});
 
 	it('invariant: nodejs.rejection also blocked', function () {
@@ -458,6 +472,6 @@ describe('GHSA-47x8-96vw-5wg6 (cross-realm symbol extraction via host Object)', 
 			}
 			return false;
 		`);
-		assert.strictEqual(result, false, 'nodejs.rejection symbol reached sandbox');
+		assertNotSurfaced(result, 'nodejs.rejection symbol reached sandbox');
 	});
 });

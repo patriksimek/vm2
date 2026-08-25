@@ -34,6 +34,18 @@ function safeRun(code) {
 	}
 }
 
+// GHSA-88hf-g992-jg85: the variants that seed their walk with the raw host
+// `Object.prototype.__proto__` getter (`p = a.apply(({}).__lookupGetter__, ...)`)
+// can no longer obtain a callable getter — it is denied delivery and its `.call`
+// throws, so `safeRun` returns `{ err }`. A genuine host leak would instead make
+// the identity flag strictly `false` (host intrinsic with a disjoint identity).
+// `assertNoHostLeak` therefore accepts both the old safe value (`true`) and the
+// new hard denial (`undefined` via the thrown walk), while still failing on a
+// real leak (`false`).
+function assertNoHostLeak(value, message) {
+	assert.notStrictEqual(value, false, message);
+}
+
 describe('GHSA-47x8-96vw-5wg6 (structural-leak variant attack patterns)', function () {
 	it('VARIANT v1 - host Object reachable via __lookupSetter__ chain', function () {
 		const r = safeRun(`
@@ -49,7 +61,7 @@ describe('GHSA-47x8-96vw-5wg6 (structural-leak variant attack patterns)', functi
 				HObjectIsSandboxObject: HObject === Object
 			};
 		`);
-		assert.strictEqual(r.HObjectIsSandboxObject, true, '__lookupSetter__ variant: host Object leaked');
+		assertNoHostLeak(r.HObjectIsSandboxObject, '__lookupSetter__ variant: host Object leaked');
 	});
 
 	it('VARIANT v2 - host Object reachable via Buffer.from prototype walk', function () {
@@ -68,10 +80,9 @@ describe('GHSA-47x8-96vw-5wg6 (structural-leak variant attack patterns)', functi
 				o4IsSandboxObjectProto: o4 === Object.prototype
 			};
 		`);
-		assert.strictEqual(r.HObjectIsSandboxObject, true, 'Buffer.from variant: host Object leaked at terminal step');
-		assert.strictEqual(
+		assertNoHostLeak(r.HObjectIsSandboxObject, 'Buffer.from variant: host Object leaked at terminal step');
+		assertNoHostLeak(
 			r.o4IsSandboxObjectProto,
-			true,
 			'Buffer.from variant: host Object.prototype leaked at terminal step',
 		);
 	});
@@ -94,7 +105,7 @@ describe('GHSA-47x8-96vw-5wg6 (structural-leak variant attack patterns)', functi
 			}
 			return { isSandboxObject: chainedHObject === Object };
 		`);
-		assert.strictEqual(r.isSandboxObject, true, 'descriptor-getter variant: host Object leaked');
+		assertNoHostLeak(r.isSandboxObject, 'descriptor-getter variant: host Object leaked');
 	});
 
 	it('VARIANT v4 - host Array.prototype reachable via Reflect.ownKeys result', function () {
@@ -124,7 +135,7 @@ describe('GHSA-47x8-96vw-5wg6 (structural-leak variant attack patterns)', functi
 				HObjectIsSandboxObject: HObject === Object
 			};
 		`);
-		assert.strictEqual(r.HObjectIsSandboxObject, true, 'Promise-walk variant: identity invariant broken');
+		assertNoHostLeak(r.HObjectIsSandboxObject, 'Promise-walk variant: identity invariant broken');
 	});
 
 	it('VARIANT v6 - composed v37h handler.get returns sandbox-mapped Object', function () {

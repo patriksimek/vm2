@@ -124,17 +124,27 @@ describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', 
 	// ---- Transitive closure via class E (7352f11) ------------------------------
 
 	it('(transitive, class E) prototype walk to host Array now returns sandbox Array', function () {
+		// GHSA-88hf-g992-jg85: the raw host __proto__ getter used to seed this
+		// walk is now DENIED delivery (non-callable sentinel), so `p.call(...)`
+		// throws and the walk cannot start. That is strictly stronger than the
+		// class-E remapping (`ha === sandbox Array`); accept either outcome.
 		const r = new VM().run(`
-			const g = ({}).__lookupGetter__;
-			const a = Buffer.apply;
-			const p = a.apply(g, [Buffer, ['__proto__']]);
-			const op = p.call(p.call(p.call(p.call(Buffer.of()))));
-			const ho = op.constructor;
-			const ap = p.call(ho.entries({}));
-			const ha = ap.constructor;
-			ha === Array;
+			(() => {
+				try {
+					const g = ({}).__lookupGetter__;
+					const a = Buffer.apply;
+					const p = a.apply(g, [Buffer, ['__proto__']]);
+					const op = p.call(p.call(p.call(p.call(Buffer.of()))));
+					const ho = op.constructor;
+					const ap = p.call(ho.entries({}));
+					const ha = ap.constructor;
+					return ha === Array;
+				} catch (_) {
+					return 'denied';
+				}
+			})();
 		`);
-		assert.strictEqual(r, true, 'class E trap expected to force ha === sandbox Array');
+		assert.ok(r === true || r === 'denied', 'host Array must not leak: remapped to sandbox Array or raw getter denied; got ' + r);
 	});
 
 	it.cond('(transitive, class E) terminal fromAsync PoC cannot reach host Function', HAS_FROM_ASYNC, function () {
@@ -142,9 +152,12 @@ describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', 
 			const vm = new VM();
 			vm.run(`
 				globalThis.__innerResult = 'pending';
+				try {
 				const g = ({}).__lookupGetter__;
 				const a = Buffer.apply;
 				const p = a.apply(g, [Buffer, ['__proto__']]);
+				// GHSA-88hf-g992-jg85: p is now the denied getter sentinel; this
+				// walk throws before fromAsync can run, which is a stronger block.
 				const op = p.call(p.call(p.call(p.call(Buffer.of()))));
 				const ho = op.constructor;
 				const ap = p.call(ho.entries({}));
@@ -165,6 +178,11 @@ describe('GHSA-55hx-c926-fr95 (SuppressedError / AggregateError sanitization)', 
 						globalThis.__innerResult = 'blocked:' + err.message;
 					}
 				});
+				} catch (outer) {
+					// GHSA-88hf-g992-jg85: the raw getter walk is denied before
+					// fromAsync runs — record it as a (stronger) block.
+					globalThis.__innerResult = 'blocked:' + outer.message;
+				}
 			`);
 			setTimeout(function () {
 				const out = vm.run('globalThis.__innerResult');

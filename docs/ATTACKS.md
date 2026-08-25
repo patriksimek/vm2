@@ -4155,6 +4155,70 @@ All redactors use module-load-cached `String.prototype` intrinsics and primitive
 
 ---
 
+## Attack Category 49: Revisited Host Error Carrier Leaks a Live Proxy Through the Sanitizer Cycle Memo
+
+**Uses**: [Category 38: `Error.cause` Host Reference Leak to Sandbox](#attack-category-38-errorcause-host-reference-leak-to-sandbox)
+
+**Supersedes**: closes the cycle-memo gap in the [Category 38](#attack-category-38-errorcause-host-reference-leak-to-sandbox) fix. Category 38 rebuilds host-wrapped `AggregateError` / `SuppressedError` carriers into fresh sandbox-realm errors, but its cycle-detection memo stored a presence bit and returned the raw carrier on revisit — safe only for the *seal-in-place* carriers, not the *rebuilt* ones.
+
+### Description
+
+`handleException` (`lib/setup-sandbox.js`) is the transformer's caught-exception chokepoint. It guards against cyclic error graphs with a `visited` `WeakMap`: on first encounter it records the carrier, and on a repeat encounter within the same traversal it short-circuits and returns without re-recursing. The Category 38 fix stored `visited.set(e, true)` and short-circuited with `return e` — the **raw host carrier**.
+
+That is correct for carriers sanitized *in place*: a plain host `Error` has its `.cause` overwritten and its own properties sealed on the underlying host object (`sanitizeErrorCause` / `sanitizeHostOwnProps`), so the raw carrier returned on revisit is already neutralized. But the `AggregateError` / `SuppressedError` handlers do **not** seal in place — they **snapshot-and-rebuild** the carrier into a fresh sandbox-realm error and drop the original. The raw carrier and its sanitized replacement are therefore *different objects*, and the presence-bit memo cannot return the replacement. When the same host aggregate is revisited within one traversal, the short-circuit hands back the raw host proxy, which the rebuild re-embeds into the "sanitized" `errors[]` (or `.error` / `.suppressed`). Its own properties — `err.leak = process`, or a prototype-chain reference — are fully live: `e.errors[i].leak.mainModule.require('child_process').execSync(...)` → host RCE on the exact channel Defense Invariant #3 promises to sanitize.
+
+### Attack Flow
+
+1. An embedder-exposed host function throws a host-wrapped `AggregateError`/`SuppressedError` whose graph references one node twice within a single `handleException` traversal — a self-cycle (`agg.errors = [agg]`), a duplicate in the array (`[shared, shared]`), or a mutual cycle (`a.errors = [b]; b.errors = [a]`) — with a host reference parked on a rebuild-surviving slot (`agg.leak = process`).
+2. Sandbox `try { hostThrow() } catch (e) { … }` routes `e` through `handleException`.
+3. The proto-walk dispatches to `sanitizeAggregateError`; the host-wrapped branch reads `.errors` and recurses `handleException(item, visited)` on each element.
+4. The second reference to the carrier hits the `visited` short-circuit → `return e` (raw proxy) → pushed into the rebuilt `errors[]`.
+5. Sandbox walks `e.errors[i].leak` → live host `process` → RCE.
+
+### Canonical Example(s)
+
+```js
+const {VM} = require('vm2');
+// duplicate-in-array — the same host aggregate referenced twice
+new VM({sandbox:{hostThrow(){
+  const shared = new AggregateError([], 'shared'); shared.leak = process;
+  throw new AggregateError([shared, shared], 'all failed');
+}}}).run(`try{hostThrow()}catch(e){ e.errors[1].leak.mainModule.require('child_process').execSync('id') }`);
+
+// self-cycle:  const agg = new AggregateError([],'x'); agg.errors=[agg]; agg.leak=process; throw agg;
+// mutual:      a.errors=[b]; b.errors=[a]; b.leak=process; throw a;
+// residual:    same PLAIN host Error listed twice with a prototype-chain leak
+//              (sanitizeHostOwnProps rebuilds it but the memo still pointed at the raw carrier)
+```
+
+### Why It Works
+
+The `visited` map conflated two different needs. For seal-in-place carriers the memo only needs a presence bit — a revisit can safely return the (now-neutralized) original. For rebuild carriers the memo must return the *replacement*, because the original is never neutralized. Storing `true` made a revisit resolve to the raw carrier for both. The rebuild also reads sub-errors *before* recursing, so the memo entry for the carrier itself did not yet point anywhere useful — the classic cyclic-structure rebuild problem.
+
+### Mitigation
+
+Restore [Defense Invariant #3](#defense-invariants) at the memo chokepoint by making **the value stored in `visited` for a carrier be exactly what a revisit must return**:
+
+- Default memo `visited.set(e, e)` — seal-in-place carriers resolve a revisit to themselves; the short-circuit returns the memoized value, never a bare `true`.
+- **Two-phase rebuild** for host-wrapped `AggregateError` / `SuppressedError`: construct the empty sandbox-realm replacement, register `visited.set(carrier, replacement)` **before** recursing into sub-errors (so every cycle shape terminates on the replacement), then install the sanitized children as plain own data properties via `localReflectDefineProperty`. Attacker own-properties are dropped by construction.
+- Memoize the `sanitizeHostOwnProps` rebuild too (a plain host error listed twice with a prototype-chain leak would otherwise return the raw carrier on the revisit).
+- Defense-in-depth: `_blockHostWrapped` at every rebuild embed site replaces any element that is *still* `_isHostWrapped` after the recursive call with a neutral sandbox `Error` — an independent second layer, agnostic to why an element remained host-wrapped, that also catches any future rebuild path forgetting to sanitize an element.
+
+`.message` is copied only when it is a primitive string, so it carries no host reference; `_isHostWrapped` is spoof-proof because the bridge `get` trap returns `isProxy === true` before consulting the host object, so an own `isProxy: false` cannot suppress detection.
+
+### Detection Rules
+
+- A recursion memo (`visited`/`seen` `WeakMap`/`Set`) that stores a boolean and returns the *input* on revisit, while the same function *rebuilds* rather than mutates its input — the revisit and the rebuild diverge.
+- Any host-wrapped error rebuild that reads `.errors` / `.error` / `.suppressed` and re-embeds a recursion result without asserting the result is sandbox-realm.
+
+### Considered Attack Surfaces
+
+- **TOCTOU on `.errors` / `.error` / `.suppressed`** — each slot is read once into a local before iteration; a non-array `.errors` accessor fails `localArrayIsArray` and yields an empty replacement. Asserted in `adversarial.js`.
+- **`.message` accessor returning a host object** — copied only when `typeof === 'string'`, so a non-primitive message is ignored.
+- **Replacement construction throwing** (`new LocalAggregateError` unavailable) — falls back to `new LocalError(msg)`, still sandbox-realm; the fallback path is inside the same two-phase memo registration.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -4307,6 +4371,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Shared Buffer pool discloses/corrupts host memory (GHSA-fcqc-726x-5wfc) | `depoolBuffer` in `lib/setup-sandbox.js` enforces backing-store ownership (`byteOffset === 0 && buffer.byteLength === length`): every pooling factory (`Buffer.from` non-ArrayBuffer overloads, `concat`, `of`, `copyBytesFrom`, deprecated `Buffer(...)`/`new Buffer(...)`) copies a pool-backed result into a standalone non-pooled `LocalBuffer.alloc(n)` before it reaches the sandbox, so `.buffer` can never expose Node's shared 64 KiB pool (neighbouring host buffers). The `Buffer.from(arrayBuffer, off, len)` sharing overload is preserved, detected via a spoof-proof `ArrayBuffer.prototype.byteLength`-getter brand test |
 | `timeout` bypass via `FinalizationRegistry` cleanup callback (GHSA-r4fx-v8hh-22mv) | `timeout` is implemented with V8's `TerminateExecution` and bounds only the synchronous body of `run()`; a `FinalizationRegistry` cleanup callback is fired by the GC *after* `run()` returns, so sandbox code inside it ran with no timeout accounting and could block the host event loop indefinitely — and `allowAsync: false`, which closes the equivalent `Promise`-continuation path, does not close this one. `lib/setup-sandbox.js` deletes `FinalizationRegistry` and `WeakRef` from the sandbox global (guarded by `typeof` so pre-Node-14 is unaffected), the same withholding used for timers/`queueMicrotask`; neither constructor has literal syntax, so the binding cannot be reconstructed from inside. `NodeVM` inherits it. Scope: this restores the documented `timeout` control in the default configuration — it is not a general DoS guarantee, and an embedder re-exposing either global via the `sandbox` option re-opens the vector by choice. |
 | Host filesystem path leak via host-realm error stack (Category 48: GHSA-x6m4-chr9-cg97) | GHSA-v27g's `defaultSandboxPrepareStackTrace` / CallSite redaction only covers stacks formatted **in the sandbox realm**; a host-realm Error arrives with `.stack` already formatted by V8 host-side (absolute paths, `node:` / `internal/` frames, vm2's own `lib/*.js`, the embedding application's source) and crossed verbatim. Redacted at three chokepoints, each preserving the message header and clean sandbox frames: `BaseHandler.get` / `getOwnPropertyDescriptor` in `lib/bridge.js` (`redactHostStack`, gated by `isOtherErrorObject` — the `[[ErrorData]]` brand OR'd with a proto-walk to host `Error.prototype`, so neither GHSA-cfcw prototype severance nor a `Symbol.toStringTag` override smuggles a stack past it; the descriptor trap collapses the Node 22+ own-**accessor** shape of `Error#stack` into a redacted data descriptor so `desc.get.call(hostErr)` / `__lookupGetter__` cannot pull the raw string through the apply trap); `sanitizeHostOwnProps` in `lib/setup-sandbox.js` (`x6m4RedactHostFramesFromStack`), which covers the GHSA-m283 rebuild path where `.stack` is copied as a primitive via `v = e[k]` and never crosses a bridge trap; and `transformAndCheck` in `lib/vm.js`, which truncates the whole frame section of sandbox-destined compile errors (the config-free `eval("@@@ catch")` path) host-side, pre-bridge. The frame classifier extends GHSA-v27g's `isHostFrameFileName` with `file://` / `wasm://` schemes and `..`-traversal paths. Non-Error host objects the embedder deliberately exposes (including a plain object with a `stack`-named string) are untouched. |
+| Revisited host error carrier leaks a live proxy through the sanitizer cycle memo (Category 49: GHSA-x965-fc75-jpqh) | `handleException`'s cycle memo stored `visited.set(e, true)` and returned the raw carrier `e` on revisit — safe for seal-in-place carriers, but the `AggregateError`/`SuppressedError` handlers *rebuild* rather than seal, so a carrier revisited within one traversal (self-cycle `agg.errors=[agg]`, duplicate `[shared,shared]`, mutual `a↔b`) had its live host proxy re-embedded into the rebuilt `errors[]` → host RCE. The memo now maps each carrier to *exactly what a revisit must return*: itself when sealed in place, or its sandbox-realm replacement when rebuilt. Host-wrapped `AggregateError`/`SuppressedError` use a **two-phase build** — construct the empty replacement, register it in `visited` before recursing (so every cycle terminates on the replacement), then install the sanitized children via `localReflectDefineProperty`; attacker own-props are dropped by construction. The `sanitizeHostOwnProps` rebuild is memoized too (closes the duplicated-plain-error-with-prototype-leak residual), and a `_blockHostWrapped` backstop replaces any element still `_isHostWrapped` after recursion with a neutral sandbox `Error`. Extends the Category 38 (GHSA-m283-3h24-438v) fix. |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

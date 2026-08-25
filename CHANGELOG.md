@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Security fixes
+
+- **GHSA-x965-fc75-jpqh** — incomplete-fix bypass of GHSA-m283-3h24-438v: a host-wrapped `AggregateError`/`SuppressedError` revisited within one `handleException` traversal (self-cycle `agg.errors=[agg]`, duplicate `[shared,shared]`, mutual cycle) returned the raw host carrier from the cycle memo, re-embedding a live host proxy into the rebuilt `errors[]` → host RCE on the caught-exception channel. `lib/setup-sandbox.js` now memoizes each carrier to exactly what a revisit must return (itself when sealed in place, its sandbox-realm replacement when rebuilt), builds host-wrapped aggregate/suppressed replacements in two phases so every cycle terminates on the replacement, memoizes the `sanitizeHostOwnProps` rebuild, and adds a `_blockHostWrapped` backstop at embed sites. See ATTACKS.md Category 49 and `test/ghsa/GHSA-x965-fc75-jpqh/`.
+
 ## [3.11.7]
 
 ### Security fixes

@@ -4382,6 +4382,59 @@ Restores **[Defense Invariant #14](#defense-invariants)**. Structural fix in `li
 
 ---
 
+## Attack Category 52: Host `util` Members Auto-Forwarded to the Sandbox (`util.getCallSites` Host Call-Stack Leak)
+
+**Uses**: [Category 48: Host Filesystem Path Leak via Host-Realm Error Stack](#attack-category-48-host-filesystem-path-leak-via-host-realm-error-stack)
+
+**Supersedes**: extends the GHSA-v27g-jcqj-v8rw / [Category 48](#attack-category-48-host-filesystem-path-leak-via-host-realm-error-stack) host-frame redaction to the programmatic stack-introspection channel those fixes did not cover.
+
+### Description
+
+NodeVM exposes the host `util` module to the sandbox through `defaultBuiltinLoaderUtil` (`lib/builtin.js`), which built the exposed copy with `Object.assign({}, util)` — a **wholesale copy-everything-forward** of every host `util` member. This is a structural hole, not a single leaky function: every future host `util` member enters the sandbox unreviewed the day Node ships it.
+
+On Node >= 22.9 the first such member to matter is `util.getCallSites()`, which returns the host process call stack as plain data — absolute file paths (vm2's own `lib/bridge.js` / `lib/nodevm.js`, the embedding application's entrypoint), `node:internal/*` frames, function names, and line numbers. It is produced host-side and never crosses the sandbox-realm Error stack formatter, so the GHSA-v27g redaction (which only rewrites CallSite getters when the *sandbox realm* formats an `Error` stack — [Defense Invariant #5](#defense-invariants)) does not cover it. The Node 22 singular spelling `util.getCallSite` is the same class; `util.setTraceSigInt` (a process-wide host SIGINT hook) and private internals (`_errnoException`, `_exceptionWithHostPort`) were forwarded by the same wholesale copy.
+
+The deprecated `sys` builtin is an alias of host `util` and reached the sandbox through the generic read-only loader, carrying the same members — a second channel.
+
+Information disclosure only: the API returns strings/numbers, no host object references, no code execution. Reachable from any config allowing `util` / `sys`, including `builtin: ['*']` and the README's typical configurations.
+
+### Attack Flow
+
+1. A NodeVM allows the `util` (or `sys`) builtin — `require: { builtin: ['util'] }` or `['*']`.
+2. Sandbox: `require('util').getCallSites(N)` (Node >= 22.9).
+3. Node walks the host call stack host-side and returns CallSite objects with `scriptName` / `functionName` / `lineNumber` as data.
+4. Sandbox reads host absolute paths (vm2 install path, embedder file layout, entrypoint) — the exact category GHSA-v27g promised to redact.
+
+### Canonical Example
+
+```js
+const {NodeVM} = require('vm2');
+new NodeVM({require:{builtin:['util']}}).run(
+  "module.exports = require('util').getCallSites(4)[0].scriptName", 'p.js');
+// -> "/abs/path/to/vm2/lib/bridge.js"  (a host path)
+```
+
+### Why It Works
+
+`Object.assign({}, util)` copies members that did not exist when the loader was written. GHSA-v27g reasoned about the *Error-stack formatting* channel and hardened it; a *programmatic* stack API produces the same data without touching that formatter, so the redaction never runs. No allowlist gated what `util` could hand the sandbox.
+
+### Mitigation
+
+Close the wholesale-forwarding **class**, not just `getCallSites`. `defaultBuiltinLoaderUtil` now builds the exposed copy from a vetted **allowlist** (`SAFE_UTIL_MEMBERS`, consumed by `sanitizeUtilModule`) instead of `Object.assign`. An allowlist is *forward-safe*: a member Node adds tomorrow does not auto-enter — admitting it is a conscious edit. The allowlist enumerates the full documented + legacy `util` surface, presence-gated (`name in mod`) so one list is correct Node 8→26; members are copied by reference so `types`, `inspect`, `promisify` etc. behave as before. The host-introspection / host-mutation / private members (`getCallSites`, `getCallSite`, `setTraceSigInt`, `_errnoException`, `_exceptionWithHostPort`, `convertProcessSignalToExitCode`) are simply not on the list. `sanitizeUtilModule` is registered in the existing `BUILTIN_MEMBER_SANITIZERS` table (the GHSA-46pr member-neutralization chokepoint used by crypto/tls/sqlite/http(s)) for both `util` and `sys`, so the `sys` alias shares fate. Restores [Defense Invariant #5](#defense-invariants) for the programmatic channel.
+
+### Detection Rules
+
+- A builtin loader that copies a host module wholesale (`Object.assign({}, mod)`, spread, `for..in` forward) rather than from a vetted member set — every future host member auto-enters.
+- Sandbox source calling a host stack/heap/host-state introspection API (`getCallSites`, `getCallSite`, `getHeapSnapshot`-like, `getSystemError*` beyond static tables).
+
+### Considered Attack Surfaces
+
+- **`node:util` / `node:node:util` spellings** — the double-prefix and node: normalization (GHSA-8686/6w8r) route through the same sanitizer; verified blocked.
+- **`util.getSystemErrorName` / `getSystemErrorMap` / `getSystemErrorMessage`** — kept: static errno lookup tables, not host process state.
+- **`inspect.custom` / `promisify.custom` symbols** — read as `undefined` in the sandbox both before and after this fix (pre-existing bridge behaviour); the allowlist does not change util's usable surface beyond removing the leaky members.
+
+---
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.
@@ -4540,6 +4593,7 @@ The most dangerous attacks combine multiple categories. Each pattern references 
 | Host filesystem path leak via host-realm error stack (Category 48: GHSA-x6m4-chr9-cg97) | GHSA-v27g's `defaultSandboxPrepareStackTrace` / CallSite redaction only covers stacks formatted **in the sandbox realm**; a host-realm Error arrives with `.stack` already formatted by V8 host-side (absolute paths, `node:` / `internal/` frames, vm2's own `lib/*.js`, the embedding application's source) and crossed verbatim. Redacted at three chokepoints, each preserving the message header and clean sandbox frames: `BaseHandler.get` / `getOwnPropertyDescriptor` in `lib/bridge.js` (`redactHostStack`, gated by `isOtherErrorObject` — the `[[ErrorData]]` brand OR'd with a proto-walk to host `Error.prototype`, so neither GHSA-cfcw prototype severance nor a `Symbol.toStringTag` override smuggles a stack past it; the descriptor trap collapses the Node 22+ own-**accessor** shape of `Error#stack` into a redacted data descriptor so `desc.get.call(hostErr)` / `__lookupGetter__` cannot pull the raw string through the apply trap); `sanitizeHostOwnProps` in `lib/setup-sandbox.js` (`x6m4RedactHostFramesFromStack`), which covers the GHSA-m283 rebuild path where `.stack` is copied as a primitive via `v = e[k]` and never crosses a bridge trap; and `transformAndCheck` in `lib/vm.js`, which truncates the whole frame section of sandbox-destined compile errors (the config-free `eval("@@@ catch")` path) host-side, pre-bridge. The frame classifier extends GHSA-v27g's `isHostFrameFileName` with `file://` / `wasm://` schemes and `..`-traversal paths. Non-Error host objects the embedder deliberately exposes (including a plain object with a `stack`-named string) are untouched. |
 | Revisited host error carrier leaks a live proxy through the sanitizer cycle memo (Category 49: GHSA-x965-fc75-jpqh) | `handleException`'s cycle memo stored `visited.set(e, true)` and returned the raw carrier `e` on revisit — safe for seal-in-place carriers, but the `AggregateError`/`SuppressedError` handlers *rebuild* rather than seal, so a carrier revisited within one traversal (self-cycle `agg.errors=[agg]`, duplicate `[shared,shared]`, mutual `a↔b`) had its live host proxy re-embedded into the rebuilt `errors[]` → host RCE. The memo now maps each carrier to *exactly what a revisit must return*: itself when sealed in place, or its sandbox-realm replacement when rebuilt. Host-wrapped `AggregateError`/`SuppressedError` use a **two-phase build** — construct the empty replacement, register it in `visited` before recursing (so every cycle terminates on the replacement), then install the sanitized children via `localReflectDefineProperty`; attacker own-props are dropped by construction. The `sanitizeHostOwnProps` rebuild is memoized too (closes the duplicated-plain-error-with-prototype-leak residual), and a `_blockHostWrapped` backstop replaces any element still `_isHostWrapped` after recursion with a neutral sandbox `Error`. Extends the Category 38 (GHSA-m283-3h24-438v) fix. |
 | Ignored host-promise rejection aborts host process (GHSA-gjq8-xm47-88rc) | `apply` trap calls `markHostPromiseHandled(ret)` on every host→sandbox return value: attaches a benign `.then(noop, noop)` to the underlying host promise via the cached host `Promise.prototype.then`, so an unhandled host rejection cannot trip Node's `unhandledRejection` abort. Multicast keeps the sandbox's own GHSA-55hx-sanitized `.then`/`.catch` observing the rejection; the no-op `onRejected` returns `undefined` so no new unhandled rejection is created; non-promise / fulfilled returns are inert (try/catch + `[[PromiseState]]` slot check). Sibling of GHSA-hw58 (Category 22), covering the host→sandbox direction. |
+| Host `util` members auto-forwarded to the sandbox (Category 52: GHSA-r273-hxvj-fxhp) | `defaultBuiltinLoaderUtil` in `lib/builtin.js` exposed `util` as `Object.assign({}, util)` — a wholesale copy that admits every future host `util` member unreviewed. On Node >= 22.9 that leaked `util.getCallSites()` (host call stack: absolute paths incl. vm2 `lib/`, embedder entrypoint, `node:internal` frames — bypassing GHSA-v27g, which only redacts sandbox-realm Error stacks), plus `getCallSite` / `setTraceSigInt` / private internals; `sys` (a util alias) leaked the same via the generic loader. The copy is now built from a vetted, forward-safe allowlist (`SAFE_UTIL_MEMBERS` via `sanitizeUtilModule`, presence-gated for Node 8→26), registered in `BUILTIN_MEMBER_SANITIZERS` for both `util` and `sys` so no unreviewed host member auto-enters. Restores Defense Invariant #5 for the programmatic stack-introspection channel. |
 
 ### Key Security Invariant: Promise Species Resolution Timing
 

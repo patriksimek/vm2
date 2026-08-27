@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [3.11.8]
 
 ### Security fixes
 

@@ -7,6 +7,7 @@ const assert = require('assert');
 const {VM, VMScript} = require('..');
 const {INTERNAL_STATE_NAME} = require('../lib/transformer');
 const {nodeOlderThan} = require('./engine');
+const {msg} = require('./engine-messages');
 const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
 const {inspect} = require('util');
 
@@ -797,7 +798,7 @@ describe('VM', () => {
 					}
 				});
 				proxy
-			`)('asdf'), /Proxy is not a constructor/, '#4');
+			`)('asdf'), msg('NOT_A_CONSTRUCTOR'), '#4');
 
 			assert.throws(() => vm2.run(`
 				let proxy2 = new Proxy(function() {}, {
@@ -806,7 +807,7 @@ describe('VM', () => {
 					}
 				});
 				proxy2
-			`)('asdf'), /Proxy is not a constructor/, '#5');
+			`)('asdf'), msg('NOT_A_CONSTRUCTOR'), '#5');
 		} else {
 			assert.doesNotThrow(() => vm2.run(`
 				let method = () => {};
@@ -943,7 +944,7 @@ describe('VM', () => {
 						}
 					})
 				});
-			`), /Proxy is not a constructor/);
+			`), msg('NOT_A_CONSTRUCTOR'));
 		} else {
 			try {
 				vm2.run(`
@@ -975,7 +976,7 @@ describe('VM', () => {
 		if (NODE_VERSION > 6) {
 			assert.throws(() => vm2.run(`
 				Buffer.prototype.__defineGetter__("toString", () => {});
-			`), /'defineProperty' on proxy: trap returned falsish for property 'toString'/, '#2');
+			`), msg('PROXY_DEFINE_FALSISH'), '#2');
 		} else {
 			assert.strictEqual(vm2.run(`
 				Buffer.prototype.__defineGetter__("xxx", () => 4);
@@ -1032,7 +1033,7 @@ describe('VM', () => {
 					return () => x => x.constructor("return process")();
 				}
 			})))(()=>{}).mainModule.require("child_process").execSync("id").toString()
-		`), NODE_VERSION > 8 ? /Proxy is not a constructor/ : /process is not defined/, '#2');
+		`), msg('NOT_A_CONSTRUCTOR'), '#2');
 
 		vm2 = new VM();
 
@@ -1178,7 +1179,7 @@ describe('VM', () => {
 			}
 			"" in Buffer.from;
 			process.mainModule;
-		`), /Cannot read propert.*mainModule/, '#1');
+		`), msg('READ_MAINMODULE_OF_UNDEFINED'), '#1');
 
 		const vm22 = new VM();
 
@@ -1201,7 +1202,7 @@ describe('VM', () => {
 			var process = Buffer.from.process;
 			Object.create = oc;
 			process.mainModule
-		`), /Cannot read propert.*mainModule/, '#1');
+		`), msg('READ_MAINMODULE_OF_UNDEFINED'), '#1');
 	});
 
 	it('function returned from construct attack', () => {
@@ -1222,7 +1223,7 @@ describe('VM', () => {
 					}
 				}
 			}))}).mainModule.require("child_process").execSync("id").toString()
-		`), NODE_VERSION > 8 ? /Proxy is not a constructor/ : /process is not defined/, '#1');
+		`), msg('NOT_A_CONSTRUCTOR'), '#1');
 	});
 
 	it('throw while accessing propertyDescriptor properties', () => {
@@ -1285,7 +1286,7 @@ describe('VM', () => {
 					}
 				}));
 			})()
-		`), /Proxy is not a constructor/);
+		`), msg('NOT_A_CONSTRUCTOR'));
 	});
 
 	it.cond('Dynamic import attack', NODE_VERSION >= 10, () => {
@@ -1300,7 +1301,7 @@ describe('VM', () => {
 		const vm2 = new VM();
 		const sst = vm2.run('Error.prepareStackTrace = (e,sst)=>sst;const sst = new Error().stack;Error.prepareStackTrace = undefined;sst');
 		assert.strictEqual(vm2.run('sst=>Object.getPrototypeOf(sst)')(sst), vm2.run('Array.prototype'));
-		assert.throws(()=>vm2.run('sst=>sst[0].getThis().constructor.constructor')(sst), /TypeError: Cannot read propert.*constructor/);
+		assert.throws(()=>vm2.run('sst=>sst[0].getThis().constructor.constructor')(sst), msg('PREPARE_STACK_TRACE_GETTHIS'));
 		assert.throws(()=>vm2.run(`
 			const { set } = WeakMap.prototype;
 			WeakMap.prototype.set = function(v) {
@@ -2669,7 +2670,7 @@ describe('VM', () => {
 	// (precondition closed); the outer assertion accepts either
 	// `process is not defined` (chain ran, host Function blocked) or
 	// `properties of null` (precondition closed).
-	const SUPPRESSED_ERROR_BLOCKED = /process is not defined|properties of null/;
+	const SUPPRESSED_ERROR_BLOCKED = msg('SUPPRESSED_ERROR_ACCESS');
 	it.cond('SuppressedError escape via DisposableStack', typeof DisposableStack === 'function', () => {
 		const vm2 = new VM();
 		// DisposableStack.dispose() wraps multiple errors in SuppressedError.
@@ -3098,7 +3099,7 @@ describe('freeze, protect', () => {
 
 		assert.throws(() => {
 			vm.run('"use strict"; x.a = () => { return `-` };');
-		}, /'set' on proxy: trap returned falsish for property 'a'/);
+		}, msg('PROXY_SET_FALSISH'));
 
 		assert.throws(() => {
 			vm.run('"use strict"; (y) => { y.b = () => { return `--` } }')(x);

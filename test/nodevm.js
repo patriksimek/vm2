@@ -8,6 +8,7 @@ const path = require('path');
 const assert = require('assert');
 const {EventEmitter} = require('events');
 const {NodeVM, VMScript, makeResolverFromLegacyOptions} = require('..');
+const {msg} = require('./engine-messages');
 const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
 
 global.isHost = true;
@@ -63,7 +64,7 @@ describe('NodeVM', () => {
 
 	it('arguments attack', () => {
 		assert.strictEqual(vm.run('module.exports = (function() { return arguments.callee.caller.constructor === Function; })()'), true);
-		assert.throws(() => vm.run('module.exports = (function() { return arguments.callee.caller.caller.toString(); })()'), /Cannot read propert.*toString/);
+		assert.throws(() => vm.run('module.exports = (function() { return arguments.callee.caller.caller.toString(); })()'), msg('READ_TOSTRING_OF_NULL'));
 	});
 
 	it('global attack', () => {
@@ -149,7 +150,7 @@ describe('modules', () => {
 		assert.throws(() => vm.run("Object.defineProperty(require('fs'), 'test', {})"), err => {
 			assert.ok(err instanceof TypeError);
 			assert.equal(err.name, 'TypeError');
-			assert.equal(err.message, '\'defineProperty\' on proxy: trap returned falsish for property \'test\'');
+			assert.ok(msg('PROXY_DEFINE_FALSISH').test(err.message));
 			return true;
 		});
 
@@ -384,7 +385,7 @@ describe('modules', () => {
 	it('arguments attack', () => {
 		let vm = new NodeVM;
 
-		assert.throws(() => vm.run('module.exports = function fce(msg) { return arguments.callee.caller.toString(); }')(), /Cannot read propert.*toString/);
+		assert.throws(() => vm.run('module.exports = function fce(msg) { return arguments.callee.caller.toString(); }')(), msg('READ_TOSTRING_OF_NULL'));
 
 		vm = new NodeVM;
 

@@ -53,3 +53,27 @@ describe('test/bun-skips.js', function () {
 		assert.strictEqual(skipReason('some completely unrelated test name'), null);
 	});
 });
+
+describe('test/engine-messages.js', function () {
+	const {msg, MESSAGES} = require('./engine-messages');
+	const {ENGINE} = require('./engine');
+
+	it('returns a RegExp for the current engine', function () {
+		assert.ok(msg('NOT_A_CONSTRUCTOR') instanceof RegExp);
+	});
+
+	it('every key defines a pattern for BOTH engines', function () {
+		for (const key of Object.keys(MESSAGES)) {
+			assert.ok(MESSAGES[key].v8 instanceof RegExp, key + ' missing v8 pattern');
+			assert.ok(MESSAGES[key].jsc instanceof RegExp, key + ' missing jsc pattern');
+		}
+	});
+
+	it('throws on an unknown key rather than silently matching nothing', function () {
+		assert.throws(() => msg('NO_SUCH_KEY'), /unknown message key/);
+	});
+
+	it('selects by engine', function () {
+		assert.strictEqual(msg('NOT_A_CONSTRUCTOR'), MESSAGES.NOT_A_CONSTRUCTOR[ENGINE]);
+	});
+});

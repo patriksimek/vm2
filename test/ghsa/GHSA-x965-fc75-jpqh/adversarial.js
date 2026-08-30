@@ -100,13 +100,15 @@ function probe(hostThrow) {
 	});
 
 	it('.message accessor returning a host object (must be treated as non-primitive)', function () {
+		let reachedThrow = false;
 		assert.strictEqual(probe(function () {
-			const agg = new AggregateError([agg = undefined], 'placeholder');
 			const a2 = new AggregateError([], 'x'); a2.errors = [a2];
 			Object.defineProperty(a2, 'message', {get: function () { return process; }, configurable: true});
 			a2.leak = process;
+			reachedThrow = true;
 			throw a2;
 		}), 'NO-LEAK');
+		assert.ok(reachedThrow, 'payload never reached its throw - the test is vacuous');
 	});
 
 	it('own isProxy=false cannot suppress host-wrapped detection', function () {

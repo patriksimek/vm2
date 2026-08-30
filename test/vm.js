@@ -6,6 +6,7 @@
 const assert = require('assert');
 const {VM, VMScript} = require('..');
 const {INTERNAL_STATE_NAME} = require('../lib/transformer');
+const {nodeOlderThan} = require('./engine');
 const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
 const {inspect} = require('util');
 
@@ -99,7 +100,7 @@ describe('node', () => {
 	});
 
 	it.cond('inspect', NODE_VERSION >= 11, () => {
-		if (NODE_VERSION < 26) assert.throws(() => inspect(doubleProxy), /Expected/);
+		if (nodeOlderThan(26)) assert.throws(() => inspect(doubleProxy), /Expected/);
 		assert.doesNotThrow(() => inspect(vm.run('({})'), {showProxy: true, customInspect: true}));
 	});
 

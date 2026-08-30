@@ -17,9 +17,13 @@ const MESSAGES = {
 		v8: /Proxy is not a constructor/,
 		jsc: /undefined is not a constructor/,
 	},
-	PROXY_DEFINE_FALSISH: {
-		v8: /'defineProperty' on proxy: trap returned falsish/,
-		jsc: /Proxy's 'defineProperty' trap returned falsy value/,
+	PROXY_DEFINE_FALSISH_TOSTRING: {
+		v8: /'defineProperty' on proxy: trap returned falsish for property 'toString'/,
+		jsc: /Proxy's 'defineProperty' trap returned falsy value for property 'toString'/,
+	},
+	PROXY_DEFINE_FALSISH_TEST: {
+		v8: /^'defineProperty' on proxy: trap returned falsish for property 'test'$/,
+		jsc: /^Proxy's 'defineProperty' trap returned falsy value for property 'test'$/,
 	},
 	PROXY_SET_FALSISH: {
 		v8: /'set' on proxy: trap returned falsish for property 'a'/,
@@ -34,11 +38,11 @@ const MESSAGES = {
 		jsc: /Proxy object's 'set' trap returned falsy value for property 'd'/,
 	},
 	PROXY_DELETE_FALSISH_READFILESYNC: {
-		v8: /'deleteProperty' on proxy: trap returned falsish for property 'readFileSync'/,
+		v8: /^'deleteProperty' on proxy: trap returned falsish for property 'readFileSync'$/,
 		// JSC's message for a failed strict-mode delete carries no property
 		// name at all -- this is the engine's own wording, not a widening on
 		// our part. The v8 side above stays exactly as strict as it was.
-		jsc: /Unable to delete property\./,
+		jsc: /^Unable to delete property\.$/,
 	},
 	READ_MAINMODULE_OF_UNDEFINED: {
 		v8: /Cannot read propert.*mainModule/,

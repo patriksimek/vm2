@@ -976,7 +976,7 @@ describe('VM', () => {
 		if (NODE_VERSION > 6) {
 			assert.throws(() => vm2.run(`
 				Buffer.prototype.__defineGetter__("toString", () => {});
-			`), msg('PROXY_DEFINE_FALSISH'), '#2');
+			`), msg('PROXY_DEFINE_FALSISH_TOSTRING'), '#2');
 		} else {
 			assert.strictEqual(vm2.run(`
 				Buffer.prototype.__defineGetter__("xxx", () => 4);

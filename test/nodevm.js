@@ -150,7 +150,7 @@ describe('modules', () => {
 		assert.throws(() => vm.run("Object.defineProperty(require('fs'), 'test', {})"), err => {
 			assert.ok(err instanceof TypeError);
 			assert.equal(err.name, 'TypeError');
-			assert.ok(msg('PROXY_DEFINE_FALSISH').test(err.message));
+			assert.ok(msg('PROXY_DEFINE_FALSISH_TEST').test(err.message));
 			return true;
 		});
 

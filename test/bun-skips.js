@@ -82,6 +82,24 @@ const SKIPS = [
 		security: true,
 	},
 	{
+		match: 'a FUNCTION options arg with allowExtension:true',
+		reason:
+			"Bun's node:sqlite blocks loadExtension even when allowExtension:true " +
+			"is passed as a function property. Blocked by Bun, not vm2's forced " +
+			'allowExtension:false, so vm2\'s defence remains unverified on Bun.',
+		phase: 2,
+		security: true,
+	},
+	{
+		match: 'enableLoadExtension(true) is also disabled',
+		reason:
+			"Bun's node:sqlite refuses enableLoadExtension(true) with its own error. " +
+			"Blocked by Bun's implementation, not vm2's forced allowExtension:false, " +
+			'leaving vm2\'s defence unverified on Bun.',
+		phase: 2,
+		security: true,
+	},
+	{
 		match: 'isDangerousSymbol covers full nodejs.* set',
 		reason:
 			"Bun's node:assert deepStrictEqual does not treat a cross-realm array as " +

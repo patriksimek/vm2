@@ -6,7 +6,7 @@
 const assert = require('assert');
 const {VM, VMScript} = require('..');
 const {INTERNAL_STATE_NAME} = require('../lib/transformer');
-const {nodeOlderThan} = require('./engine');
+const {atLeastNode, nodeOlderThan} = require('./engine');
 const {msg} = require('./engine-messages');
 const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
 const {inspect} = require('util');
@@ -2845,7 +2845,12 @@ describe('VM', () => {
 		assert.strictEqual(vm2.run('typeof WebAssembly !== "undefined" ? WebAssembly.JSTag : "no-wasm"'), undefined);
 	});
 
-	it('sandbox global Proxy is removed and sealed', () => {
+	// Gated to Node >= 10: on Node 8's older V8 the seal below does not take on
+	// the vm context's global proxy — the slot stays writable — so these
+	// descriptor assertions are false there. That is exactly the difference that
+	// makes the `Proxy` install in setup-sandbox.js live on Node 8 and a no-op
+	// everywhere else; see the comment beside it.
+	it.cond('sandbox global Proxy is removed and sealed', atLeastNode(10), () => {
 		const vm2 = new VM();
 
 		// `Proxy` is removed from the sandbox outright, not merely shadowed.
@@ -2906,7 +2911,7 @@ describe('VM', () => {
 			);
 		}
 	});
-	it('sealed sandbox intrinsics cannot be swapped out', () => {
+	it.cond('sealed sandbox intrinsics cannot be swapped out', atLeastNode(10), () => {
 		const vm2 = new VM();
 
 		// Same seal, same reasoning, for the two other sealed slots. `Error`

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Experimental Bun support (test suite and CI only).** The suite now runs
+  under Bun, with engine-keyed assertion messages so patterns stay exactly as
+  strict on Node, a central `test/bun-skips.js` listing every JavaScriptCore
+  divergence, and a non-blocking CI job whose output is verified complete
+  before it is believed. Bun is **not** a supported security boundary — vm2's
+  threat model is derived from V8 internals and JavaScriptCore has not been
+  audited against the bridge. See the README Runtimes section.
+
 ### Maintenance
 
 - **Dead `global.Proxy` assignment removed** — `lib/setup-sandbox.js` ended its proxy-hardening section with `global.Proxy = proxiedProxy;`, but that slot is installed as a *sealed* `undefined` (`writable: false, configurable: false`) by the `Object.defineProperties(global, ...)` block near the top of the same file, which removed `Proxy` from the sandbox outright in 3.10.3. A strict-mode assignment to a non-writable property of a `vm` context's global proxy is silently ignored on V8, so the line had been a no-op ever since while still reading as live code — and on engines that implement the write correctly (JavaScriptCore/Bun) it threw a `TypeError` that aborted sandbox setup before the first `run()`. The assignment and its now-unreferenced `proxiedProxy` binding are gone; `proxyHandler` and the handler-sanitizing chain below it remain reachable through the `Proxy.revocable` override, which still hardens the real constructor object should a reference ever leak. No behavior change on Node: `Proxy` was, and remains, absent from the sandbox. The three sealed global slots (`Error`, `Promise`, `Proxy`) now state `writable: false, configurable: false` explicitly rather than relying on `defineProperty` defaults, and `test/vm.js` pins the seal plus a source-level guard that fails if any of those slots is ever bare-assigned again — a recurrence runtime assertions cannot catch on V8, precisely because V8 stays silent.

@@ -30,6 +30,15 @@ The following versions of **vm2** currently receive security updates:
 | 3.x | ✅ | Actively maintained |
 | 2.x and older | ❌ | No longer supported |
 
+## Runtime scope
+
+Coordinated disclosure covers vm2 running on **Node.js**.
+
+Bun support is experimental and Bun is explicitly not a supported security
+boundary (see the Runtimes section of the README). An escape reproducible only
+under Bun and not under Node.js is out of scope for the advisory process and
+will be handled as a public bug report until Bun reaches supported status.
+
 ## Commitment
 
 Security is a top priority for this project. We take all reports seriously and aim to resolve verified issues quickly and transparently, with respect for both reporters and users.

@@ -82,6 +82,23 @@ new VM().run('this.constructor.constructor("return process")().exit()');
 npm install vm2
 ```
 
+## Runtimes
+
+| Runtime | Status |
+|---------|--------|
+| Node.js | Supported. The sandbox is a security boundary. |
+| Bun | **Experimental.** Functional parity only — **not** a security boundary. |
+
+vm2's threat model, the attack catalogue in [`docs/ATTACKS.md`](docs/ATTACKS.md),
+and every regression test in `test/ghsa/` are derived from V8 internals.
+JavaScriptCore, which Bun uses, has its own equivalents, and none have been
+audited against vm2's bridge. The suite passing under Bun demonstrates
+functional compatibility; it does **not** demonstrate that the sandbox holds
+there.
+
+Known divergences are enumerated in `test/bun-skips.js`. Do not use vm2 on Bun
+to isolate untrusted code.
+
 ## Quick Examples
 
 ```js

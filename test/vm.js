@@ -2843,6 +2843,80 @@ describe('VM', () => {
 		assert.strictEqual(vm2.run('typeof WebAssembly !== "undefined" ? WebAssembly.JSTag : "no-wasm"'), undefined);
 	});
 
+	it('sandbox global Proxy is removed and sealed', () => {
+		const vm2 = new VM();
+
+		// `Proxy` is removed from the sandbox outright, not merely shadowed.
+		assert.strictEqual(vm2.run('typeof Proxy'), 'undefined');
+
+		// It must be SEALED (writable: false, configurable: false). The seal is
+		// what makes the removal stick, and it is also why setup-sandbox.js must
+		// never write this slot with a bare assignment: on V8 such a write is a
+		// silent no-op against the context's global proxy (so a dead line looks
+		// alive), while other engines throw and abort sandbox setup.
+		const desc = vm2.run('Object.getOwnPropertyDescriptor(globalThis, "Proxy")');
+		assert.ok(desc, 'globalThis.Proxy descriptor should exist');
+		assert.strictEqual(desc.value, undefined, 'Proxy should be undefined');
+		assert.strictEqual(desc.writable, false, 'Proxy slot must be non-writable');
+		assert.strictEqual(desc.configurable, false, 'Proxy slot must be non-configurable');
+
+		// Sandbox code cannot restore it.
+		assert.strictEqual(vm2.run('try { globalThis.Proxy = function () {}; } catch (e) {} typeof Proxy'), 'undefined');
+		assert.throws(() => vm2.run('Object.defineProperty(globalThis, "Proxy", {value: function () {}})'));
+	});
+
+	it('setup-sandbox.js never bare-assigns a sealed global slot', () => {
+		// A bare `global.X = v` against a sealed slot is a strict-mode write to a
+		// non-writable property. V8 silently ignores it on the context's global
+		// proxy, so such a line looks alive on Node while doing nothing; other
+		// engines throw and abort sandbox setup. The old assignment of the
+		// proxied Proxy sat dead in this file for exactly that reason. Runtime
+		// assertions cannot catch a recurrence on V8, so guard the source.
+		const raw = require('fs').readFileSync(require.resolve('../lib/setup-sandbox.js'), 'utf8');
+
+		// Drop comment-only lines and block comments. Code is never stripped, so
+		// the guard can only ever err toward a false positive (a loud, easily
+		// fixed failure) and never hide a real assignment.
+		let inBlock = false;
+		const code = raw
+			.split('\n')
+			.filter((line) => {
+				const t = line.trim();
+				if (inBlock) {
+					if (t.includes('*/')) inBlock = false;
+					return false;
+				}
+				if (t.startsWith('/*')) {
+					if (!t.includes('*/')) inBlock = true;
+					return false;
+				}
+				return !t.startsWith('//') && !t.startsWith('*');
+			})
+			.join('\n');
+
+		for (const name of ['Error', 'Promise', 'Proxy']) {
+			const bareAssign = new RegExp(`(^|[^\\w.$])global\\.${name}\\s*=[^=]`, 'm');
+			assert.ok(
+				!bareAssign.test(code),
+				`setup-sandbox.js bare-assigns the sealed global '${name}'. This is a ` +
+					'silent no-op on V8 and a hard TypeError on other engines. Use ' +
+					'localReflectDefineProperty and check its return value instead.'
+			);
+		}
+	});
+	it('sealed sandbox intrinsics cannot be swapped out', () => {
+		const vm2 = new VM();
+
+		// Same seal, same reasoning, for the two other sealed slots. `Error`
+		// backs the prepareStackTrace defence (issue #467).
+		for (const name of ['Error', 'Promise']) {
+			const desc = vm2.run(`Object.getOwnPropertyDescriptor(globalThis, ${JSON.stringify(name)})`);
+			assert.ok(desc, `globalThis.${name} descriptor should exist`);
+			assert.strictEqual(desc.writable, false, `${name} slot must be non-writable`);
+			assert.strictEqual(desc.configurable, false, `${name} slot must be non-configurable`);
+		}
+	});
+
 	after(() => {
 		vm = null;
 	});

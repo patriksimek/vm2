@@ -1033,7 +1033,7 @@ describe('VM', () => {
 					return () => x => x.constructor("return process")();
 				}
 			})))(()=>{}).mainModule.require("child_process").execSync("id").toString()
-		`), msg('NOT_A_CONSTRUCTOR'), '#2');
+		`), NODE_VERSION > 8 ? msg('NOT_A_CONSTRUCTOR') : /process is not defined/, '#2');
 
 		vm2 = new VM();
 
@@ -1223,7 +1223,7 @@ describe('VM', () => {
 					}
 				}
 			}))}).mainModule.require("child_process").execSync("id").toString()
-		`), msg('NOT_A_CONSTRUCTOR'), '#1');
+		`), NODE_VERSION > 8 ? msg('NOT_A_CONSTRUCTOR') : /process is not defined/, '#1');
 	});
 
 	it('throw while accessing propertyDescriptor properties', () => {

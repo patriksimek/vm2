@@ -7,7 +7,7 @@ const {IS_BUN, ENGINE, NODE_MAJOR, atLeastNode, nodeOlderThan} = require('./engi
 
 describe('test/engine.js', function () {
 	it('detects the engine without consulting process.versions.node', function () {
-		assert.strictEqual(IS_BUN, typeof globalThis.Bun !== 'undefined');
+		assert.strictEqual(IS_BUN, typeof Bun !== 'undefined');
 		assert.strictEqual(ENGINE, IS_BUN ? 'jsc' : 'v8');
 	});
 
@@ -51,6 +51,50 @@ describe('test/bun-skips.js', function () {
 	it('matches by substring of the full test title', function () {
 		assert.ok(skipReason('GHSA-v27g-jcqj-v8rw (CallSite path leak via prepareStackTrace) getFileName on host frames returns null (no absolute path leaked)'));
 		assert.strictEqual(skipReason('some completely unrelated test name'), null);
+	});
+
+	// Guards against an over-broad `match`: an entry meant for one test that
+	// also (accidentally) matches another silently removes coverage for the
+	// second test on Bun. GHSA-v27g-jcqj-v8rw is the one deliberate exception
+	// -- it quarantines all 7 tests in its file (see its `reason`).
+	//
+	// Real titles are asked of mocha itself (--dry-run --reporter json) rather
+	// than grepped from source: grepping mangles titles with escaped quotes or
+	// that span multiple `it(` lines, and mocha's TAP reporter strips leading
+	// `#` from titles, so neither is a reliable source here.
+	it('every match identifies at most one real test title (GHSA-v27g-jcqj-v8rw excepted)', function () {
+		// Bun-side reliability of this tooling is untested; the SKIPS content
+		// this checks is engine-independent, so verifying it under Node suffices.
+		if (IS_BUN) return this.skip();
+
+		this.timeout(20000);
+
+		const {execFileSync} = require('child_process');
+		const path = require('path');
+
+		const repoRoot = path.join(__dirname, '..');
+		const mochaBin = path.join(repoRoot, 'node_modules', 'mocha', 'bin', 'mocha.js');
+
+		const out = execFileSync(
+			process.execPath,
+			[mochaBin, 'test', '--recursive', '--ignore', 'test/compilers.js', '--dry-run', '--reporter', 'json'],
+			{cwd: repoRoot, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024},
+		);
+		const titles = JSON.parse(out).tests.map(function (t) {
+			return t.fullTitle;
+		});
+		assert.ok(titles.length > 0, 'dry-run produced no titles');
+
+		for (const s of SKIPS) {
+			if (s.match === 'GHSA-v27g-jcqj-v8rw') continue;
+			const hits = titles.filter(function (title) {
+				return title.indexOf(s.match) !== -1;
+			});
+			assert.ok(
+				hits.length <= 1,
+				'match ' + JSON.stringify(s.match) + ' hits ' + hits.length + ' real titles: ' + JSON.stringify(hits),
+			);
+		}
 	});
 });
 

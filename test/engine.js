@@ -13,7 +13,7 @@
 // Reach for ENGINE only where the divergence is genuinely about the engine
 // rather than about a capability that can be probed directly.
 
-const IS_BUN = typeof globalThis.Bun !== 'undefined';
+const IS_BUN = typeof Bun !== 'undefined';
 
 // 'jsc' (JavaScriptCore, via Bun) or 'v8' (Node). Derived from the runtime's
 // own identity, never from a version string.

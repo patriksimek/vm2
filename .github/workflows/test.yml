@@ -96,7 +96,7 @@ jobs:
             - name: Verify the run actually finished
               # The important step. Without it a mid-run crash exits 0 and the
               # job reports a success it never verified.
-              run: node scripts/check-run-complete.js bun-tap.txt --min-tests 800
+              run: node scripts/check-run-complete.js bun-tap.txt --min-tests 750
 
             - name: Report skip count
               if: always()

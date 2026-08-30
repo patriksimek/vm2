@@ -162,7 +162,7 @@ const SKIPS = [
 		// than the default). A full Bun run hung on it for >17 minutes with no
 		// sign of returning -- far past the sibling test's already-bad >400s --
 		// so it is quarantined here too rather than risk the run never finishing.
-		match: 'bufferAllocLimit: Infinity disables the cap',
+		match: 'GHSA-6785-pvv7-mvg7 (Buffer.alloc DoS) bufferAllocLimit: Infinity disables the cap',
 		reason:
 			'Same Buffer.allocUnsafe(64MB)-across-the-bridge divergence as ' +
 			'"default is permissive (Infinity)" above, from a second call site. ' +

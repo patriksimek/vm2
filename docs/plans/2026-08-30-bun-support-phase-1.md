@@ -239,18 +239,16 @@ Expected: 4 passing.
 
 - [ ] **Step 5: Convert the one upper-bound gate**
 
-In `test/vm.js`, replace line 9:
+In `test/vm.js`, add above line 9's `NODE_VERSION` declaration:
 
 ```js
-const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
+const {nodeOlderThan} = require('./engine');
 ```
 
-with:
-
-```js
-const {IS_BUN, ENGINE, atLeastNode, nodeOlderThan} = require('./engine');
-const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
-```
+Import **only** `nodeOlderThan` — it is the only member this task uses here.
+Skipping is owned by `test/bun-setup.js` (Task 3), so spec files never import
+`IS_BUN` or `ENGINE`. Unused bindings would risk the no-new-lint-problems
+constraint.
 
 Then at `test/vm.js:102`, replace:
 
@@ -264,7 +262,7 @@ with:
 		if (nodeOlderThan(26)) assert.throws(() => inspect(doubleProxy), /Expected/);
 ```
 
-Leave every *lower*-bound `NODE_VERSION` comparison alone for now — they resolve correctly on Bun and churning them adds risk without benefit. `IS_BUN` and `ENGINE` are imported here because Tasks 4 and 5 need them in this file.
+Leave every *lower*-bound `NODE_VERSION` comparison alone for now — they resolve correctly on Bun and churning them adds risk without benefit.
 
 - [ ] **Step 6: Verify both runtimes**
 
@@ -300,15 +298,17 @@ This is what lets a full Bun run survive. It must include `GHSA-v27g-jcqj-v8rw`,
 
 **Files:**
 - Create: `test/bun-skips.js`
-- Modify: `test/vm.js` (the `global.it.cond` definition at lines 12–18)
-- Modify: `test/nodevm.js` (the `global.it.cond` definition at lines 14–20)
+- Create: `test/bun-setup.js`
+- Modify: `package.json` (the `test` script)
 
 **Interfaces:**
 - Consumes: `IS_BUN` from `test/engine.js` (Task 2).
 - Produces:
-  - `skipReason(fullTitle: string): string | null` — the reason this test is skipped on Bun, or `null`
+  - `skipReason(fullTitle: string): string | null` — the reason this test is skipped on Bun, or `null`. `fullTitle` is the suite path plus the test name.
   - `SKIPS: Array<{match: string, reason: string, phase: number, security: boolean}>`
-  - `skipCount(): number`
+  - `NO_SKIP: boolean`
+
+Note: `test/vm.js` and `test/nodevm.js` are **not** modified by this task — see Step 5.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -505,9 +505,9 @@ const SKIPS = [
 
 const NO_SKIP = process.env.VM2_BUN_NO_SKIP === '1';
 
-let skipped = 0;
-
 // Returns the reason this test is skipped under Bun, or null to run it.
+// `fullTitle` is the suite path plus the test name, so an entry may match
+// either a describe block (quarantining a whole file) or a single test.
 function skipReason(fullTitle) {
 	if (NO_SKIP) return null;
 	for (let i = 0; i < SKIPS.length; i++) {
@@ -516,52 +516,141 @@ function skipReason(fullTitle) {
 	return null;
 }
 
-function noteSkipped() {
-	skipped++;
-}
-
-function skipCount() {
-	return skipped;
-}
-
-module.exports = {SKIPS, skipReason, noteSkipped, skipCount, NO_SKIP};
+module.exports = {SKIPS, skipReason, NO_SKIP};
 ```
+
+No skip *counter* is exported: nothing consumes one. CI counts skips by
+grepping `# SKIP` out of the TAP output, which is the runner's own record
+rather than a parallel tally that could drift from it.
 
 - [ ] **Step 4: Run and verify the selftest passes**
 
 Run: `node ./node_modules/mocha/bin/mocha.js test/engine-selftest.js --reporter spec`
 Expected: 6 passing.
 
-- [ ] **Step 5: Wire it into `it.cond` in `test/vm.js`**
+- [ ] **Step 5: Create `test/bun-setup.js`**
 
-Replace the `global.it.cond` block at `test/vm.js:12-18` with:
+**Do not wire skipping through `it.cond` in the spec files.** That approach was
+tried and rejected during the pre-flight scan, for two independent reasons:
+
+1. **Load order is the opposite of what it needs to be.** `test/ghsa` loads
+   *first* (its tests are numbered from 1) and `test/vm.js` loads *last* (test
+   753). The ghsa files install their own fallback `it.cond` at load time and
+   call it during registration, long before `test/vm.js` could rewire anything.
+   Skips would have applied to none of them — and that is where 12 of the 16
+   entries point.
+2. **Most targeted tests are plain `it()`,** not `it.cond`, so an `it.cond`
+   wrapper would miss them regardless of ordering.
+
+Instead, create `test/bun-setup.js`, loaded via `--require` so it runs before
+any spec file:
 
 ```js
-global.isHost = true;
-global.it.cond = (name, cond, fn) => {
-	const reason = IS_BUN ? skipReason(name) : null;
-	if (reason) {
-		noteSkipped();
-		it.skip(name + ' [bun: ' + reason + ']', fn);
-	} else if (cond) {
-		it(name, fn);
-	} else {
-		it.skip(name, fn);
+'use strict';
+
+// Applies test/bun-skips.js when running under Bun.
+//
+// Loaded via `--require` so it runs BEFORE any spec file. That ordering is the
+// whole point: test/ghsa loads first and test/vm.js last, so wiring installed
+// from inside a spec file could never reach the ghsa suites, where most
+// skipped tests live.
+//
+// Two globals are wrapped:
+//
+//   describe -- to maintain the suite-name stack, because skip patterns match
+//               the FULL title and an `it` wrapper alone sees only the test's
+//               own name. This is what lets one entry quarantine a whole file.
+//   it       -- to register a pending test when the full title matches.
+//
+// mocha installs both on the global once per spec file, so the assignment is
+// intercepted with an accessor rather than wrapping a value that does not yet
+// exist at --require time.
+
+const {IS_BUN} = require('./engine');
+const {skipReason} = require('./bun-skips');
+
+// On Node this module does nothing at all.
+if (IS_BUN) {
+	const suiteStack = [];
+
+	function fullTitle(name) {
+		return suiteStack.length ? suiteStack.join(' ') + ' ' + name : name;
 	}
-};
+
+	function intercept(prop, wrap) {
+		let current;
+		Object.defineProperty(global, prop, {
+			configurable: true,
+			get: function () {
+				return current;
+			},
+			set: function (incoming) {
+				if (typeof incoming !== 'function' || incoming.__vm2BunWrapped) {
+					current = incoming;
+					return;
+				}
+				const wrapped = wrap(incoming);
+				// Carry mocha's own attachments (skip, only, aliases).
+				Object.keys(incoming).forEach(function (k) {
+					wrapped[k] = incoming[k];
+				});
+				wrapped.skip = incoming.skip;
+				wrapped.only = incoming.only;
+				wrapped.__vm2BunWrapped = true;
+				current = wrapped;
+			},
+		});
+	}
+
+	intercept('describe', function (original) {
+		return function (name, fn) {
+			// Forward ALL arguments: describe.skip passes a third internally.
+			if (typeof fn !== 'function') return original.apply(this, arguments);
+			const args = Array.prototype.slice.call(arguments);
+			args[1] = function () {
+				suiteStack.push(name);
+				try {
+					return fn.apply(this, arguments);
+				} finally {
+					suiteStack.pop();
+				}
+			};
+			return original.apply(this, args);
+		};
+	});
+
+	intercept('it', function (original) {
+		return function (name, fn) {
+			// Register the skip by calling the original with NO callback, which
+			// is how mocha marks a test pending. Do NOT call original.skip():
+			// mocha's it.skip delegates to context.it, which is this wrapper,
+			// and recurses until the stack overflows.
+			if (typeof name === 'string' && skipReason(fullTitle(name))) {
+				return original(name);
+			}
+			return original.apply(this, arguments);
+		};
+	});
+}
 ```
 
-and add to the requires at the top of `test/vm.js`:
+`test/vm.js` and `test/nodevm.js` keep their existing `it.cond` definitions
+unchanged — `it.cond` calls `it()`, which is already wrapped.
 
-```js
-const {skipReason, noteSkipped} = require('./bun-skips');
+This module is also collected as a spec file by `mocha test --recursive`. That
+is harmless: the module cache dedupes, so the body executes exactly once on
+both runtimes (verified).
+
+- [ ] **Step 6: Register the setup module**
+
+In `package.json`, change the `test` script to:
+
+```json
+"test": "mocha test --recursive --ignore test/compilers.js --require ./test/bun-setup.js"
 ```
 
-- [ ] **Step 6: Apply the identical wiring to `test/nodevm.js`**
-
-`test/nodevm.js` defines its own `global.it.cond` at lines 14–20. Make the same change there, adding both requires (`./engine` for `IS_BUN`, `./bun-skips`) at the top.
-
-Note: several `test/ghsa/**` files define a *fallback* `it.cond` only when one is not already present (`if (typeof it.cond !== 'function')`). Because `test/vm.js` sorts before `test/ghsa` and installs the global first in a full run, those files inherit this wiring automatically. When a ghsa file is run **alone**, its fallback is used and nothing is skipped — that is why Task 4's completeness check compares against a full-run baseline rather than per-file counts.
+The module is inert on Node, so this is a no-op there — but it keeps one
+command working on both runtimes rather than needing a Bun-specific invocation.
 
 - [ ] **Step 7: Sanity-check the patterns for over- and under-matching**
 
@@ -586,13 +675,18 @@ matcher runs against the real mocha title, not the TAP rendering.
 Run: `npm test`
 Expected: `828 passing`, `0 failing` (822 + 4 from Task 2 + 2 here). Skips must not engage on Node.
 
-Run: `bun ./node_modules/mocha/bin/mocha.js test/ghsa/GHSA-v27g-jcqj-v8rw/repro.js --reporter tap`
-Expected: the process no longer dies. You should see a TAP epilogue with the tests marked skipped.
+Run: `bun ./node_modules/mocha/bin/mocha.js test/ghsa/GHSA-v27g-jcqj-v8rw/repro.js --require ./test/bun-setup.js --reporter tap`
+Expected: the process no longer dies. All 7 tests appear marked `# SKIP`, and a TAP epilogue is printed. Without `--require` this file still kills the process — that is expected and is why Step 6 puts the flag in the `test` script.
+
+Then confirm the skips reach the ghsa suites in a full run, which is the whole point of Ruling 1:
+
+Run: `bun ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --require ./test/bun-setup.js --reporter tap > /tmp/t3.tap 2>&1; grep -c '# SKIP' /tmp/t3.tap`
+Expected: a count comfortably above the 19 tests that are already pending on Node. If it equals the Node pending count, the wiring is not reaching the ghsa files — stop and investigate before proceeding.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add test/bun-skips.js test/engine-selftest.js test/vm.js test/nodevm.js
+git add test/bun-skips.js test/bun-setup.js test/engine-selftest.js package.json
 git commit -m "test: add central Bun skip list
 
 One file listing every JSC divergence phase 1 does not fix, each with a

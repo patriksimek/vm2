@@ -173,25 +173,59 @@ A CI job that exits 0 while swallowing failures is worse than no CI job. Every
 other part of this design assumes the runner reports honestly, so this is settled
 before anything else is built.
 
-Working hypothesis, not yet confirmed: Bun loses buffered stdout on exit for
-large piped outputs, and the same exit path drops mocha's `process.exitCode`.
-That would explain the truncation, the missing epilogue, and the wrong exit code
-as one root cause. It would be a Bun bug (kind B, §3), not a vm2 one.
+**Root cause — identified.** (An earlier hypothesis about lost stdout buffering
+was investigated and disproven: redirecting to a file rather than a pipe changes
+nothing.)
 
-Candidate mitigations, in order of preference — investigation task, not a
-decision to make on paper:
+A single file terminates the mocha process:
+`test/ghsa/GHSA-v27g-jcqj-v8rw/repro.js`. Run alone under Bun it produces no
+test output and no epilogue. Everything alphabetically after it — 112 tests —
+never runs, and mocha's exit status is 0.
 
-1. Redirect to a file rather than a pipe, and/or use a reporter that flushes
-   synchronously; re-measure.
-2. Have CI assert the epilogue exists and that the reported counts match, so a
-   truncated run fails loudly instead of passing quietly. Worth doing regardless
-   of root cause, as defence in depth.
-3. Shard the Bun job per directory. Known to work — the per-directory runs are
-   reliable — at the cost of a slower, noisier job.
-4. Only if all of the above fail: a thin runner, as a last resort.
+Reduced to a minimal case:
 
-If this cannot be made honest, phase 1 should stop and be reconsidered rather
-than ship a job that reports success it has not verified.
+```js
+new VM().run(`
+  Error.prepareStackTrace = function (e, sst) {
+    return sst.map(function (s) { return s.getFileName(); });
+  };
+  new Error().stack;
+`);
+```
+
+| | Node v26.7.0 | Bun 1.4.0 |
+|---|---|---|
+| result | `["vm.js", null, null, …]` | `TypeError: s.getFileName is not a function` |
+| process | exits 0, continues normally | terminates with a Bun crash banner |
+
+Two distinct problems, both real:
+
+1. **A vm2-relevant divergence (kind A).** The CallSite objects handed to a
+   *sandbox* `Error.prepareStackTrace` have no methods at all on Bun —
+   `getFileName` is `undefined`. On Node they exist, and vm2 redacts host frames
+   to `null`; that redaction *is* the GHSA-v27g defence. So the entire GHSA-v27g
+   host-frame redaction is not merely failing on Bun, it is **untestable** there,
+   because the API it redacts does not exist. Together with the GHSA-x6m4
+   `captureStackTrace` leak (§3, kind A), the stack-trace surface on JSC is
+   materially different and wholly unaudited. This is phase-2 input and belongs
+   in the §4.3 skip list with that reasoning recorded.
+2. **A Bun bug (kind B).** An exception thrown inside a `prepareStackTrace`
+   callback should propagate; instead it terminates the runtime. Worth filing
+   upstream with the reduction above.
+
+Mitigations, now that the cause is known:
+
+1. Skip the affected tests via §4.3 so the process survives. Necessary but not
+   sufficient — it fixes this instance, not the class.
+2. **Have CI verify the run was complete**: assert the TAP epilogue exists and
+   that `# tests` matches the expected count. This is the durable fix, because it
+   converts *any* future mid-run death from a silent pass into a loud failure.
+   Do this regardless of cause.
+3. Shard per directory if a future crash proves unskippable. Per-directory runs
+   are reliable — `GHSA-m5q2` alone gives `rc=1` and a correct epilogue.
+
+Mitigation 2 is the actual requirement. A skip list addresses today's crash; only
+an explicit completeness check keeps the job honest against tomorrow's.
 
 ### 4.1 `test/engine.js` — engine detection and gating (the correctness prerequisite)
 

@@ -1109,7 +1109,10 @@ Append to `.github/workflows/test.yml`, as a sibling of `jobs.test`:
               run: npm ci
 
             - name: Run unit tests under Bun
-              run: bun ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --reporter tap | tee bun-tap.txt
+              # --require ./test/bun-setup.js applies test/bun-skips.js. It must
+              # come from the flag, not from inside a spec file: test/ghsa loads
+              # first, so nothing a spec file installs can reach it.
+              run: bun ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --require ./test/bun-setup.js --reporter tap | tee bun-tap.txt
               continue-on-error: true
 
             - name: Verify the run actually finished
@@ -1167,7 +1170,7 @@ jobs:
             - name: Run with skips disabled
               env:
                   VM2_BUN_NO_SKIP: '1'
-              run: bun ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --reporter tap | tee canary-tap.txt
+              run: bun ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --require ./test/bun-setup.js --reporter tap | tee canary-tap.txt
               continue-on-error: true
 
             - name: Summarise

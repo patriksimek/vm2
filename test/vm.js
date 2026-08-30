@@ -863,7 +863,7 @@ describe('VM', () => {
 				} catch ({constructor: c}) {
 					c.constructor('return process')();
 				}
-			`), /Proxy is not a constructor/, '#9');
+			`), msg('NOT_A_CONSTRUCTOR'), '#9');
 		} else {
 			assert.throws(() => vm2.run(`
 				const proxiedErr = new Proxy({}, {
@@ -1080,7 +1080,7 @@ describe('VM', () => {
 						}
 					})
 				});
-			`), /Proxy is not a constructor/, '#4');
+			`), msg('NOT_A_CONSTRUCTOR'), '#4');
 		} else {
 			assert.doesNotThrow(() => vm2.run(`
 				Object.defineProperty(Buffer.from(""), "", {
@@ -3103,11 +3103,11 @@ describe('freeze, protect', () => {
 
 		assert.throws(() => {
 			vm.run('"use strict"; (y) => { y.b = () => { return `--` } }')(x);
-		}, /'set' on proxy: trap returned falsish for property 'b'/);
+		}, msg('PROXY_SET_FALSISH_B'));
 
 		assert.throws(() => {
 			vm.run('"use strict"; x.c.d = () => { return `---` };');
-		}, /'set' on proxy: trap returned falsish for property 'd'/);
+		}, msg('PROXY_SET_FALSISH_D'));
 
 		vm.run('x.a = () => { return `-` };');
 		assert.strictEqual(x.a(), 'a');

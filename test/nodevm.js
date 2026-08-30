@@ -157,7 +157,7 @@ describe('modules', () => {
 		assert.throws(() => vm.run("'use strict'; delete require('fs').readFileSync"), err => {
 			assert.ok(err instanceof TypeError);
 			assert.equal(err.name, 'TypeError');
-			assert.equal(err.message, '\'deleteProperty\' on proxy: trap returned falsish for property \'readFileSync\'');
+			assert.ok(msg('PROXY_DELETE_FALSISH_READFILESYNC').test(err.message));
 			return true;
 		});
 	});
@@ -389,7 +389,7 @@ describe('modules', () => {
 
 		vm = new NodeVM;
 
-		assert.throws(() => vm.run('module.exports = function fce(msg) { return fce.caller.toString(); }')(), /Cannot read propert.*toString/);
+		assert.throws(() => vm.run('module.exports = function fce(msg) { return fce.caller.toString(); }')(), msg('READ_TOSTRING_OF_NULL'));
 	});
 
 	it('builtin module arguments attack', done => {

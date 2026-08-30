@@ -34,3 +34,22 @@ describe('test/engine.js', function () {
 		}
 	});
 });
+
+describe('test/bun-skips.js', function () {
+	const {SKIPS, skipReason} = require('./bun-skips');
+
+	it('every entry has a reason and an owning phase', function () {
+		assert.ok(SKIPS.length > 0);
+		for (const s of SKIPS) {
+			assert.ok(typeof s.match === 'string' && s.match.length > 0, 'match required');
+			assert.ok(typeof s.reason === 'string' && s.reason.length > 10, 'reason must be substantive: ' + s.match);
+			assert.ok(s.phase === 2, 'phase must be 2 - phase 1 fixes nothing behavioural');
+			assert.strictEqual(typeof s.security, 'boolean');
+		}
+	});
+
+	it('matches by substring of the full test title', function () {
+		assert.ok(skipReason('GHSA-v27g-jcqj-v8rw (CallSite path leak via prepareStackTrace) getFileName on host frames returns null (no absolute path leaked)'));
+		assert.strictEqual(skipReason('some completely unrelated test name'), null);
+	});
+});

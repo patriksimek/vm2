@@ -2843,7 +2843,12 @@ describe('VM', () => {
 		assert.strictEqual(vm2.run('typeof WebAssembly !== "undefined" ? WebAssembly.JSTag : "no-wasm"'), undefined);
 	});
 
-	it('sandbox global Proxy is removed and sealed', () => {
+	// Gated to Node >= 10: on Node 8's older V8 the seal below does not take on
+	// the vm context's global proxy — the slot stays writable — so these
+	// descriptor assertions are false there. That difference is exactly what
+	// makes the `Proxy` install in setup-sandbox.js live on Node 8 and a no-op
+	// everywhere else; see the comment beside it.
+	it.cond('sandbox global Proxy is removed and sealed', NODE_VERSION >= 10, () => {
 		const vm2 = new VM();
 
 		// `Proxy` is removed from the sandbox outright, not merely shadowed.
@@ -2865,46 +2870,56 @@ describe('VM', () => {
 		assert.throws(() => vm2.run('Object.defineProperty(globalThis, "Proxy", {value: function () {}})'));
 	});
 
-	it('setup-sandbox.js never bare-assigns a sealed global slot', () => {
-		// A bare `global.X = v` against a sealed slot is a strict-mode write to a
-		// non-writable property. V8 silently ignores it on the context's global
-		// proxy, so such a line looks alive on Node while doing nothing; other
-		// engines throw and abort sandbox setup. The old assignment of the
-		// proxied Proxy sat dead in this file for exactly that reason. Runtime
-		// assertions cannot catch a recurrence on V8, so guard the source.
+	it('setup-sandbox.js guards every write to a sealed global slot', () => {
+		// A write to one of the sealed global slots behaves differently on each
+		// supported engine, so it must never be left bare:
+		//
+		//   Node >= 10  silently ignored (slot genuinely sealed)
+		//   Node 8      succeeds (old V8 global proxy leaves the slot writable) --
+		//               this is load-bearing, it is what gives that sandbox `Proxy`
+		//   JSC (Bun)   THROWS, aborting sandbox setup before the first run()
+		//
+		// A bare write therefore either does nothing while looking alive, or kills
+		// the sandbox, depending on where it runs. The `Proxy` install is
+		// deliberate and wrapped in try/catch; what this guard forbids is an
+		// UNGUARDED one. Runtime assertions cannot catch a recurrence on a single
+		// engine, so check the source.
 		const raw = require('fs').readFileSync(require.resolve('../lib/setup-sandbox.js'), 'utf8');
 
 		// Drop comment-only lines and block comments. Code is never stripped, so
 		// the guard can only ever err toward a false positive (a loud, easily
 		// fixed failure) and never hide a real assignment.
 		let inBlock = false;
-		const code = raw
-			.split('\n')
-			.filter((line) => {
-				const t = line.trim();
-				if (inBlock) {
-					if (t.includes('*/')) inBlock = false;
-					return false;
-				}
-				if (t.startsWith('/*')) {
-					if (!t.includes('*/')) inBlock = true;
-					return false;
-				}
-				return !t.startsWith('//') && !t.startsWith('*');
-			})
-			.join('\n');
+		const lines = raw.split('\n').filter((line) => {
+			const t = line.trim();
+			if (inBlock) {
+				if (t.includes('*/')) inBlock = false;
+				return false;
+			}
+			if (t.startsWith('/*')) {
+				if (!t.includes('*/')) inBlock = true;
+				return false;
+			}
+			return !t.startsWith('//') && !t.startsWith('*');
+		});
 
 		for (const name of ['Error', 'Promise', 'Proxy']) {
-			const bareAssign = new RegExp(`(^|[^\\w.$])global\\.${name}\\s*=[^=]`, 'm');
-			assert.ok(
-				!bareAssign.test(code),
-				`setup-sandbox.js bare-assigns the sealed global '${name}'. This is a ` +
-					'silent no-op on V8 and a hard TypeError on other engines. Use ' +
-					'localReflectDefineProperty and check its return value instead.'
-			);
+			const bareAssign = new RegExp(`(^|[^\\w.$])global\\.${name}\\s*=[^=]`);
+			for (let i = 0; i < lines.length; i++) {
+				if (!bareAssign.test(lines[i])) continue;
+				let j = i - 1;
+				while (j >= 0 && lines[j].trim() === '') j--;
+				assert.ok(
+					j >= 0 && lines[j].trim() === 'try {',
+					`setup-sandbox.js writes the sealed global '${name}' without a try/catch. ` +
+						'That write throws on JavaScriptCore and aborts sandbox setup. Wrap it, ' +
+						'or install the value some other way.'
+				);
+			}
 		}
 	});
-	it('sealed sandbox intrinsics cannot be swapped out', () => {
+
+	it.cond('sealed sandbox intrinsics cannot be swapped out', NODE_VERSION >= 10, () => {
 		const vm2 = new VM();
 
 		// Same seal, same reasoning, for the two other sealed slots. `Error`

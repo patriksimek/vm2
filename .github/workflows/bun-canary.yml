@@ -15,7 +15,7 @@ jobs:
         continue-on-error: true
         permissions:
             contents: read
-        timeout-minutes: 20
+        timeout-minutes: 30
         steps:
             - name: Checkout
               uses: actions/checkout@v4
@@ -37,12 +37,55 @@ jobs:
             - name: Run with skips disabled
               env:
                   VM2_BUN_NO_SKIP: '1'
-              run: bun ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --require ./test/bun-setup.js --reporter tap | tee canary-tap.txt
+              # Entries flagged `neverUnskip` in test/bun-skips.js stay skipped
+              # even here: they hang for many minutes or kill the process, and
+              # leaving them enabled would stop this job ever reaching its
+              # summary. They are probed one at a time in the next step instead.
+              run: |
+                  set -o pipefail
+                  bun ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --require ./test/bun-setup.js --reporter tap | tee canary-tap.txt
+                  echo "$?" > canary-exit.txt
               continue-on-error: true
+
+            - name: Probe the never-unskip entries individually
+              if: always()
+              continue-on-error: true
+              # Each of these can hang or abort, so each gets its own bounded
+              # run. A timeout here is information, not a failure.
+              run: |
+                  probe() {
+                      echo "--- $1"
+                      if timeout 120s bun ./node_modules/mocha/bin/mocha.js "$2" --reporter tap --grep "$3" > "probe.txt" 2>&1; then
+                          if grep -q '^not ok' probe.txt; then
+                              echo "    still failing (skip remains justified)"
+                          else
+                              echo "    NOW PASSES -- this skip may be stale"
+                          fi
+                      else
+                          echo "    timed out or crashed after 120s (skip remains justified)"
+                      fi
+                  }
+                  probe "GHSA-v27g (kills the process)" test/ghsa/GHSA-v27g-jcqj-v8rw/repro.js ""
+                  probe "GHSA-6785 64MB alloc" test/ghsa/GHSA-6785-pvv7-mvg7/repro.js "bufferAllocLimit: Infinity"
+                  probe "unbounded recursion" test/vm.js "transformer attack"
 
             - name: Summarise
               if: always()
               run: |
                   echo "Bun version: $(bun --version)"
-                  echo "Failures with skips disabled:"
-                  grep '^not ok' canary-tap.txt || echo "  none - every skip in test/bun-skips.js is now stale"
+                  echo ""
+                  # The summary is only meaningful if the run actually finished.
+                  # A crashed run emits no `not ok` lines, which is
+                  # indistinguishable from a clean one by grep alone -- so it
+                  # would otherwise report "everything is stale" precisely when
+                  # it knows least.
+                  if node scripts/check-run-complete.js canary-tap.txt --runner-exit "$(cat canary-exit.txt 2>/dev/null || echo missing)" > /dev/null 2>&1; then
+                      echo "Run completed and is self-consistent. Failures with skips disabled:"
+                      grep '^not ok' canary-tap.txt || echo "  none - every non-hanging entry in test/bun-skips.js is now stale"
+                  else
+                      echo "RUN DID NOT COMPLETE - no staleness conclusion can be drawn from it."
+                      node scripts/check-run-complete.js canary-tap.txt --runner-exit "$(cat canary-exit.txt 2>/dev/null || echo missing)" || true
+                      echo ""
+                      echo "Any 'not ok' lines it did emit before stopping:"
+                      grep '^not ok' canary-tap.txt || echo "  (none emitted before the run stopped)"
+                  fi

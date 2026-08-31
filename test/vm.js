@@ -2884,42 +2884,59 @@ describe('VM', () => {
 		// A bare write therefore either does nothing while looking alive, or kills
 		// the sandbox, depending on where it runs. The `Proxy` install is
 		// deliberate and wrapped in try/catch; what this guard forbids is an
-		// UNGUARDED one. Runtime assertions cannot catch a recurrence on a single
-		// engine, so check the source.
-		const raw = require('fs').readFileSync(require.resolve('../lib/setup-sandbox.js'), 'utf8');
+		// UNGUARDED one.
+		//
+		// This is an AST check, not a text search. An earlier line-by-line regex
+		// version silently missed `global.Proxy\n\t= v`, `globalThis.Proxy = v`
+		// and `global['Proxy'] = v`, while its comment claimed it could not have
+		// false negatives. acorn is already a runtime dependency, so parsing costs
+		// nothing extra and cannot be defeated by formatting.
+		const acorn = require('acorn');
+		const walk = require('acorn-walk');
+		const src = require('fs').readFileSync(require.resolve('../lib/setup-sandbox.js'), 'utf8');
 
-		// Drop comment-only lines and block comments. Code is never stripped, so
-		// the guard can only ever err toward a false positive (a loud, easily
-		// fixed failure) and never hide a real assignment.
-		let inBlock = false;
-		const lines = raw.split('\n').filter((line) => {
-			const t = line.trim();
-			if (inBlock) {
-				if (t.includes('*/')) inBlock = false;
-				return false;
-			}
-			if (t.startsWith('/*')) {
-				if (!t.includes('*/')) inBlock = true;
-				return false;
-			}
-			return !t.startsWith('//') && !t.startsWith('*');
+		// The file is a script body that is wrapped in a function at runtime, so
+		// it legitimately contains a top-level `return`.
+		const ast = acorn.parse(src, {
+			ecmaVersion: 'latest',
+			allowReturnOutsideFunction: true,
+			locations: true,
 		});
 
-		for (const name of ['Error', 'Promise', 'Proxy']) {
-			const bareAssign = new RegExp(`(^|[^\\w.$])global\\.${name}\\s*=[^=]`);
-			for (let i = 0; i < lines.length; i++) {
-				if (!bareAssign.test(lines[i])) continue;
-				// Walk back to the previous non-blank code line; it must open a try.
-				let j = i - 1;
-				while (j >= 0 && lines[j].trim() === '') j--;
-				assert.ok(
-					j >= 0 && lines[j].trim() === 'try {',
-					`setup-sandbox.js writes the sealed global '${name}' without a try/catch. ` +
-						'That write throws on JavaScriptCore and aborts sandbox setup. Wrap it, ' +
-						'or install the value some other way.'
+		const SEALED = ['Error', 'Promise', 'Proxy'];
+		const GLOBAL_NAMES = ['global', 'globalThis'];
+		const unguarded = [];
+
+		walk.ancestor(ast, {
+			AssignmentExpression(node, _state, ancestors) {
+				const left = node.left;
+				if (!left || left.type !== 'MemberExpression') return;
+				if (left.object.type !== 'Identifier') return;
+				if (GLOBAL_NAMES.indexOf(left.object.name) === -1) return;
+
+				// Covers both `global.Proxy` and `global['Proxy']`.
+				let prop = null;
+				if (!left.computed && left.property.type === 'Identifier') prop = left.property.name;
+				else if (left.computed && left.property.type === 'Literal') prop = left.property.value;
+				if (SEALED.indexOf(prop) === -1) return;
+
+				// Guarded means: lexically inside the `try` BLOCK of a try statement.
+				// Being in the catch or finally clause would not protect the write.
+				const guarded = ancestors.some(
+					(a) => a.type === 'TryStatement' && node.start >= a.block.start && node.end <= a.block.end
 				);
-			}
-		}
+				if (!guarded) unguarded.push(`${left.object.name}.${prop} at line ${node.loc.start.line}`);
+			},
+		});
+
+		assert.deepStrictEqual(
+			unguarded,
+			[],
+			'setup-sandbox.js writes a sealed global slot outside a try block: ' +
+				unguarded.join(', ') +
+				'. That write throws on JavaScriptCore and aborts sandbox setup. Wrap it, ' +
+				'or install the value some other way.'
+		);
 	});
 
 	it.cond('sealed sandbox intrinsics cannot be swapped out', atLeastNode(10), () => {

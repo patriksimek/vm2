@@ -90,15 +90,32 @@ jobs:
               # --require ./test/bun-setup.js applies test/bun-skips.js. It must
               # come from the flag, not from inside a spec file: test/ghsa loads
               # first, so nothing a spec file installs can reach it.
-              run: bun ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --require ./test/bun-setup.js --reporter tap | tee bun-tap.txt
+              #
+              # `set -o pipefail` matters: without it the step's status is tee's,
+              # which is always 0, so a runner that printed a green epilogue and
+              # then died during teardown would look clean. The status is
+              # captured and handed to the checker rather than failing here,
+              # because this step is deliberately non-blocking.
+              run: |
+                  set -o pipefail
+                  bun ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --require ./test/bun-setup.js --reporter tap | tee bun-tap.txt
+                  echo "$?" > bun-runner-exit.txt
               continue-on-error: true
 
             - name: Verify the run actually finished
               # The important step. Without it a mid-run crash exits 0 and the
-              # job reports a success it never verified.
-              run: node scripts/check-run-complete.js bun-tap.txt --min-tests 750
+              # job reports a success it never verified. The checker also
+              # cross-checks the TAP plan, the emitted test points and the
+              # summary counts against each other, so a partial or internally
+              # impossible run cannot pass either.
+              run: node scripts/check-run-complete.js bun-tap.txt --min-tests 840 --runner-exit "$(cat bun-runner-exit.txt 2>/dev/null || echo missing)"
 
             - name: Report skip count
               if: always()
               run: |
-                  echo "Bun skips (phase-2 backlog): $(grep -c '# SKIP' bun-tap.txt || true)"
+                  # Only entries actually applied from test/bun-skips.js are the
+                  # phase-2 backlog. A raw '# SKIP' count also sweeps in every
+                  # ordinary version/capability pending test, which has nothing
+                  # to do with Bun.
+                  echo "Bun skip-registry entries applied: $(grep -c '^# vm2-bun-skip:' bun-tap.txt || true)"
+                  echo "All pending (registry + ordinary version/capability skips): $(grep -c '# SKIP' bun-tap.txt || true)"

@@ -21,6 +21,9 @@ const SKIPS = [
 		// so the whole file is quarantined rather than risk losing the run.
 		// Phase 2 should narrow this once the crash is understood.
 		match: 'GHSA-v27g-jcqj-v8rw',
+		// Honoured even under VM2_BUN_NO_SKIP: this one terminates the Bun process,
+		// so leaving it enabled would stop the canary reaching its summary.
+		neverUnskip: true,
 		reason:
 			'CallSite objects handed to a sandbox Error.prepareStackTrace have no ' +
 			'methods on JSC (getFileName is undefined), so the host-frame redaction ' +
@@ -149,6 +152,9 @@ const SKIPS = [
 	},
 	{
 		match: 'default is permissive (Infinity): large allocations are allowed',
+		// Honoured even under VM2_BUN_NO_SKIP: this one runs for >400s,
+		// so leaving it enabled would stop the canary reaching its summary.
+		neverUnskip: true,
 		reason:
 			'Buffer.allocUnsafe(64MB) across the bridge takes >400s on Bun versus ' +
 			'1.7s on Node - a >240x divergence that reads as a hang.',
@@ -163,6 +169,9 @@ const SKIPS = [
 		// sign of returning -- far past the sibling test's already-bad >400s --
 		// so it is quarantined here too rather than risk the run never finishing.
 		match: 'GHSA-6785-pvv7-mvg7 (Buffer.alloc DoS) bufferAllocLimit: Infinity disables the cap',
+		// Honoured even under VM2_BUN_NO_SKIP: this one hung for >17 minutes,
+		// so leaving it enabled would stop the canary reaching its summary.
+		neverUnskip: true,
 		reason:
 			'Same Buffer.allocUnsafe(64MB)-across-the-bridge divergence as ' +
 			'"default is permissive (Infinity)" above, from a second call site. ' +
@@ -172,6 +181,9 @@ const SKIPS = [
 	},
 	{
 		match: 'Node internal prepareStackTrace attack',
+		// Honoured even under VM2_BUN_NO_SKIP: this one runs unbounded until the mocha timeout,
+		// so leaving it enabled would stop the canary reaching its summary.
+		neverUnskip: true,
 		reason:
 			'The payload recurses until a stack overflow terminates it. JSC does not ' +
 			'overflow promptly, so the VM runs unbounded and the test hits mocha\'s ' +
@@ -183,6 +195,9 @@ const SKIPS = [
 	},
 	{
 		match: 'transformer attack',
+		// Honoured even under VM2_BUN_NO_SKIP: this one runs unbounded until the mocha timeout,
+		// so leaving it enabled would stop the canary reaching its summary.
+		neverUnskip: true,
 		reason:
 			'Same unbounded-recursion shape as the prepareStackTrace attack above: ' +
 			'JSC does not stack-overflow promptly, so the test times out.',
@@ -193,13 +208,21 @@ const SKIPS = [
 
 const NO_SKIP = process.env.VM2_BUN_NO_SKIP === '1';
 
+// `neverUnskip` entries stay skipped even when the registry is disabled. They
+// are the ones that hang for many minutes or kill the process, so honouring
+// VM2_BUN_NO_SKIP for them would mean the canary never terminates and never
+// prints a summary -- which is worse than not running it, because a truncated
+// run with no `not ok` lines looks exactly like a clean one. They have to be
+// probed individually instead; see .github/workflows/bun-canary.yml.
+
 // Returns the reason this test is skipped under Bun, or null to run it.
 // `fullTitle` is the suite path plus the test name, so an entry may match
 // either a describe block (quarantining a whole file) or a single test.
 function skipReason(fullTitle) {
-	if (NO_SKIP) return null;
 	for (let i = 0; i < SKIPS.length; i++) {
-		if (fullTitle.indexOf(SKIPS[i].match) !== -1) return SKIPS[i].reason;
+		if (fullTitle.indexOf(SKIPS[i].match) === -1) continue;
+		if (NO_SKIP && !SKIPS[i].neverUnskip) return null;
+		return SKIPS[i].reason;
 	}
 	return null;
 }

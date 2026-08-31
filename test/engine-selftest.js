@@ -7,8 +7,29 @@ const {IS_BUN, ENGINE, NODE_MAJOR, atLeastNode, nodeOlderThan} = require('./engi
 
 describe('test/engine.js', function () {
 	it('detects the engine without consulting process.versions.node', function () {
-		assert.strictEqual(IS_BUN, typeof Bun !== 'undefined');
+		assert.strictEqual(IS_BUN, typeof process.versions.bun === 'string');
 		assert.strictEqual(ENGINE, IS_BUN ? 'jsc' : 'v8');
+	});
+
+	// Node only: on Bun `global.Bun` is a readonly property, so the spoof cannot
+	// even be attempted there. Node is where a planted global is possible, and
+	// therefore where the detection has to be proof against it.
+	(IS_BUN ? it.skip : it)('cannot be spoofed by a planted global', function () {
+		// A global check would misclassify the runtime here. process.versions is
+		// populated by the runtime itself.
+		const had = Object.prototype.hasOwnProperty.call(global, 'Bun');
+		const prev = global.Bun;
+		global.Bun = {};
+		try {
+			delete require.cache[require.resolve('./engine')];
+			const reloaded = require('./engine');
+			assert.strictEqual(reloaded.IS_BUN, IS_BUN, 'planting global.Bun changed the detected engine');
+			assert.strictEqual(reloaded.ENGINE, ENGINE);
+		} finally {
+			if (had) global.Bun = prev;
+			else delete global.Bun;
+			delete require.cache[require.resolve('./engine')];
+		}
 	});
 
 	it('NODE_MAJOR is null on Bun and a number on Node', function () {

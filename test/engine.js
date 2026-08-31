@@ -13,10 +13,18 @@
 // Reach for ENGINE only where the divergence is genuinely about the engine
 // rather than about a capability that can be probed directly.
 
-const IS_BUN = typeof Bun !== 'undefined';
+// Detected from `process.versions`, which the runtime itself populates, rather
+// than from a global. A global check (`typeof Bun !== 'undefined'`) is trivially
+// spoofable -- any code that has run earlier, in this process, can set
+// `global.Bun = {}` and make the whole suite believe it is on JavaScriptCore,
+// silently changing which assertions and skips apply. `process.versions.bun` is
+// absent on Node and a version string on Bun.
+const IS_BUN = typeof process !== 'undefined' &&
+	!!process.versions &&
+	typeof process.versions.bun === 'string';
 
 // 'jsc' (JavaScriptCore, via Bun) or 'v8' (Node). Derived from the runtime's
-// own identity, never from a version string.
+// own identity, never from a version string it shares with another runtime.
 const ENGINE = IS_BUN ? 'jsc' : 'v8';
 
 // The real Node major version, or null when not running on Node at all.

@@ -87,17 +87,32 @@ npm install vm2
 | Runtime | Status |
 |---------|--------|
 | Node.js | Supported. The sandbox is a security boundary. |
-| Bun | **Experimental.** Functional parity only — **not** a security boundary. |
+| Bun | **Experimental.** Partial functional compatibility — **not** a security boundary. |
 
-vm2's threat model, the attack catalogue in [`docs/ATTACKS.md`](docs/ATTACKS.md),
-and every regression test in `test/ghsa/` are derived from V8 internals.
-JavaScriptCore, which Bun uses, has its own equivalents, and none have been
-audited against vm2's bridge. The suite passing under Bun demonstrates
-functional compatibility; it does **not** demonstrate that the sandbox holds
-there.
+Two separate limitations apply to Bun, and neither implies the other.
 
-Known divergences are enumerated in `test/bun-skips.js`. Do not use vm2 on Bun
-to isolate untrusted code.
+**It is not a security boundary.** vm2's threat model, the attack catalogue in
+[`docs/ATTACKS.md`](docs/ATTACKS.md), and every regression test in `test/ghsa/`
+are derived from V8 internals. JavaScriptCore, which Bun uses, has its own
+equivalents, and none have been audited against vm2's bridge. The suite passing
+under Bun demonstrates compatibility, not that the sandbox holds there. **Do not
+use vm2 on Bun to isolate untrusted code.**
+
+**Compatibility is partial, not parity.** A green Bun run covers only the tests
+that actually execute there. `test/bun-skips.js` lists what is excluded and why,
+and the known behavioural gaps include:
+
+- `Buffer.from(arrayLike)` returns a zero-length buffer
+- `VMScript` `filename` / `lineOffset` / `columnOffset` metadata is not
+  observable, because JSC's CallSite objects carry no methods
+- `Object.freeze` on a frozen host object with a non-configurable accessor
+  throws a proxy-invariant `TypeError` where V8 does not
+- some `Buffer` operations across the sandbox boundary are drastically slower —
+  a 64 MB `allocUnsafe` takes over 400 seconds against 1.7 on Node, slow enough
+  to read as a hang
+
+Treat Bun support as best-effort compatibility for trusted code, and check the
+skip list before relying on any particular behaviour.
 
 ## Quick Examples
 

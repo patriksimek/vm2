@@ -71,6 +71,19 @@ if (IS_BUN) {
 		};
 	});
 
+	// Report each skip this registry actually applies, as its own TAP comment.
+	// CI counts these rather than every `# SKIP` record, because that also
+	// sweeps in ordinary version/capability pending tests which have nothing to
+	// do with Bun and would roughly double the apparent backlog.
+	//
+	// Emitted at registration rather than from a `process.on('exit')` handler:
+	// an exit listener is observable from inside the suite, and
+	// test/nodevm.js's "process events" case asserts the host has exactly one.
+	// A `#`-prefixed line is a TAP comment, so this is inert to consumers.
+	function noteSkip(title) {
+		process.stdout.write('# vm2-bun-skip: ' + title + '\n');
+	}
+
 	intercept('it', function (original) {
 		return function (name, fn) {
 			// Register the skip by calling the original with NO callback, which
@@ -78,6 +91,7 @@ if (IS_BUN) {
 			// mocha's it.skip delegates to context.it, which is this wrapper,
 			// and recurses until the stack overflows.
 			if (typeof name === 'string' && skipReason(fullTitle(name))) {
+				noteSkip(fullTitle(name));
 				return original(name);
 			}
 			return original.apply(this, arguments);

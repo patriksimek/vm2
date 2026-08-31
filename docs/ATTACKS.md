@@ -4435,6 +4435,58 @@ Close the wholesale-forwarding **class**, not just `getCallSites`. `defaultBuilt
 
 ---
 
+## Runtime-Dependent Attack Surface: Sandbox `Proxy` Availability
+
+Everything else in this document describes V8 as shipped by a current Node.js.
+This section records where the sandbox's own shape differs by runtime, because a
+reader reasoning about the proxy-handler surface needs to know the answer is not
+the same everywhere.
+
+### What differs
+
+`lib/setup-sandbox.js` installs `Proxy` as `undefined` in the
+`Object.defineProperties(global, ...)` bootstrap block, then attempts to install
+a wrapped `proxiedProxy` over it. Whether that second write lands depends on how
+the engine treats a sealed slot on a `vm` context's global proxy:
+
+| Runtime | Sandbox `typeof Proxy` | Effect |
+|---|---|---|
+| Node >= 10 | `undefined` | Slot genuinely sealed, so the install is a silent no-op. Sandbox code cannot construct proxies at all. |
+| Node 8 | `function` | Slot stays writable, so the install lands and the sandbox gets `proxiedProxy`, whose handler arguments are sanitised by `wrapProxyHandler` / `makeSafeArgs`. |
+| Bun (JSC) | `undefined` | Slot sealed and the write *throws*; it is wrapped in `try`/`catch` so setup survives. Same end state as modern Node. |
+
+### Why it matters for the threat model
+
+The proxy-handler attack classes in this document -- notably
+[Category 9](#attack-category-9-proxy-handler-exposure-via-utilinspect) and the
+trap-reentrancy patterns -- assume sandbox code can construct a `Proxy` and
+supply a hostile handler. On Node >= 10 and on Bun that primitive is absent from
+the sandbox: there is no `Proxy` to construct. On Node 8 it exists and is
+defended by wrapping rather than by removal.
+
+The modern configuration is therefore the *more* restrictive one. A defence
+described elsewhere as "the handler arguments are sanitised" is, on Node >= 10,
+backed by the stronger fact that the constructor is unreachable. Nothing here
+weakens a defence on any runtime; it records that one runtime relies on the
+wrapper while the others do not need it.
+
+### Maintenance note
+
+Do not "clean up" either half of this mechanism without testing the full
+supported Node range. Both halves have engine-dependent behaviour a current Node
+cannot reveal:
+
+- Spelling out `writable: false, configurable: false` on the sealed slots is a
+  no-op on modern V8 and a behaviour change on Node 8, where only the explicit
+  form actually seals the slot. Doing so removed `Proxy` from Node 8 sandboxes
+  once already.
+- `Reflect.defineProperty` cannot substitute for the plain assignment: on Node 8
+  it returns `true` and stores nothing.
+
+`test/vm.js` carries an AST-based guard that fails if any write to the sealed
+`Error` / `Promise` / `Proxy` slots is left outside a `try` block, since an
+unguarded write aborts sandbox setup on JavaScriptCore.
+
 ## Considered Attack Surfaces
 
 These attack surfaces were analyzed and found to be safe or low-risk. They are documented here so future reviewers do not re-investigate them.

@@ -1,8 +1,19 @@
 # Bun support — phase 1 design
 
 Date: 2026-08-30
-Status: approved, not yet implemented
-Scope: test suite + CI only. No `lib/` changes, no security claim for Bun.
+Status: implemented (PR #574). This document is the design as approved; the
+notes below record where the implementation departed from it.
+Scope as approved: test suite + CI only, no `lib/` changes, no security claim
+for Bun.
+
+**Scope amendment — `lib/` did change.** The no-`lib/`-changes rule held for the
+whole of phase 1's own work, but a regression traced to an earlier commit on
+`main` had to be fixed here: `lib/setup-sandbox.js` now wraps its sandbox
+`Proxy` install in `try`/`catch`, because JavaScriptCore correctly throws on the
+sealed slot and would otherwise abort sandbox setup before the first `run()`.
+That is a change to the runtime boundary, small but real, and it is documented
+in `docs/ATTACKS.md` under "Runtime-Dependent Attack Surface: Sandbox `Proxy`
+Availability". No security claim for Bun is made or implied by it.
 
 ## 1. Why
 
@@ -54,7 +65,7 @@ never shipped.
 ### Non-goals
 
 - Fixing the 13 behavioural divergences (§3). They are phase-2 input.
-- Any change to `lib/`.
+- Any change to `lib/`. *(Amended during implementation — see the scope note at the top of this document.)*
 - Any security claim for Bun. See §6.
 
 ## 3. Measured starting state
@@ -260,10 +271,20 @@ carries the guarantee.
 
 ### 4.3 `test/bun-skips.js` — one centralized skip list
 
-`{ test, reason, phase }` per entry, wired through the existing `it.cond`. No new
-machinery. Honors `VM2_BUN_NO_SKIP=1` to run everything anyway. The skip count is
-printed at the end of a Bun run; the target is zero, and the list *is* the
-phase-2 backlog.
+`{ test, reason, phase }` per entry. Honors `VM2_BUN_NO_SKIP=1` to run
+everything anyway. The count of entries actually applied is printed at the end of
+a Bun run; the target is zero, and the list *is* the phase-2 backlog.
+
+*As implemented, this needed more machinery than the design assumed.* Wiring
+through the existing `it.cond` turned out to be impossible: `test/ghsa` loads
+first and `test/vm.js` last, so nothing installed from a spec file can reach the
+suites where most skips live, and many targeted tests use a plain `it()` anyway.
+It is instead a `--require`d `test/bun-setup.js` that intercepts `global.describe`
+and `global.it`. Two further amendments: entries flagged `neverUnskip` stay
+skipped even under `VM2_BUN_NO_SKIP`, because a handful hang for minutes or kill
+the process and would stop the canary ever reaching its summary; and the run
+reports the registry-applied count rather than a raw `# SKIP` count, which would
+also sweep in ordinary version/capability pending tests.
 
 Rejected alternative: an enforced xfail registry where a passing xfail fails the
 build. Once the Bun job is `continue-on-error` (§5), a stale entry cannot break
@@ -297,8 +318,10 @@ leniency setting.
   because every other runtime in this CI is pinned, and because a skip's
   documented reason cites specific engine behaviour that must stay reproducible
   from the commit.
-- Node matrix: add `fail-fast: false`. Today one Node version failing cancels the
-  rest and hides information. Small, adjacent, worth doing while in here.
+- Node matrix: add `fail-fast: false`. Before this change one Node version
+  failing cancelled the rest and hid information. (Implemented; the surrounding
+  paragraph describes the matrix as it was *before* that addition, which is why
+  it reads as fail-fast.) Small, adjacent, worth doing while in here.
 - Weekly canary on `bun-version: latest` with `VM2_BUN_NO_SKIP=1`, informational
   only. Reports which skips have gone stale because Bun fixed something.
 - Bumping the pin is a deliberate PR that shows exactly which skips changed —

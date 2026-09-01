@@ -2,6 +2,45 @@
 
 vm2 is a sandbox that can run untrusted code with whitelisted Node's built-in modules.
 
+## Installation
+
+```sh
+npm install vm2
+```
+
+## Quick Examples
+
+```js
+import { VM } from 'vm2';
+
+const vm = new VM();
+vm.run(`process.exit()`); // TypeError: process.exit is not a function
+```
+
+```js
+import { NodeVM } from 'vm2';
+
+const vm = new NodeVM({
+	require: {
+		external: true,
+		root: './',
+	},
+});
+
+vm.run(
+	`
+    var request = require('request');
+    request('http://www.google.com', function (error, response, body) {
+        console.error(error);
+        if (!error && response.statusCode == 200) {
+            console.log(body); // Show the HTML for the Google homepage.
+        }
+    });
+`,
+	'vm.js',
+);
+```
+
 ## Important Security Disclaimer
 
 **Before using vm2, you should understand how it works and its limitations.**
@@ -39,49 +78,6 @@ vm2 can be suitable when:
 
 **If you're running code from completely untrusted sources (e.g., arbitrary user submissions), we strongly recommend using a solution with stronger isolation guarantees.**
 
-## Features
-
--   Runs untrusted code securely in a single process with your code side by side
--   Full control over the sandbox's console output
--   The sandbox has limited access to the process's methods
--   It is possible to require modules (built-in and external) from the sandbox
--   You can limit access to certain (or all) built-in modules
--   You can securely call methods and exchange data and callbacks between sandboxes
--   Actively maintained with patches for known escape methods (see [Security Disclaimer](#important-security-disclaimer))
--   Transpiler support
-
-## How does it work
-
--   It uses the internal VM module to create a secure context.
--   It uses [Proxies](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Proxy) to prevent escaping from the sandbox.
--   It overrides the built-in require to control access to modules.
-
-For an in-depth look at vm2’s internals, see the [CONTRIBUTING.md](./CONTRIBUTING.md) file.
-
-## What is the difference between Node's vm and vm2?
-
-Try it yourself:
-
-```js
-import { runInNewContext } from "node:vm";
-
-runInNewContext('this.constructor.constructor("return process")().exit()');
-console.log('Never gets executed.');
-```
-
-```js
-import { VM } from 'vm2';
-
-new VM().run('this.constructor.constructor("return process")().exit()');
-// Throws ReferenceError: process is not defined
-```
-
-## Installation
-
-```sh
-npm install vm2
-```
-
 ## Runtimes
 
 | Runtime | Status |
@@ -114,37 +110,41 @@ and the known behavioural gaps include:
 Treat Bun support as best-effort compatibility for trusted code, and check the
 skip list before relying on any particular behaviour.
 
-## Quick Examples
+## Features
+
+-   Runs untrusted code securely in a single process with your code side by side
+-   Full control over the sandbox's console output
+-   The sandbox has limited access to the process's methods
+-   It is possible to require modules (built-in and external) from the sandbox
+-   You can limit access to certain (or all) built-in modules
+-   You can securely call methods and exchange data and callbacks between sandboxes
+-   Actively maintained with patches for known escape methods (see [Security Disclaimer](#important-security-disclaimer))
+-   Transpiler support
+
+## How does it work
+
+-   It uses the internal VM module to create a secure context.
+-   It uses [Proxies](https://developer.mozilla.org/docs/Web/JavaScript/Reference/Global_Objects/Proxy) to prevent escaping from the sandbox.
+-   It overrides the built-in require to control access to modules.
+
+For an in-depth look at vm2’s internals, see [docs/ATTACKS.md](./docs/ATTACKS.md).
+
+## What is the difference between Node's vm and vm2?
+
+Try it yourself:
+
+```js
+import { runInNewContext } from "node:vm";
+
+runInNewContext('this.constructor.constructor("return process")().exit()');
+console.log('Never gets executed.');
+```
 
 ```js
 import { VM } from 'vm2';
 
-const vm = new VM();
-vm.run(`process.exit()`); // TypeError: process.exit is not a function
-```
-
-```js
-import { NodeVM } from 'vm2';
-
-const vm = new NodeVM({
-	require: {
-		external: true,
-		root: './',
-	},
-});
-
-vm.run(
-	`
-    var request = require('request');
-    request('http://www.google.com', function (error, response, body) {
-        console.error(error);
-        if (!error && response.statusCode == 200) {
-            console.log(body); // Show the HTML for the Google homepage.
-        }
-    });
-`,
-	'vm.js',
-);
+new VM().run('this.constructor.constructor("return process")().exit()');
+// Throws ReferenceError: process is not defined
 ```
 
 ## Documentation

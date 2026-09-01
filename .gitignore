@@ -4,3 +4,9 @@
 /test.js
 .env
 .claude/advisory-ledger.md
+
+# Agent scratch directories. `.claude/worktrees/` holds isolated worktrees the
+# harness creates; without this they show up as untracked and eslint reads into
+# them, reporting phantom errors from a second copy of the tree.
+.claude/worktrees/
+.superpowers/

@@ -15,12 +15,29 @@
 
 const SKIPS = [
 	{
+		// Deliberately broad: the whole PoC set shares one root cause.
+		expectedMatches: 6,
+		match: 'GHSA-v37h-5mfm-c47c — leak harvest history (PoCs #1–6)',
+		reason:
+			"The harvest's setup cannot run on JSC: Buffer.prototype.slice rejects " +
+			'the bridged receiver with "Can only call Buffer.slice on instances of ' +
+			'Buffer", so the PoCs fail before reaching the behaviour under test. ' +
+			'Same end state as Node >= 24, which blocks the harvest at ' +
+			'Buffer.prototype.inspect -- verified by forcing the gate on, where 5 of ' +
+			'6 fail identically on Bun and Node 26. Not a leak: nothing is extracted, ' +
+			'the PoC simply cannot be staged.',
+		phase: 2,
+		security: false,
+	},
+	{
 		// DELIBERATELY BROAD: this matches all 7 tests in the file, including
 		// ones that might otherwise pass. Any test here can construct a sandbox
 		// prepareStackTrace, and doing so terminates the Bun process outright --
 		// so the whole file is quarantined rather than risk losing the run.
 		// Phase 2 should narrow this once the crash is understood.
 		match: 'GHSA-v27g-jcqj-v8rw',
+		// Deliberately broad; the guard in test/vm.js pins this number.
+		expectedMatches: 7,
 		// Honoured even under VM2_BUN_NO_SKIP: this one terminates the Bun process,
 		// so leaving it enabled would stop the canary reaching its summary.
 		neverUnskip: true,

@@ -83,7 +83,7 @@ describe('test/bun-skips.js', function () {
 	// than grepped from source: grepping mangles titles with escaped quotes or
 	// that span multiple `it(` lines, and mocha's TAP reporter strips leading
 	// `#` from titles, so neither is a reliable source here.
-	it('every match identifies at most one real test title (GHSA-v27g-jcqj-v8rw excepted)', function () {
+	it('every match hits exactly the number of real test titles it declares', function () {
 		// Bun-side reliability of this tooling is untested; the SKIPS content
 		// this checks is engine-independent, so verifying it under Node suffices.
 		if (IS_BUN) return this.skip();
@@ -107,13 +107,18 @@ describe('test/bun-skips.js', function () {
 		assert.ok(titles.length > 0, 'dry-run produced no titles');
 
 		for (const s of SKIPS) {
-			if (s.match === 'GHSA-v27g-jcqj-v8rw') continue;
+			// An entry that deliberately covers a group declares how many tests it
+			// owns. Pinning the number is stronger than exempting the entry: if the
+			// group grows or shrinks, the guard says so instead of silently
+			// absorbing the change.
+			const expected = s.expectedMatches === undefined ? 1 : s.expectedMatches;
 			const hits = titles.filter(function (title) {
 				return title.indexOf(s.match) !== -1;
 			});
 			assert.ok(
-				hits.length <= 1,
-				'match ' + JSON.stringify(s.match) + ' hits ' + hits.length + ' real titles: ' + JSON.stringify(hits),
+				hits.length === expected,
+				'match ' + JSON.stringify(s.match) + ' hits ' + hits.length +
+					' real titles but declares ' + expected + ': ' + JSON.stringify(hits),
 			);
 		}
 	});

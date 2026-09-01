@@ -102,13 +102,27 @@ jobs:
                   echo "$?" > bun-runner-exit.txt
               continue-on-error: true
 
+            - name: Determine how many tests should register
+              # Derived from Node rather than hard-coded, so it cannot go stale.
+              # Skipped tests still register, so the two runtimes must agree on
+              # the total; only which of them execute differs.
+              run: |
+                  node ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --dry-run --reporter json \
+                    | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{process.stdout.write(String(JSON.parse(d).tests.length))})' \
+                    > expected-tests.txt
+                  echo "Node registers $(cat expected-tests.txt) tests"
+
             - name: Verify the run actually finished
               # The important step. Without it a mid-run crash exits 0 and the
               # job reports a success it never verified. The checker also
               # cross-checks the TAP plan, the emitted test points and the
               # summary counts against each other, so a partial or internally
               # impossible run cannot pass either.
-              run: node scripts/check-run-complete.js bun-tap.txt --min-tests 840 --runner-exit "$(cat bun-runner-exit.txt 2>/dev/null || echo missing)"
+              #
+              # --expect-tests is an equality check, not a floor. A floor lets a
+              # whole test file vanish from discovery while the gate stays
+              # green; equality catches that, in both directions.
+              run: node scripts/check-run-complete.js bun-tap.txt --expect-tests "$(cat expected-tests.txt)" --runner-exit "$(cat bun-runner-exit.txt 2>/dev/null || echo missing)"
 
             - name: Report skip count
               if: always()

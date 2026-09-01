@@ -90,6 +90,22 @@ describe('scripts/check-run-complete', function () {
 		assert.strictEqual(checkTap(tap({pass: 1, skip: 9}), {minTests: 11}).ok, false);
 	});
 
+	it('rejects a plan that does not equal --expect-tests, in both directions', function () {
+		// A floor lets a whole test file vanish while the gate stays green; the
+		// exact expectation is what catches that.
+		const short = checkTap(tap({pass: 2}), {expectTests: 27});
+		assert.strictEqual(short.ok, false);
+		assert.ok(short.problems.join(' ').includes('did not register at all'));
+
+		const over = checkTap(tap({pass: 2}), {expectTests: 1});
+		assert.strictEqual(over.ok, false);
+		assert.ok(over.problems.join(' ').includes('more tests ran'));
+	});
+
+	it('accepts a plan that equals --expect-tests', function () {
+		assert.strictEqual(checkTap(tap({pass: 2, skip: 3}), {expectTests: 5}).ok, true);
+	});
+
 	it('rejects a non-zero runner exit even when the TAP output looks clean', function () {
 		const r = checkTap(tap({pass: 2}), {minTests: 2, runnerExit: 7});
 		assert.strictEqual(r.ok, false);

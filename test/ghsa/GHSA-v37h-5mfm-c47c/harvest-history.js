@@ -38,11 +38,20 @@
 const assert = require('assert');
 const { VM } = require('../../../lib/main.js');
 
+const {IS_BUN} = require('../../engine.js');
+
 const NODE_VERSION = parseInt(process.versions.node.split('.')[0], 10);
 // PoC bodies use optional chaining (`?.`) inside vm.run scripts, which the
 // V8 parser only accepts on Node 14+. Node 24+ tightens argument validation
 // on Buffer.prototype.inspect so the harvest never fires regardless of fix.
-const HARVEST_REACHABLE = NODE_VERSION >= 14 && NODE_VERSION <= 22;
+//
+// This bound is about V8 versions and says nothing about other engines. Bun
+// reports `process.versions.node` as 26, so applying it there would skip these
+// six tests while claiming "Node 26 lacks optional chaining" -- which is both
+// false and invisible, because the skip would happen here rather than in
+// test/bun-skips.js. Register on Bun and let the skip registry own the
+// decision, so it appears in the phase-2 backlog and the canary can probe it.
+const HARVEST_REACHABLE = IS_BUN || (NODE_VERSION >= 14 && NODE_VERSION <= 22);
 
 function condit(name, fn) {
 	if (HARVEST_REACHABLE) {

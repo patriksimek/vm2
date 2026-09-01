@@ -24,6 +24,7 @@
 function checkTap(text, opts) {
 	const options = opts || {};
 	const minTests = typeof options.minTests === 'number' ? options.minTests : null;
+	const expectTests = typeof options.expectTests === 'number' ? options.expectTests : null;
 	const runnerExit = typeof options.runnerExit === 'number' ? options.runnerExit : null;
 	const problems = [];
 	const lines = String(text).split('\n');
@@ -108,6 +109,20 @@ function checkTap(text, opts) {
 		problems.push('only ' + plan + ' tests registered, expected at least ' + minTests);
 	}
 
+	// An exact expectation, normally derived from what the reference runtime
+	// registers. A floor alone lets whole files vanish from discovery while the
+	// gate stays green -- with a floor of 840 against a real plan of 865, a file
+	// of 25 tests could disappear unnoticed. Equality catches that, and catches
+	// it in both directions.
+	if (expectTests !== null && plan !== expectTests) {
+		problems.push(
+			plan + ' tests registered but ' + expectTests + ' were expected' +
+				(plan < expectTests
+					? ' — ' + (expectTests - plan) + ' did not register at all (a file may have failed to load)'
+					: ' — more tests ran than the reference runtime registers')
+		);
+	}
+
 	// 5. No failures.
 	if (failing > 0) {
 		problems.push(failing + ' failing');
@@ -139,13 +154,27 @@ if (require.main === module) {
 	const minIdx = args.indexOf('--min-tests');
 	const minTests = minIdx === -1 ? null : parseInt(args[minIdx + 1], 10);
 
+	const expectIdx = args.indexOf('--expect-tests');
+	const rawExpect = expectIdx === -1 ? null : String(args[expectIdx + 1]).trim();
+	const expectTests = rawExpect === null || rawExpect === '' ? null : parseInt(rawExpect, 10);
+
 	const exitIdx = args.indexOf('--runner-exit');
 	const rawExit = exitIdx === -1 ? null : String(args[exitIdx + 1]).trim();
 	const runnerExit = rawExit === null || rawExit === '' ? null : parseInt(rawExit, 10);
 
 	if (!file) {
-		console.error('usage: check-run-complete.js <tap-file> [--min-tests <n>] [--runner-exit <status>]');
+		console.error(
+			'usage: check-run-complete.js <tap-file> [--min-tests <n>] ' +
+				'[--expect-tests <n>] [--runner-exit <status>]'
+		);
 		process.exit(2);
+	}
+
+	if (expectIdx !== -1 && (expectTests === null || Number.isNaN(expectTests))) {
+		console.error('RUN NOT TRUSTWORTHY:');
+		console.error('  - --expect-tests was given but is not a number: ' + JSON.stringify(rawExpect));
+		console.error('    The expected total was not computed, so a vanished test file would go unnoticed.');
+		process.exit(1);
 	}
 
 	if (exitIdx !== -1 && (runnerExit === null || Number.isNaN(runnerExit))) {
@@ -164,7 +193,7 @@ if (require.main === module) {
 		process.exit(1);
 	}
 
-	const result = checkTap(text, {minTests, runnerExit});
+	const result = checkTap(text, {minTests, expectTests, runnerExit});
 	if (result.ok) {
 		console.log('run complete: ok');
 		process.exit(0);

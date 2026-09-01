@@ -50,24 +50,45 @@ jobs:
             - name: Probe the never-unskip entries individually
               if: always()
               continue-on-error: true
-              # Each of these can hang or abort, so each gets its own bounded
-              # run. A timeout here is information, not a failure.
+              # Every `neverUnskip` entry in test/bun-skips.js gets its own
+              # bounded run. Each probe is judged by the completeness checker,
+              # not by grepping for `not ok`: a probe that dies with no epilogue
+              # emits no `not ok` line either, and reporting that as "NOW
+              # PASSES" would be the same dishonest green this PR exists to
+              # stop.
               run: |
                   probe() {
-                      echo "--- $1"
-                      if timeout 120s bun ./node_modules/mocha/bin/mocha.js "$2" --reporter tap --grep "$3" > "probe.txt" 2>&1; then
-                          if grep -q '^not ok' probe.txt; then
-                              echo "    still failing (skip remains justified)"
-                          else
-                              echo "    NOW PASSES -- this skip may be stale"
-                          fi
+                      label="$1"; file="$2"; pattern="$3"
+                      echo "--- $label"
+                      set +e
+                      set -o pipefail
+                      if [ -n "$pattern" ]; then
+                          timeout 180s bun ./node_modules/mocha/bin/mocha.js "$file" --reporter tap --grep "$pattern" > probe.txt 2>&1
                       else
-                          echo "    timed out or crashed after 120s (skip remains justified)"
+                          timeout 180s bun ./node_modules/mocha/bin/mocha.js "$file" --reporter tap > probe.txt 2>&1
                       fi
+                      status=$?
+                      if [ "$status" -eq 124 ]; then
+                          echo "    timed out after 180s — skip remains justified"
+                          return
+                      fi
+                      if ! node scripts/check-run-complete.js probe.txt --runner-exit "$status" > probe-check.txt 2>&1; then
+                          echo "    run was not trustworthy — no conclusion drawn:"
+                          sed 's/^/      /' probe-check.txt
+                          return
+                      fi
+                      echo "    NOW PASSES — this skip may be stale"
                   }
-                  probe "GHSA-v27g (kills the process)" test/ghsa/GHSA-v27g-jcqj-v8rw/repro.js ""
-                  probe "GHSA-6785 64MB alloc" test/ghsa/GHSA-6785-pvv7-mvg7/repro.js "bufferAllocLimit: Infinity"
-                  probe "unbounded recursion" test/vm.js "transformer attack"
+
+                  # Keep in step with the `neverUnskip` entries in
+                  # test/bun-skips.js. Each is probed separately even where two
+                  # appear to share a root cause, because "appears to" is not
+                  # evidence.
+                  probe "GHSA-v27g (terminates the process)" test/ghsa/GHSA-v27g-jcqj-v8rw/repro.js ""
+                  probe "GHSA-6785 bufferAllocLimit: Infinity (>17 min)" test/ghsa/GHSA-6785-pvv7-mvg7/repro.js "bufferAllocLimit: Infinity disables the cap"
+                  probe "GHSA-6785 permissive default 64MB (>400s)" test/ghsa/GHSA-6785-pvv7-mvg7/repro.js "default is permissive"
+                  probe "unbounded recursion: prepareStackTrace" test/vm.js "Node internal prepareStackTrace attack"
+                  probe "unbounded recursion: transformer attack" test/vm.js "transformer attack"
 
             - name: Summarise
               if: always()

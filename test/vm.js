@@ -2904,15 +2904,29 @@ describe('VM', () => {
 		});
 
 		const SEALED = ['Error', 'Promise', 'Proxy'];
-		const GLOBAL_NAMES = ['global', 'globalThis'];
+		const GLOBAL_NAMES = new Set(['global', 'globalThis']);
 		const unguarded = [];
+
+		// Aliases count too. `const g = global; g.Proxy = v` is the same write
+		// with a different spelling, and a check anchored on the identifier
+		// `global` cannot see it. Collect simple aliases first, then treat them
+		// as global references below. This handles the direct case; a fully
+		// general answer is impossible (the object could be computed), which is
+		// why the runtime behaviour is also covered by the descriptor tests.
+		walk.simple(ast, {
+			VariableDeclarator(node) {
+				if (!node.init || node.id.type !== 'Identifier') return;
+				if (node.init.type !== 'Identifier') return;
+				if (GLOBAL_NAMES.has(node.init.name)) GLOBAL_NAMES.add(node.id.name);
+			},
+		});
 
 		walk.ancestor(ast, {
 			AssignmentExpression(node, _state, ancestors) {
 				const left = node.left;
 				if (!left || left.type !== 'MemberExpression') return;
 				if (left.object.type !== 'Identifier') return;
-				if (GLOBAL_NAMES.indexOf(left.object.name) === -1) return;
+				if (!GLOBAL_NAMES.has(left.object.name)) return;
 
 				// Covers both `global.Proxy` and `global['Proxy']`.
 				let prop = null;

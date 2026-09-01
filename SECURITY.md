@@ -30,6 +30,30 @@ The following versions of **vm2** currently receive security updates:
 | 3.x | ✅ | Actively maintained |
 | 2.x and older | ❌ | No longer supported |
 
+## Runtime scope
+
+**Report every suspected sandbox escape privately, on any runtime.** The
+private reporting process above applies without exception. Do not open a public
+issue for an escape because you believe it is Bun-specific.
+
+This matters because the two cases are not reliably distinguishable from the
+outside. A primitive that reproduces only under Bun may still have a Node.js
+variant that has not been found yet, and establishing that it does not is
+maintainer triage work, not something a reporter can be expected to prove.
+Routing such a report to a public issue would disclose a supported-runtime
+vulnerability before it is fixed.
+
+What differs between runtimes is what happens *after* triage, not how a report
+is filed:
+
+- **Node.js** — a confirmed escape is a security advisory, fixed and credited
+  through the coordinated-disclosure process.
+- **Bun** — Bun is experimental and explicitly not a supported security boundary
+  (see the Runtimes section of the README). Once maintainers have confirmed an
+  issue is genuinely Bun-only, it is reclassified out of the advisory process and
+  handled publicly as an ordinary bug, and the reporter is told that has
+  happened.
+
 ## Commitment
 
 Security is a top priority for this project. We take all reports seriously and aim to resolve verified issues quickly and transparently, with respect for both reporters and users.

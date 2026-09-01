@@ -30,7 +30,7 @@
 		"node": ">=6.0"
 	},
 	"scripts": {
-		"test": "mocha test --recursive --ignore test/compilers.js",
+		"test": "mocha test --recursive --ignore test/compilers.js --require ./test/bun-setup.js",
 		"test:compilers": "mocha test/compilers.js",
 		"lint": "eslint ."
 	},

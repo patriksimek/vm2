@@ -6,6 +6,8 @@
 const assert = require('assert');
 const {VM, VMScript} = require('..');
 const {INTERNAL_STATE_NAME} = require('../lib/transformer');
+const {atLeastNode, nodeOlderThan} = require('./engine');
+const {msg} = require('./engine-messages');
 const NODE_VERSION = parseInt(process.versions.node.split('.')[0]);
 const {inspect} = require('util');
 
@@ -99,7 +101,7 @@ describe('node', () => {
 	});
 
 	it.cond('inspect', NODE_VERSION >= 11, () => {
-		if (NODE_VERSION < 26) assert.throws(() => inspect(doubleProxy), /Expected/);
+		if (nodeOlderThan(26)) assert.throws(() => inspect(doubleProxy), /Expected/);
 		assert.doesNotThrow(() => inspect(vm.run('({})'), {showProxy: true, customInspect: true}));
 	});
 
@@ -796,7 +798,7 @@ describe('VM', () => {
 					}
 				});
 				proxy
-			`)('asdf'), /Proxy is not a constructor/, '#4');
+			`)('asdf'), msg('NOT_A_CONSTRUCTOR'), '#4');
 
 			assert.throws(() => vm2.run(`
 				let proxy2 = new Proxy(function() {}, {
@@ -805,7 +807,7 @@ describe('VM', () => {
 					}
 				});
 				proxy2
-			`)('asdf'), /Proxy is not a constructor/, '#5');
+			`)('asdf'), msg('NOT_A_CONSTRUCTOR'), '#5');
 		} else {
 			assert.doesNotThrow(() => vm2.run(`
 				let method = () => {};
@@ -861,7 +863,7 @@ describe('VM', () => {
 				} catch ({constructor: c}) {
 					c.constructor('return process')();
 				}
-			`), /Proxy is not a constructor/, '#9');
+			`), msg('NOT_A_CONSTRUCTOR'), '#9');
 		} else {
 			assert.throws(() => vm2.run(`
 				const proxiedErr = new Proxy({}, {
@@ -942,7 +944,7 @@ describe('VM', () => {
 						}
 					})
 				});
-			`), /Proxy is not a constructor/);
+			`), msg('NOT_A_CONSTRUCTOR'));
 		} else {
 			try {
 				vm2.run(`
@@ -974,7 +976,7 @@ describe('VM', () => {
 		if (NODE_VERSION > 6) {
 			assert.throws(() => vm2.run(`
 				Buffer.prototype.__defineGetter__("toString", () => {});
-			`), /'defineProperty' on proxy: trap returned falsish for property 'toString'/, '#2');
+			`), msg('PROXY_DEFINE_FALSISH_TOSTRING'), '#2');
 		} else {
 			assert.strictEqual(vm2.run(`
 				Buffer.prototype.__defineGetter__("xxx", () => 4);
@@ -1031,7 +1033,7 @@ describe('VM', () => {
 					return () => x => x.constructor("return process")();
 				}
 			})))(()=>{}).mainModule.require("child_process").execSync("id").toString()
-		`), NODE_VERSION > 8 ? /Proxy is not a constructor/ : /process is not defined/, '#2');
+		`), NODE_VERSION > 8 ? msg('NOT_A_CONSTRUCTOR') : /process is not defined/, '#2');
 
 		vm2 = new VM();
 
@@ -1078,7 +1080,7 @@ describe('VM', () => {
 						}
 					})
 				});
-			`), /Proxy is not a constructor/, '#4');
+			`), msg('NOT_A_CONSTRUCTOR'), '#4');
 		} else {
 			assert.doesNotThrow(() => vm2.run(`
 				Object.defineProperty(Buffer.from(""), "", {
@@ -1177,7 +1179,7 @@ describe('VM', () => {
 			}
 			"" in Buffer.from;
 			process.mainModule;
-		`), /Cannot read propert.*mainModule/, '#1');
+		`), msg('READ_MAINMODULE_OF_UNDEFINED'), '#1');
 
 		const vm22 = new VM();
 
@@ -1200,7 +1202,7 @@ describe('VM', () => {
 			var process = Buffer.from.process;
 			Object.create = oc;
 			process.mainModule
-		`), /Cannot read propert.*mainModule/, '#1');
+		`), msg('READ_MAINMODULE_OF_UNDEFINED'), '#1');
 	});
 
 	it('function returned from construct attack', () => {
@@ -1221,7 +1223,7 @@ describe('VM', () => {
 					}
 				}
 			}))}).mainModule.require("child_process").execSync("id").toString()
-		`), NODE_VERSION > 8 ? /Proxy is not a constructor/ : /process is not defined/, '#1');
+		`), NODE_VERSION > 8 ? msg('NOT_A_CONSTRUCTOR') : /process is not defined/, '#1');
 	});
 
 	it('throw while accessing propertyDescriptor properties', () => {
@@ -1284,7 +1286,7 @@ describe('VM', () => {
 					}
 				}));
 			})()
-		`), /Proxy is not a constructor/);
+		`), msg('NOT_A_CONSTRUCTOR'));
 	});
 
 	it.cond('Dynamic import attack', NODE_VERSION >= 10, () => {
@@ -1299,7 +1301,7 @@ describe('VM', () => {
 		const vm2 = new VM();
 		const sst = vm2.run('Error.prepareStackTrace = (e,sst)=>sst;const sst = new Error().stack;Error.prepareStackTrace = undefined;sst');
 		assert.strictEqual(vm2.run('sst=>Object.getPrototypeOf(sst)')(sst), vm2.run('Array.prototype'));
-		assert.throws(()=>vm2.run('sst=>sst[0].getThis().constructor.constructor')(sst), /TypeError: Cannot read propert.*constructor/);
+		assert.throws(()=>vm2.run('sst=>sst[0].getThis().constructor.constructor')(sst), msg('PREPARE_STACK_TRACE_GETTHIS'));
 		assert.throws(()=>vm2.run(`
 			const { set } = WeakMap.prototype;
 			WeakMap.prototype.set = function(v) {
@@ -2668,7 +2670,7 @@ describe('VM', () => {
 	// (precondition closed); the outer assertion accepts either
 	// `process is not defined` (chain ran, host Function blocked) or
 	// `properties of null` (precondition closed).
-	const SUPPRESSED_ERROR_BLOCKED = /process is not defined|properties of null/;
+	const SUPPRESSED_ERROR_BLOCKED = msg('SUPPRESSED_ERROR_ACCESS');
 	it.cond('SuppressedError escape via DisposableStack', typeof DisposableStack === 'function', () => {
 		const vm2 = new VM();
 		// DisposableStack.dispose() wraps multiple errors in SuppressedError.
@@ -2845,10 +2847,10 @@ describe('VM', () => {
 
 	// Gated to Node >= 10: on Node 8's older V8 the seal below does not take on
 	// the vm context's global proxy — the slot stays writable — so these
-	// descriptor assertions are false there. That difference is exactly what
+	// descriptor assertions are false there. That is exactly the difference that
 	// makes the `Proxy` install in setup-sandbox.js live on Node 8 and a no-op
 	// everywhere else; see the comment beside it.
-	it.cond('sandbox global Proxy is removed and sealed', NODE_VERSION >= 10, () => {
+	it.cond('sandbox global Proxy is removed and sealed', atLeastNode(10), () => {
 		const vm2 = new VM();
 
 		// `Proxy` is removed from the sandbox outright, not merely shadowed.
@@ -2882,44 +2884,76 @@ describe('VM', () => {
 		// A bare write therefore either does nothing while looking alive, or kills
 		// the sandbox, depending on where it runs. The `Proxy` install is
 		// deliberate and wrapped in try/catch; what this guard forbids is an
-		// UNGUARDED one. Runtime assertions cannot catch a recurrence on a single
-		// engine, so check the source.
-		const raw = require('fs').readFileSync(require.resolve('../lib/setup-sandbox.js'), 'utf8');
+		// UNGUARDED one.
+		//
+		// This is an AST check, not a text search. An earlier line-by-line regex
+		// version silently missed `global.Proxy\n\t= v`, `globalThis.Proxy = v`
+		// and `global['Proxy'] = v`, while its comment claimed it could not have
+		// false negatives. acorn is already a runtime dependency, so parsing costs
+		// nothing extra and cannot be defeated by formatting.
+		const acorn = require('acorn');
+		const walk = require('acorn-walk');
+		const src = require('fs').readFileSync(require.resolve('../lib/setup-sandbox.js'), 'utf8');
 
-		// Drop comment-only lines and block comments. Code is never stripped, so
-		// the guard can only ever err toward a false positive (a loud, easily
-		// fixed failure) and never hide a real assignment.
-		let inBlock = false;
-		const lines = raw.split('\n').filter((line) => {
-			const t = line.trim();
-			if (inBlock) {
-				if (t.includes('*/')) inBlock = false;
-				return false;
-			}
-			if (t.startsWith('/*')) {
-				if (!t.includes('*/')) inBlock = true;
-				return false;
-			}
-			return !t.startsWith('//') && !t.startsWith('*');
+		// The file is a script body that is wrapped in a function at runtime, so
+		// it legitimately contains a top-level `return`.
+		const ast = acorn.parse(src, {
+			ecmaVersion: 'latest',
+			allowReturnOutsideFunction: true,
+			locations: true,
 		});
 
-		for (const name of ['Error', 'Promise', 'Proxy']) {
-			const bareAssign = new RegExp(`(^|[^\\w.$])global\\.${name}\\s*=[^=]`);
-			for (let i = 0; i < lines.length; i++) {
-				if (!bareAssign.test(lines[i])) continue;
-				let j = i - 1;
-				while (j >= 0 && lines[j].trim() === '') j--;
-				assert.ok(
-					j >= 0 && lines[j].trim() === 'try {',
-					`setup-sandbox.js writes the sealed global '${name}' without a try/catch. ` +
-						'That write throws on JavaScriptCore and aborts sandbox setup. Wrap it, ' +
-						'or install the value some other way.'
+		const SEALED = ['Error', 'Promise', 'Proxy'];
+		const GLOBAL_NAMES = new Set(['global', 'globalThis']);
+		const unguarded = [];
+
+		// Aliases count too. `const g = global; g.Proxy = v` is the same write
+		// with a different spelling, and a check anchored on the identifier
+		// `global` cannot see it. Collect simple aliases first, then treat them
+		// as global references below. This handles the direct case; a fully
+		// general answer is impossible (the object could be computed), which is
+		// why the runtime behaviour is also covered by the descriptor tests.
+		walk.simple(ast, {
+			VariableDeclarator(node) {
+				if (!node.init || node.id.type !== 'Identifier') return;
+				if (node.init.type !== 'Identifier') return;
+				if (GLOBAL_NAMES.has(node.init.name)) GLOBAL_NAMES.add(node.id.name);
+			},
+		});
+
+		walk.ancestor(ast, {
+			AssignmentExpression(node, _state, ancestors) {
+				const left = node.left;
+				if (!left || left.type !== 'MemberExpression') return;
+				if (left.object.type !== 'Identifier') return;
+				if (!GLOBAL_NAMES.has(left.object.name)) return;
+
+				// Covers both `global.Proxy` and `global['Proxy']`.
+				let prop = null;
+				if (!left.computed && left.property.type === 'Identifier') prop = left.property.name;
+				else if (left.computed && left.property.type === 'Literal') prop = left.property.value;
+				if (SEALED.indexOf(prop) === -1) return;
+
+				// Guarded means: lexically inside the `try` BLOCK of a try statement.
+				// Being in the catch or finally clause would not protect the write.
+				const guarded = ancestors.some(
+					(a) => a.type === 'TryStatement' && node.start >= a.block.start && node.end <= a.block.end
 				);
-			}
-		}
+				if (!guarded) unguarded.push(`${left.object.name}.${prop} at line ${node.loc.start.line}`);
+			},
+		});
+
+		assert.deepStrictEqual(
+			unguarded,
+			[],
+			'setup-sandbox.js writes a sealed global slot outside a try block: ' +
+				unguarded.join(', ') +
+				'. That write throws on JavaScriptCore and aborts sandbox setup. Wrap it, ' +
+				'or install the value some other way.'
+		);
 	});
 
-	it.cond('sealed sandbox intrinsics cannot be swapped out', NODE_VERSION >= 10, () => {
+	it.cond('sealed sandbox intrinsics cannot be swapped out', atLeastNode(10), () => {
 		const vm2 = new VM();
 
 		// Same seal, same reasoning, for the two other sealed slots. `Error`
@@ -3112,15 +3146,15 @@ describe('freeze, protect', () => {
 
 		assert.throws(() => {
 			vm.run('"use strict"; x.a = () => { return `-` };');
-		}, /'set' on proxy: trap returned falsish for property 'a'/);
+		}, msg('PROXY_SET_FALSISH'));
 
 		assert.throws(() => {
 			vm.run('"use strict"; (y) => { y.b = () => { return `--` } }')(x);
-		}, /'set' on proxy: trap returned falsish for property 'b'/);
+		}, msg('PROXY_SET_FALSISH_B'));
 
 		assert.throws(() => {
 			vm.run('"use strict"; x.c.d = () => { return `---` };');
-		}, /'set' on proxy: trap returned falsish for property 'd'/);
+		}, msg('PROXY_SET_FALSISH_D'));
 
 		vm.run('x.a = () => { return `-` };');
 		assert.strictEqual(x.a(), 'a');

@@ -14,6 +14,7 @@ jobs:
             contents: read
         timeout-minutes: 10
         strategy:
+            fail-fast: false
             matrix:
                 node-version: [26, 25, 24, 22, 20, 18, 16, 14, 12, 10, 8]
         steps:
@@ -52,3 +53,83 @@ jobs:
               if: ${{ matrix.node-version >= 20 }}
               run: npm install typescript@6 coffee-script --no-save && npm run test:compilers
 
+    bun:
+        # Bun is EXPERIMENTAL for vm2 and is NOT a supported security boundary.
+        # See docs/specs/2026-08-30-bun-support-design.md section 6.
+        #
+        # A separate job, deliberately not a matrix entry: the Node matrix is
+        # fail-fast and a Bun entry inside it could cancel in-flight Node jobs.
+        runs-on: ubuntu-latest
+        continue-on-error: true
+        permissions:
+            contents: read
+        timeout-minutes: 15
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Node (for npm ci and the completeness checker)
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 24
+                  cache: 'npm'
+
+            - name: Setup Bun
+              uses: oven-sh/setup-bun@v2
+              with:
+                  # Pinned deliberately. Every divergence reason in
+                  # test/bun-skips.js cites behaviour of this exact version, so
+                  # a floating version would make those reasons unverifiable.
+                  # Bumping is a reviewed PR that shows which skips changed.
+                  bun-version: 1.4.0
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Run unit tests under Bun
+              # --require ./test/bun-setup.js applies test/bun-skips.js. It must
+              # come from the flag, not from inside a spec file: test/ghsa loads
+              # first, so nothing a spec file installs can reach it.
+              #
+              # `set -o pipefail` matters: without it the step's status is tee's,
+              # which is always 0, so a runner that printed a green epilogue and
+              # then died during teardown would look clean. The status is
+              # captured and handed to the checker rather than failing here,
+              # because this step is deliberately non-blocking.
+              run: |
+                  set -o pipefail
+                  bun ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --require ./test/bun-setup.js --reporter tap | tee bun-tap.txt
+                  echo "$?" > bun-runner-exit.txt
+              continue-on-error: true
+
+            - name: Determine how many tests should register
+              # Derived from Node rather than hard-coded, so it cannot go stale.
+              # Skipped tests still register, so the two runtimes must agree on
+              # the total; only which of them execute differs.
+              run: |
+                  node ./node_modules/mocha/bin/mocha.js test --recursive --ignore test/compilers.js --dry-run --reporter json \
+                    | node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{process.stdout.write(String(JSON.parse(d).tests.length))})' \
+                    > expected-tests.txt
+                  echo "Node registers $(cat expected-tests.txt) tests"
+
+            - name: Verify the run actually finished
+              # The important step. Without it a mid-run crash exits 0 and the
+              # job reports a success it never verified. The checker also
+              # cross-checks the TAP plan, the emitted test points and the
+              # summary counts against each other, so a partial or internally
+              # impossible run cannot pass either.
+              #
+              # --expect-tests is an equality check, not a floor. A floor lets a
+              # whole test file vanish from discovery while the gate stays
+              # green; equality catches that, in both directions.
+              run: node scripts/check-run-complete.js bun-tap.txt --expect-tests "$(cat expected-tests.txt)" --runner-exit "$(cat bun-runner-exit.txt 2>/dev/null || echo missing)"
+
+            - name: Report skip count
+              if: always()
+              run: |
+                  # Only entries actually applied from test/bun-skips.js are the
+                  # phase-2 backlog. A raw '# SKIP' count also sweeps in every
+                  # ordinary version/capability pending test, which has nothing
+                  # to do with Bun.
+                  echo "Bun skip-registry entries applied: $(grep -c '^# vm2-bun-skip:' bun-tap.txt || true)"
+                  echo "All pending (registry + ordinary version/capability skips): $(grep -c '# SKIP' bun-tap.txt || true)"

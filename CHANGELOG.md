@@ -2,9 +2,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Experimental Bun support (test suite and CI only).** The suite now runs
+  under Bun, with engine-keyed assertion messages so patterns stay exactly as
+  strict on Node, a central `test/bun-skips.js` listing every JavaScriptCore
+  divergence, and a non-blocking CI job whose output is verified complete
+  before it is believed. Bun is **not** a supported security boundary — vm2's
+  threat model is derived from V8 internals and JavaScriptCore has not been
+  audited against the bridge. See the README Runtimes section.
+
 ### Maintenance
 
-- **`global.Proxy` install guarded, and the sealed-slot attributes left implicit** — `lib/setup-sandbox.js` installs the handler-sanitising `Proxy` with a bare assignment to a slot the `Object.defineProperties(global, ...)` block above declares as `undefined`. What that write does is engine-specific: on Node >= 10 the slot is genuinely sealed and the write is a silent no-op, so the sandbox has no `Proxy` at all; on Node 8 the old V8 global proxy leaves the slot writable and the write is live, which is what gives that sandbox its `Proxy`; and JavaScriptCore implements the strict-mode write correctly and throws, which would abort sandbox setup. The write is now wrapped in `try`/`catch` — the failure outcome is "no `Proxy` in the sandbox", which is strictly more restrictive, never less. `test/vm.js` gains a source-level guard that fails if any write to `Error`, `Promise` or `Proxy` is ever left unguarded, and pins the sealed-slot descriptors on Node >= 10, where the seal actually takes. **Correction to 3.11.8's entry:** that release described the assignment as dead code and removed it, and separately spelled out `writable: false, configurable: false` on the three sealed slots for readability, claiming no behaviour change. The second change was the damaging one: those attributes are the spec defaults, so the forms are equivalent on a current V8 but not on the Node 8 global proxy, where only the explicit form actually seals the slot. That silently removed `Proxy` from Node 8 sandboxes and broke six tests. The attributes are omitted again, with a comment saying why they must stay that way, and the assignment is restored.
+- **`global.Proxy` install guarded for JavaScriptCore, and the sealed-slot attributes left implicit** — `lib/setup-sandbox.js` installs the handler-sanitising `Proxy` with a bare assignment to a slot the `Object.defineProperties(global, ...)` block above declares as `undefined`. What that write does is engine-specific: on Node >= 10 the slot is genuinely sealed and the write is a silent no-op, so the sandbox has no `Proxy` at all; on Node 8 the old V8 global proxy leaves the slot writable and the write is live, which is what gives that sandbox its `Proxy`; and JavaScriptCore (Bun) implements the strict-mode write correctly and throws, aborting sandbox setup before the first `run()`. The write is now wrapped in `try`/`catch` — the failure outcome is "no `Proxy` in the sandbox", which is strictly more restrictive, never less. `test/vm.js` gains an AST-based guard (via `acorn`, already a runtime dependency) that fails if any write to `Error`, `Promise` or `Proxy` is left outside a `try` block, including through a local alias, and pins the sealed-slot descriptors on Node >= 10 where the seal actually takes. **Correction to 3.11.8's entry:** that release described the assignment as dead code and removed it, and separately spelled out `writable: false, configurable: false` on the three sealed slots for readability, claiming no behaviour change. The second change was the damaging one — those attributes are the spec defaults, so the forms are equivalent on a current V8 but not on the Node 8 global proxy, where only the explicit form actually seals the slot. That silently removed `Proxy` from Node 8 sandboxes and broke six tests. The attributes are omitted again, with a comment saying why they must stay that way, and the assignment is restored.
 
 ## [3.11.8]
 

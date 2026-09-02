@@ -9,18 +9,25 @@ export default [
 	{
 		ignores: ['eslint.config.mjs', '.claude/worktrees/**', '.superpowers/**'],
 	},
+	// Everything is CommonJS. `sourceType: 'commonjs'` is what allows the
+	// top-level `return` in lib/setup-sandbox.js and lib/setup-node-sandbox.js
+	// (the old `ecmaFeatures.globalReturn` flag stopped being honoured once a
+	// per-file `sourceType: 'module'` override existed alongside it).
 	{
 		languageOptions: {
 			ecmaVersion: 2022,
-			sourceType: 'script',
+			sourceType: 'commonjs',
 			globals: {
 				...globals.node,
 			},
-			parserOptions: {
-				ecmaFeatures: {
-					globalReturn: true,
-				},
-			},
+		},
+	},
+	// Test fixtures that are real ES modules (`"type": "module"` in their
+	// package.json) must be parsed as modules, not scripts.
+	{
+		files: ['test/additional-modules/my-es-module/index.js'],
+		languageOptions: {
+			sourceType: 'module',
 		},
 	},
 ];

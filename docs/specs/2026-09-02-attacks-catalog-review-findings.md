@@ -17,6 +17,8 @@ Eight family files were reviewed independently (52 categories), then this pass r
 
 `lib/` is out of scope for this plan; these are recorded for a follow-up that may touch it.
 
+**Resolved 2026-09-03**: all four comments below were corrected in `lib/setup-sandbox.js` and `lib/builtin.js` (comment-only changes, no behaviour change); the JSTag removal is attributed to Category 17 and commit 1fbdeff, since no advisory covers it. Kept for the record.
+
 - `lib/setup-sandbox.js:601` says `WebAssembly.JSTag` is "(Node 25+)". Measured present on Node v22.23.2 / v24.19.0 / v25.9.0 / v26.7.0 and absent on v20.20.2, so the comment should read Node 22+ (Category 17; the entry was corrected to "present on Node 22 and later; absent on Node 20 and earlier").
 - `lib/setup-sandbox.js:447` still names `wrapHostPromiseThenArgs` in a comment. That function does not exist; the live symbol is `normalizeHostPromiseCallbacks` (`lib/bridge.js:1471`), which the Category 26 entry now names. `wrapHostPromiseCatchArgs` has zero hits anywhere.
 - `lib/builtin.js:206-212` comments that an explicit `builtin: ['_http_client']` opt-in still re-exposes underscored builtins. It does not: both the array and object-map branches of `makeBuiltinsFromLegacyOptions` iterate the pre-filtered `BUILTIN_MODULES` and admit only names present there, so both forms yield `Cannot find module '_http_client'`. Only the lower-level `makeBuiltins(['_http_client'])` and `mock`/`override` still work (Category 34; the entry and the `docs/ATTACKS.md` defense-table row were both corrected).

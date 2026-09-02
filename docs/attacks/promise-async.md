@@ -38,7 +38,7 @@ Any future changes to species reset must preserve this invariant: **no user-obse
 
 **Advisories**: GHSA-55hx-c926-fr95
 
-**Tests**: test/ghsa/GHSA-55hx-c926-fr95/
+**Tests**: test/ghsa/GHSA-55hx-c926-fr95/, test/vm.js ("[Symbol.species] attack"), test/vm.js ("Function.prototype.call attack via Promise"), test/vm.js ("Object.defineProperty override attack via Promise species"), test/vm.js ("Frozen constructor attack via Promise species"), test/vm.js ("Constructor getter TOCTOU attack via Promise (non-configurable)"), test/vm.js ("Constructor getter TOCTOU attack via Promise (configurable)"), test/vm.js ("Constructor getter TOCTOU attack via Promise prototype"), test/vm.js ("Symbol.hasInstance override to bypass resetPromiseSpecies"), test/vm.js ("Symbol.species getter TOCTOU attack via Promise"), test/vm.js ("Promise.all static method stealing attack"), test/vm.js ("Promise.try static method stealing attack"), test/vm.js ("Reflect.construct Promise species bypass attack")
 
 ### Description
 
@@ -693,9 +693,9 @@ Layer 2 is the durable one: it turns `finally` from a species-sensitive intrinsi
 
 ## Attack Category 51: `allowAsync: false` Bypass via Promise Thenable Assimilation
 
-**Advisories**: none
+**Advisories**: GHSA-f8gf-w286-fmq2
 
-**Tests**: none linked
+**Tests**: test/ghsa/GHSA-f8gf-w286-fmq2/, test/vm.js ("async")
 
 **Uses**: [Category 7](promise-async.md#attack-category-7-promise-and-async-exploitation)
 

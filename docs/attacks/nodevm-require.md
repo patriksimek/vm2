@@ -12,7 +12,7 @@ Categories in this file: [21](nodevm-require.md#attack-category-21-nodevm-builti
 
 **Advisories**: GHSA-947f-4v7f-x2v8, GHSA-rp36-8xq3-r6c4, GHSA-8686-vhfx-7r3j, GHSA-6rh5-qq4q-97xh, GHSA-qhwx-74w5-xhxq, GHSA-m5w8-4gq2-6f8x
 
-**Tests**: test/ghsa/GHSA-947f-4v7f-x2v8/, test/ghsa/GHSA-rp36-8xq3-r6c4/, test/ghsa/GHSA-8686-vhfx-7r3j/, test/ghsa/GHSA-6rh5-qq4q-97xh/, test/ghsa/GHSA-qhwx-74w5-xhxq/, test/ghsa/GHSA-m5w8-4gq2-6f8x/
+**Tests**: test/ghsa/GHSA-947f-4v7f-x2v8/, test/ghsa/GHSA-rp36-8xq3-r6c4/, test/ghsa/GHSA-8686-vhfx-7r3j/, test/ghsa/GHSA-6rh5-qq4q-97xh/, test/ghsa/GHSA-qhwx-74w5-xhxq/, test/ghsa/GHSA-m5w8-4gq2-6f8x/, test/nodevm.js ("disabled require"), test/nodevm.js ("enabled require for certain modules"), test/nodevm.js ("disable setters on builtin modules")
 
 ### Description
 
@@ -126,7 +126,7 @@ Three-layer denylist enforcement in `lib/builtin.js` (restores **[Invariant 13 �
 3. **Filter from `BUILTIN_MODULES`** — closes the `'*'` wildcard expansion path. `'*'` will never auto-allow these names regardless of the user's exclusion list.
 4. **Reject in `addDefaultBuiltin`** — closes the explicit-allowlist path (`builtin: ['module']`, `builtin: ['process']`, `builtin: ['inspector/promises']`) and the lower-level `makeBuiltins([...])` API used by custom resolvers. The `SPECIAL_MODULES` escape hatch is preserved: a future safe wrapper (e.g. a `module` shim that exposes only `builtinModules` metadata) can be registered there if a real consumer needs it.
 
-5. **Deny-token `node:` normalization** (GHSA-8686-vhfx-7r3j) — the `'*'` wildcard's negative-token check in `makeBuiltinsFromLegacyOptions` now tests both `-${name}` and `-node:${name}`, so the two spellings of a deny token are equivalent and either one denies both spellings of the module. This is the deny-side mirror of the `node:`-prefix stripping the resolver and `isDangerousBuiltin` already do on the require side. It only ever *removes* a builtin the exact-match check would have added, so no previously-allowed module becomes unreachable.
+5. **Deny-token `node:` normalization** (GHSA-8686-vhfx-7r3j) — the `'*'` wildcard's negative-token check in `makeBuiltinsFromLegacyOptions` now tests both `-${name}` and `-node:${name}`, so the two spellings of a deny token are equivalent and either one denies both spellings of the module. This is the deny-side mirror of the `node:`-prefix stripping the resolver and `isDangerousBuiltin` already do on the require side. It only ever *removes* a builtin the exact-match check itself admits, so no module that check already allows becomes unreachable.
 
 6. **Deny-token family coverage** (GHSA-6rh5-qq4q-97xh) — the same negative-token check now treats `<family>/<sub>` as denied whenever `-<family>` is present, so `-fs` denies `fs/promises`, `-path` denies `path/posix` / `path/win32`, `-stream` denies `stream/promises` / `stream/web` / `stream/consumers`. This is the user-deny-token mirror of the family-prefix matching `isDangerousBuiltin` already applies to the hard `DANGEROUS_BUILTINS` denylist. Points 5 and 6 are composed in a single chokepoint, `isBuiltinDenied(builtins, name)`, which normalizes the `node:` prefix off *both* the module name and the token before matching and then applies the family split to the normalized name — so `-node:fs` denies all four of `fs`, `node:fs`, `fs/promises`, `node:fs/promises`. Coverage is strictly additive: a family with no deny token keeps every subpath, and the explicit (non-wildcard) allowlist branch is untouched, so `builtin: ['fs']` behaves exactly as before.
 
@@ -143,7 +143,7 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 
 ### Detection Rules
 
-- **`builtin: ['*']` or `['*', '-X']`** in NodeVM config — historically allowed `module`/`worker_threads`/`cluster`/`vm`/`repl`/`inspector`/`trace_events`/`wasi`, now safely filtered. **Note: `'*'` still allows `child_process`, `fs`, `dgram`, `net`, `http`, `dns`, etc. — it is NOT a sandbox-safe default for untrusted code.**
+- **`builtin: ['*']` or `['*', '-X']`** in NodeVM config — on an unpatched version this expands to include `module`/`worker_threads`/`cluster`/`vm`/`repl`/`inspector`/`trace_events`/`wasi`; the shipped filter removes them. **Note: `'*'` still allows `child_process`, `fs`, `dgram`, `net`, `http`, `dns`, etc. — it is NOT a sandbox-safe default for untrusted code.**
 - **`require('module')._load(...)`** — the canonical bypass primitive.
 - **`new Worker(src, {eval:true})`** — out-of-band code execution.
 - **`cluster.fork()`** — host process spawn.
@@ -154,14 +154,14 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 - **`require('process').binding('spawn_sync')` / `.dlopen(module, path)`** — raw C++ binding surface and native add-on loader.
 - **`trace_events.createTracing({categories: [...]})`** — host process abort via C++ assertion failure.
 - **`new (require('wasi').WASI)({...})`** — preview1 syscall surface.
-- **`builtin: ['*', '-node:X']`** — a `node:`-prefixed deny token. Historically a silent no-op that denied nothing; now equivalent to `-X`. Configs written this way were never enforcing what they appeared to.
+- **`builtin: ['*', '-node:X']`** — a `node:`-prefixed deny token. On an unpatched version it is a silent no-op that denies nothing; here it is equivalent to `-X`. A config written this way against an unpatched version does not enforce what it appears to.
 - **`require('test')` / `require('node:test')` / `require('node:node:test')` / `require('node:test/reporters')`** — the test runner is a host-process launcher, not inert tooling. Denied outright since GHSA-qhwx-74w5-xhxq.
 - **`test.run({ execArgv: [...] })`, or any `execArgv` / `--eval` / `--require` / `--import` string reaching a builtin's process-spawning option bag** — caller-controlled Node command-line flags on a spawned host process are equivalent to host RCE.
-- **`require('<family>/<sub>')` where the config denies `-<family>`** — `fs/promises`, `path/posix`, `stream/web`, `timers/promises`, `dns/promises`. Historically reachable despite the family deny token; now denied with the family. A config relying on `-fs` for filesystem isolation on an unpatched version was not enforcing it.
+- **`require('<family>/<sub>')` where the config denies `-<family>`** — `fs/promises`, `path/posix`, `stream/web`, `timers/promises`, `dns/promises`. Reachable despite the family deny token on an unpatched version; here denied with the family. A config relying on `-fs` for filesystem isolation on an unpatched version does not enforce it.
 
 ### Considered Attack Surfaces
 
-- **`async_hooks`, `diagnostics_channel`, `perf_hooks`, `v8`** are now denied as process-wide observability primitives — see [Category 30](nodevm-require.md#attack-category-35-nodevm-process-wide-observability-builtins-host-data-info-leak). They expose host-process state rather than host-code-loading primitives, but are functionally identical from the embedder's perspective: any allowlist that includes them leaks per-request user data, auth tokens, and heap contents into the sandbox.
+- **`async_hooks`, `diagnostics_channel`, `perf_hooks`, `v8`** are now denied as process-wide observability primitives — see [Category 35](nodevm-require.md#attack-category-35-nodevm-process-wide-observability-builtins-host-data-info-leak). They expose host-process state rather than host-code-loading primitives, but are functionally identical from the embedder's perspective: any allowlist that includes them leaks per-request user data, auth tokens, and heap contents into the sandbox.
 - **`child_process`** is NOT on the auto-denylist because users may legitimately want it for trusted scripts (e.g., dev tooling running known scripts in vm2 for hot-reload isolation). For untrusted code, `child_process` is a full-host-RCE primitive — embedders MUST exclude it explicitly (`['*', '-child_process']`, or equivalently `['*', '-node:child_process']` since GHSA-8686-vhfx-7r3j) or, better, use an explicit allowlist of just the modules they need. The README's "Hardening recommendations" section calls this out.
 - **`fs`** is allowed under `'*'` because file-system access can be a legitimate sandbox capability for many use cases (e.g., user-script template engines reading templates). Users who want filesystem isolation use `VMFileSystem` or exclude `fs` explicitly. Since GHSA-6rh5-qq4q-97xh a `-fs` token also covers `fs/promises`; on earlier versions it did not, and `fs/promises` alone is a complete host filesystem read/write primitive. Same caveat as `child_process` — `'*'` is not sandbox-safe for untrusted code.
 - **`dgram`, `net`, `http`, `https`, `dns`** are network-IO builtins, allowed under `'*'`. Any of them give untrusted code outbound network access from the host. Embedders should explicitly exclude or allowlist.
@@ -172,7 +172,7 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 
 **Advisories**: GHSA-cp6g-6699-wx9c
 
-**Tests**: test/ghsa/GHSA-cp6g-6699-wx9c/
+**Tests**: test/ghsa/GHSA-cp6g-6699-wx9c/, test/nodevm.js ("root path checking"), test/nodevm.js ("relative require not allowed to enter node modules")
 
 ### Description
 
@@ -240,7 +240,7 @@ The race window between the canonicalization syscall and the subsequent loader s
 
 **Advisories**: GHSA-8hg8-63c5-gwmx, GHSA-m4wx-m65x-ghrr, GHSA-8hr7-r645-pc6w
 
-**Tests**: test/ghsa/GHSA-8hg8-63c5-gwmx/, test/ghsa/GHSA-m4wx-m65x-ghrr/, test/ghsa/GHSA-8hr7-r645-pc6w/
+**Tests**: test/ghsa/GHSA-8hg8-63c5-gwmx/, test/ghsa/GHSA-m4wx-m65x-ghrr/, test/ghsa/GHSA-8hr7-r645-pc6w/ (repro.js + adversarial.js), test/nodevm.js ("NodeVM")
 
 **Supersedes**: GHSA-8hg8-63c5-gwmx's check on the raw `options.require === false` input, which only fired for one syntactic shape and missed every other configuration that collapses to the same insecure resolver — see GHSA-m4wx-m65x-ghrr.
 
@@ -280,6 +280,8 @@ vm.run(`
 `);
 // uid=1000(...) ...
 ```
+
+- Every array/boxed/exotic `require` shape rejected at construction, and the `require: {}` escape hatch still granting host `vm2` only: see test/ghsa/GHSA-8hr7-r645-pc6w/adversarial.js.
 
 ### Why It Works
 
@@ -422,7 +424,7 @@ After the fix, the `'*'` wildcard expands only to documented public Node builtin
 
 **Escape hatches preserved.** The fix is intentionally narrow:
 
-- **Explicit opt-in** still works. A power user who genuinely needs `_http_client` can list it directly (`builtin: ['_http_client']` or `makeBuiltins(['_http_client'])`) — `addDefaultBuiltin` does not consult the `s.startsWith('_')` filter.
+- **Explicit opt-in** still works at the lower-level API. A power user who genuinely needs `_http_client` registers it with `makeBuiltins(['_http_client'])` — `addDefaultBuiltin` does not consult the `s.startsWith('_')` filter. The legacy `require.builtin` option is *not* such a route: both its array branch and its object-map branch iterate `BUILTIN_MODULES` and admit only names present there, so `builtin: ['_http_client']` and `builtin: {_http_client: true}` name a module that is not in the list and resolve to `Cannot find module '_http_client'`.
 - **`mock` / `override`** registrations under underscored names continue to function — they bypass `addDefaultBuiltin` entirely.
 
 ### Defense Invariant Enforced
@@ -435,7 +437,7 @@ This complements [Category 21](nodevm-require.md#attack-category-21-nodevm-built
 
 - **`require('_http_client')` / `require('_http_server')` / `require('_tls_wrap')`** from sandbox code — canonical bypass primitives.
 - **`require('node:_http_client')`** (etc.) — `node:` prefix path, equivalent reachability.
-- **Embedder config `builtin: ['*', '-http', ...]`** — historically left every `_http_*`/`_tls_*` sibling reachable; now safe.
+- **Embedder config `builtin: ['*', '-http', ...]`** — on an unpatched version this leaves every `_http_*`/`_tls_*` sibling reachable; here they are filtered out of the expansion.
 
 ### Considered Attack Surfaces
 
@@ -548,7 +550,7 @@ The fix restores **[Defense Invariant #13](../ATTACKS.md#defense-invariants)** a
 
 ### Detection Rules
 
-- **`builtin: ['*']` or `builtin: ['*', '-X']`** in NodeVM config — historically auto-allowed `diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8`. Now filtered. Same caveat as Category 21: `'*'` still allows `fs`, `child_process` (if not excluded), `net`, `http`, `dns` — not a sandbox-safe default for untrusted code.
+- **`builtin: ['*']` or `builtin: ['*', '-X']`** in NodeVM config — on an unpatched version this auto-allows `diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8`; here they are filtered. Same caveat as Category 21: `'*'` still allows `fs`, `child_process` (if not excluded), `net`, `http`, `dns` — not a sandbox-safe default for untrusted code.
 - **`require('diagnostics_channel').channel(...).subscribe(...)`** — host HTTP/DB/IPC observability subscription.
 - **`require('async_hooks').executionAsyncResource()` / `.createHook({...}).enable()`** — host async context inspection.
 - **`require('perf_hooks').performance.getEntriesByType('mark' | 'measure' | 'resource')`** — host performance timeline read.
@@ -614,9 +616,9 @@ This complements the existing whole-module `DANGEROUS_BUILTINS` denylist (`modul
 
 ## Attack Category 45: NodeVM External-Package Allowlist Bypass via Unanchored Matcher and `..` Traversal
 
-**Advisories**: GHSA-cp6g-6699-wx9c
+**Advisories**: GHSA-c48m-32m9-vx93
 
-**Tests**: test/ghsa/GHSA-cp6g-6699-wx9c/
+**Tests**: test/ghsa/GHSA-c48m-32m9-vx93/, test/nodevm.js ("module name glob escape"), test/nodevm.js ("strict module name checks"), test/nodevm.js ("module name globs"), test/nodevm.js ("whitelist check before custom resolver")
 
 **Related**: [Category 21: NodeVM Builtin Allowlist Bypass via Host-Passthrough Builtins](nodevm-require.md#attack-category-21-nodevm-builtin-allowlist-bypass-via-host-passthrough-builtins) (the *builtin* allowlist; this category is the *external package* allowlist), [Category 24: NodeVM `require.root` Symlink Bypass (Path Check/Use TOCTOU)](nodevm-require.md#attack-category-24-nodevm-requireroot-symlink-bypass-path-checkuse-toctou) (the filename-side boundary check this specifier-side check composes with), [Category 46: NodeVM External-Package Allowlist Bypass via Unanchored Module-Path Prefix](nodevm-require.md#attack-category-46-nodevm-external-package-allowlist-bypass-via-unanchored-module-path-prefix) (the filename-space sibling of this specifier-space check)
 
@@ -651,6 +653,8 @@ require('evil-left-pad');            // substring collision: /left\-pad/ matches
 require('left-pad/../evil-package'); // traversal: matches ^left-pad[\/].*$
 ```
 
+- Wildcard allowlist entries (`@scope/*`) match by path segment rather than by substring, so `x@scope/pkg` and `@scope-evil/pkg` are denied: see test/ghsa/GHSA-c48m-32m9-vx93/repro.js.
+
 ### Why This Works
 
 `externalCache` is a *pre-check* whose only job is to decide whether the embedder's resolver is trusted to speak for this specifier. It was written as a containment test rather than an identity test, so it answered "does the allowlist appear in this name" instead of "is this name the allowlisted package". Package names are an unstructured namespace an attacker can populate freely, so containment is not a boundary. The traversal variant is the same failure one level down: the pre-check treated everything after the first separator as opaque, but the loader interprets it as a path with `..` semantics — the classic check/use disagreement, here between a string matcher and `path.resolve`.
@@ -682,13 +686,15 @@ Two composed layers in `lib/resolver-compat.js`, restoring the external-allowlis
 - **Separator handling is platform-independent, deliberately.** The segment split is `[\\/]` on every platform, so `left-pad\\..\\evil` and `left-pad/..\\evil` are rejected on POSIX too — verified empirically on darwin. On POSIX a backslash is a legal filename character and `path.resolve` would *not* treat those as traversal, so this is a conservative over-rejection: the specifier is refused although it could not have escaped. That is the safe direction (the alternative — splitting only on `/` under POSIX — would leave the Windows traversal open in any cross-platform deployment), and the cost is that a package whose name genuinely contains a literal `..` between backslashes becomes unrequirable. No such package name is valid on npm.
 - **Percent-encoded and dot-padded forms are *not* `..` segments and are not rejected by this check — they do not need to be.** `left-pad/..%2fevil`, `left-pad/%2e%2e/evil` and `left-pad/....//evil` reach the resolver, but `require()` performs no URL-decoding and `path.resolve` treats `....` as an ordinary directory name, so none of them traverses; each fails as module-not-found. Verified empirically. Were a future custom resolver to decode percent-escapes itself, that decoding would happen inside embedder code and outside this boundary — an embedder-side concern, noted here so the asymmetry is not mistaken for a gap.
 
+Re-verified 2026-09-02 on Node v26.7.0.
+
 ---
 
 ## Attack Category 46: NodeVM External-Package Allowlist Bypass via Unanchored Module-Path Prefix
 
-**Advisories**: GHSA-c48m-32m9-vx93, GHSA-7q3f-wx44-378m
+**Advisories**: GHSA-7q3f-wx44-378m
 
-**Tests**: test/ghsa/GHSA-c48m-32m9-vx93/, test/ghsa/GHSA-7q3f-wx44-378m/
+**Tests**: test/ghsa/GHSA-7q3f-wx44-378m/, test/nodevm.js ("relative require not allowed to enter node modules"), test/nodevm.js ("allows specific transitive external dependencies in sandbox context")
 
 **Related**: [Category 45: NodeVM External-Package Allowlist Bypass via Unanchored Matcher and `..` Traversal](nodevm-require.md#attack-category-45-nodevm-external-package-allowlist-bypass-via-unanchored-matcher-and--traversal) (the *specifier*-space sibling of this check; see **Composition** below), [Category 24: NodeVM `require.root` Symlink Bypass (Path Check/Use TOCTOU)](nodevm-require.md#attack-category-24-nodevm-requireroot-symlink-bypass-path-checkuse-toctou) (the `realpath()` boundary this check delegates to first)
 
@@ -775,6 +781,8 @@ Neither weakens the other: Category 45's rejection is a `return undefined` that 
 - **`transitive: true` is unaffected, by design.** That option sets `mod.allowTransitive`, which short-circuits `isPathAllowedForModule` *before* the prefix check, so an allowlisted package may still load sibling directories. This is what the option means — npm flattens `node_modules`, so a genuine transitive dependency *is* a sibling — and it is unchanged before and after this fix (verified against the pre-fix control). The advisory's configuration, and the only one this fix alters, is `transitive: false`.
 - **The `this.externals` regex fallback is unchanged** and remains the authorization record for paths the resolver has already approved; this fix does not narrow it. A path appended there by Category 45's route stays allowed by design.
 
+Re-verified 2026-09-02 on Node v26.7.0.
+
 ---
 
 ## Attack Category 47: Sandbox Rebuilt an Unrestricted NodeVM by Requiring vm2 From Disk; Shipped CLI Ran Untrusted Scripts With No Effective Sandbox Boundary
@@ -807,7 +815,7 @@ Verified end-to-end: under the shipped CLI, the target script cannot reach host 
 Two changes land alongside the CLI fix in `lib/resolver-compat.js`. The first closes GHSA-j3hm-6rg5-mchv; the second is a migration aid for the accepted residual documented below:
 
 1. **Sandbox `require()` of vm2 itself is denied — this is the GHSA-j3hm-6rg5-mchv fix.** `isVm2SelfRequire`, consulted at the top of `CustomResolver.isPathAllowed` (inherited by `LegacyResolver`), blocks vm2's importable surface — its `lib/` directory and its package main entry — matched by realpath so a symlinked candidate cannot dodge the boundary. This closes the reported mechanism: `require('vm2')` → real `VM`/`NodeVM` classes → nested *unrestricted* sandbox running `child_process`, which defeated the guarantee `nesting: false` is supposed to provide. Scoped to `lib/` + the main entry rather than the whole package root, because in the source tree that root also holds fixtures (`test/node_modules/*`) an embedder's `require.root` may legitimately point at. Legitimate `nesting: true` is unaffected — it uses the builtin-override mechanism, not an external file require.
-2. **A one-time `console.warn`** is emitted when `require.external` is truthy, `require.root` is unset, and the context is host. It steers embedders toward `require.root` / `context: 'sandbox'` without breaking existing configurations. A construction-time *throw* was deliberately **not** used: it would reverse the shipped [Category 32](nodevm-require.md#attack-category-25-nodevm-nesting-configuration-trap-nesting_override-only-resolver) / GHSA-cp6g-6699-wx9c invariant that construction does not throw when `root` is unset.
+2. **A one-time `console.warn`** is emitted when `require.external` is truthy, `require.root` is unset, and the context is host. It steers embedders toward `require.root` / `context: 'sandbox'` without breaking existing configurations. A construction-time *throw* was deliberately **not** used: it would reverse the shipped [Category 25](nodevm-require.md#attack-category-25-nodevm-nesting-configuration-trap-nesting_override-only-resolver) / GHSA-cp6g-6699-wx9c invariant that construction does not throw when `root` is unset.
 
 ### Accepted Residual — `require.external` Without `require.root` (by design; warn-only until the next major)
 
@@ -823,6 +831,8 @@ What GHSA-j3hm-6rg5-mchv reported is narrower, and is fixed: sandboxed code coul
 
 Embedders wanting the boundary today should set `require.root`, `context: 'sandbox'`, or both.
 
+Re-verified 2026-09-02 on Node v26.7.0: `new NodeVM({require: {external: true}})` still host-loads an arbitrary absolute path and emits the one-time warning, while `require('vm2')` — bare, package root, `index.js`, `lib/main.js` and `lib/nodevm.js` — is denied under a `require.root` that contains vm2 itself.
+
 ### Detection Rules
 
 - `NodeVM.file(...)` / `new NodeVM(...)` with `require.external` truthy and no `require.root` — in particular any shipped tool or CLI wrapper.
@@ -833,15 +843,15 @@ Embedders wanting the boundary today should set `require.root`, `context: 'sandb
 
 - **Transitive re-export** — an allowed host-context module under `root` that itself `require('vm2')` would hand the classes back to the sandbox. This is the inherent "external + `context: 'host'` runs host code" property; the self-require block covers only the *direct* sandbox path.
 - **Hardlink to vm2 under `root`** — `realpath` does not resolve hardlinks, so a hardlink to `lib/main.js` placed under `root` would not match the boundary. Creating it requires filesystem control, outside the sandbox-JS threat model.
-- **Every other path under the open `require.external`-without-`root` primitive** — explicitly *not* covered; see the Status section above.
+- **Every other path under the open `require.external`-without-`root` primitive** — explicitly *not* covered; see the **Accepted Residual** section above.
 
 ---
 
 ## Attack Category 52: Host `util` Members Auto-Forwarded to the Sandbox (`util.getCallSites` Host Call-Stack Leak)
 
-**Advisories**: GHSA-v27g-jcqj-v8rw
+**Advisories**: GHSA-r273-hxvj-fxhp
 
-**Tests**: test/ghsa/GHSA-v27g-jcqj-v8rw/
+**Tests**: test/ghsa/GHSA-r273-hxvj-fxhp/
 
 **Uses**: [Category 48: Host Filesystem Path Leak via Host-Realm Error Stack](error-sanitization.md#attack-category-48-host-filesystem-path-leak-via-host-realm-error-stack)
 

@@ -12,7 +12,7 @@ Categories in this file: [1](host-reference-primitives.md#attack-category-1-cons
 
 **Advisories**: none
 
-**Tests**: none linked
+**Tests**: test/vm.js ("various attacks #1"), test/vm.js ("various attacks #2"), test/vm.js ("constructor arbitrary code attack")
 
 ### Description
 
@@ -66,7 +66,7 @@ The bridge's `get` trap intercepts `.constructor` access on proxied objects and 
 
 **Advisories**: none
 
-**Tests**: none linked
+**Tests**: test/vm.js ("proxy trap via Object.prototype attack"), test/vm.js ("__defineGetter__ / __defineSetter__ attack"), test/vm.js ("__lookupGetter__ / __lookupSetter__ attack"), test/vm.js ("Object.create attack"), test/vm.js ("setPrototypeOf on sandbox-local objects")
 
 ### Description
 
@@ -120,11 +120,11 @@ The bridge uses null-prototype objects (`{__proto__: null}`) for all internal de
 
 **Advisories**: none
 
-**Tests**: none linked
+**Tests**: test/vm.js ("[Symbol.species] attack"), test/vm.js ("Symbol.hasInstance attack"), test/vm.js ("Symbol.hasInstance override to bypass resetPromiseSpecies"), test/vm.js ("Symbol.species getter TOCTOU attack via Promise"), test/vm.js ("Object.defineProperty override attack via Promise species"), test/vm.js ("symbol")
 
 ### Description
 
-JavaScript Symbols provide special protocol hooks (`Symbol.species`, `Symbol.hasInstance`, `Symbol.iterator`, etc.) that can override fundamental behaviors. Attackers use these to bypass type checks or redirect object construction. See also [Category 10: Array Species Self-Return](host-reference-primitives.md#attack-category-18-array-species-self-return-via-constructor-manipulation) for a concrete exploitation of `Symbol.species`.
+JavaScript Symbols provide special protocol hooks (`Symbol.species`, `Symbol.hasInstance`, `Symbol.iterator`, etc.) that can override fundamental behaviors. Attackers use these to bypass type checks or redirect object construction. See also [Category 18: Array Species Self-Return](host-reference-primitives.md#attack-category-18-array-species-self-return-via-constructor-manipulation) for a concrete exploitation of `Symbol.species`.
 
 ### Attack Flow
 
@@ -183,7 +183,7 @@ error.name = Symbol(); // toString() on Symbol throws TypeError
 
 ### Mitigation
 
-`globalPromise` and `globalPromise.prototype` are frozen in `setup-sandbox.js`, preventing `Symbol.hasInstance` and `Symbol.species` overrides. Promise species is reset unconditionally via `Reflect.defineProperty` (data property, not accessor) before every `.then()`/`.catch()` call, eliminating TOCTOU. For arrays, `neutralizeArraySpecies` sets `constructor = undefined` on host arrays before/after host function calls.
+`globalPromise` and `globalPromise.prototype` are frozen in `setup-sandbox.js`, preventing `Symbol.hasInstance` and `Symbol.species` overrides. Promise species is reset unconditionally via `Reflect.defineProperty` (data property, not accessor) before every `.then()`/`.catch()` call, eliminating TOCTOU. For arrays, `neutralizeArraySpeciesBatch` (via `neutralizeArraySpeciesOn`) sets `constructor = undefined` on host arrays before host function calls and restores the prior descriptor after.
 
 ### Detection Rules
 
@@ -202,7 +202,7 @@ error.name = Symbol(); // toString() on Symbol throws TypeError
 
 **Advisories**: none
 
-**Tests**: none linked
+**Tests**: test/vm.js ("arguments"), test/nodevm.js ("arguments attack"), test/nodevm.js ("builtin module arguments attack")
 
 ### Description
 
@@ -254,7 +254,7 @@ The bridge throws immediately on `.caller` and `.arguments` access.
 
 **Advisories**: GHSA-m5q2-4fm3-vfqp, GHSA-47x8-96vw-5wg6, GHSA-jf8q-945g-9q4c
 
-**Tests**: test/ghsa/GHSA-m5q2-4fm3-vfqp/, test/ghsa/GHSA-47x8-96vw-5wg6/, test/ghsa/GHSA-jf8q-945g-9q4c/
+**Tests**: test/ghsa/GHSA-m5q2-4fm3-vfqp/repro.js, test/ghsa/GHSA-47x8-96vw-5wg6/repro.js, test/ghsa/GHSA-47x8-96vw-5wg6/structural-leak.js, test/ghsa/GHSA-47x8-96vw-5wg6/structural-leak-variants.js, test/ghsa/GHSA-jf8q-945g-9q4c/repro.js, test/vm.js ("Symbol.for dangerous Node.js symbols isolation"), test/vm.js ("Symbol extraction via Object.getOwnPropertySymbols on host objects"), test/vm.js ("Symbol extraction via spread operator on host objects")
 
 ### Description
 
@@ -352,9 +352,9 @@ Multi-layer defense. **Sandbox side** (`setup-sandbox.js`): overrides `Symbol.fo
 
 **`nodejs.` prefix denial at the source (GHSA-m5q2-4fm3-vfqp)**: the `Symbol.for` override originally allow-listed only `nodejs.util.inspect.custom` and `nodejs.rejection`, leaving seven other Node-internal `nodejs.*` keys live (`nodejs.util.promisify.custom`, the four stream brand symbols, the two webstream symbols). The override now intercepts the entire `nodejs.` namespace — any key starting with `nodejs.` is mapped to a sandbox-local symbol — so the canonical `Symbol.for(...)` extraction path cannot produce a real cross-realm symbol regardless of which internal feature the attacker targets. A keyed cache preserves `Symbol.for(k) === Symbol.for(k)` identity inside the sandbox for the same key. The companion read-side filter (`isDangerousSymbol` in `setup-sandbox.js`, `isDangerousCrossRealmSymbol` in `bridge.js`) was extended with the seven additional symbols so identity checks against host-extracted symbols match the same set; new entries to either side must be mirrored to keep the source-deny and identity-filter layers consistent.
 
-**Bridge write-trap symbol guard (GHSA-m5q2-4fm3-vfqp)**: the read-direction filter prevents the sandbox from surfacing dangerous symbols, but the write traps (`set`, `defineProperty`, `deleteProperty`) historically forwarded the key straight through to `otherReflect*` without inspecting it. If any future bypass surfaces a dangerous symbol back inside the sandbox (or a host-side embedder hands one in via a path that bypasses the per-symbol filter), the unguarded write traps would let it land as a key on any non-protected host object — turning the leak into a host-side hook installation. Each of the three write traps now checks `isDangerousCrossRealmSymbol(key)` when `!isHost` and throws `VMError(OPNA)`, mirroring the read-side filter. Symmetric coverage across read and write makes "obtaining the symbol" no longer enough to weaponize it; the attacker would also need a path that bypasses both layers simultaneously.
+**Bridge write-trap symbol guard (GHSA-m5q2-4fm3-vfqp)**: the read-direction filter prevents the sandbox from surfacing dangerous symbols, but the write traps (`set`, `defineProperty`, `deleteProperty`) would otherwise forward the key straight through to `otherReflect*` without inspecting it. If any future bypass surfaces a dangerous symbol back inside the sandbox (or a host-side embedder hands one in via a path that bypasses the per-symbol filter), the unguarded write traps would let it land as a key on any non-protected host object — turning the leak into a host-side hook installation. Each of the three write traps now checks `isDangerousCrossRealmSymbol(key)` when `!isHost` and throws `VMError(OPNA)`, mirroring the read-side filter. Symmetric coverage across read and write makes "obtaining the symbol" no longer enough to weaponize it; the attacker would also need a path that bypasses both layers simultaneously.
 
-**Stream state-symbol coverage (GHSA-jf8q-945g-9q4c)**: the m5q2 fix enumerated nine dangerous `nodejs.*` symbols but missed the two stream *state* symbols `nodejs.stream.disturbed` and `nodejs.stream.errored`. Unlike the brand symbols (which are duck-typing booleans read by `Stream.is{Readable,Writable}`), these are accessor symbols installed on `ReadableStream.prototype` whose getters return the stream's consumed / errored state, and Node's `stream.Readable.isDisturbed(s)` / `isErrored(s)` read them **directly off the raw object** (`stream[kIsDisturbed] ?? ...`). Because the accessor is `configurable` with no setter, sandbox code that obtains the real symbol — by extracting it from a host `ReadableStream.prototype` exposed via `vm.sandbox` (`Object.getOwnPropertySymbols(proto)`), the [Category 8 / Category 20](host-reference-primitives.md#attack-category-8-cross-realm-symbol-extraction-from-host-objects) prototype-walk path — and then `Object.defineProperty(hostStream, sym, {value:false})` shadows the getter with an own data property, flipping a fully consumed stream's `isDisturbed` from `true` back to `false` (and similarly clearing `isErrored`). This lets sandbox code lie to host code that gates on "has this stream already been read?" — e.g. re-serving or re-piping a stream a host guard believed was spent. The two symbols were the *only* member of the `nodejs.stream.*` family absent from `realDangerousSymbols` (setup-sandbox.js) and `isDangerousCrossRealmSymbol` (bridge.js). Rather than only add the two by identity — which would leave the list stale again the next time Node adds a `nodejs.*` symbol (this report is itself the second such gap, after GHSA-m5q2) — the fix **generalizes both the extraction filter and the write-trap guard to a namespace check**: any *registered* symbol whose `Symbol.keyFor(sym)` is in the reserved `nodejs.` namespace is dangerous, mirroring the `Symbol.for` source-side override that was already namespace-based. `isDangerousSymbol` (setup-sandbox.js) and `isDangerousCrossRealmSymbol` (bridge.js) keep the explicit list as a fast path / regression documentation and add the namespace catch-all (using a pristine `Symbol.keyFor` captured at bootstrap); `getOwnPropertyDescriptors` scrubbing likewise drops any `nodejs.`-keyed slot instead of a fixed list. This is over-block-safe by construction: `Symbol.keyFor` returns a string only for registered symbols, so well-known symbols (`Symbol.iterator`, …) and sandbox-local `Symbol('nodejs.*')` surrogates are unaffected, and a benign registered symbol (`Symbol.for('myapp.x')`) still crosses. A regression test asserts a *novel* `nodejs.*` symbol not in the explicit list is filtered too. (The `Symbol.for('nodejs.stream.disturbed')` reconstruction path was already denied by the m5q2 whole-`nodejs.`-namespace override.) The sound oracle for any regression is host-side `stream.Readable.isDisturbed(rs)` staying `true` after the sandbox runs.
+**Stream state-symbol coverage (GHSA-jf8q-945g-9q4c)**: the m5q2 fix enumerated nine dangerous `nodejs.*` symbols but missed the two stream *state* symbols `nodejs.stream.disturbed` and `nodejs.stream.errored`. Unlike the brand symbols (which are duck-typing booleans read by `Stream.is{Readable,Writable}`), these are accessor symbols installed on `ReadableStream.prototype` whose getters return the stream's consumed / errored state, and Node's `stream.Readable.isDisturbed(s)` / `isErrored(s)` read them **directly off the raw object** (`stream[kIsDisturbed] ?? ...`). Because the accessor is `configurable` with no setter, sandbox code that obtains the real symbol — by extracting it from a host `ReadableStream.prototype` exposed via `vm.sandbox` (`Object.getOwnPropertySymbols(proto)`), the [Category 8](host-reference-primitives.md#attack-category-8-cross-realm-symbol-extraction-from-host-objects) prototype-walk path — and then `Object.defineProperty(hostStream, sym, {value:false})` shadows the getter with an own data property, flipping a fully consumed stream's `isDisturbed` from `true` back to `false` (and similarly clearing `isErrored`). This lets sandbox code lie to host code that gates on "has this stream already been read?" — e.g. re-serving or re-piping a stream a host guard believed was spent. The two symbols were the *only* member of the `nodejs.stream.*` family absent from `realDangerousSymbols` (setup-sandbox.js) and `isDangerousCrossRealmSymbol` (bridge.js). Rather than only add the two by identity — which would leave the list stale again the next time Node adds a `nodejs.*` symbol (this report is itself the second such gap, after GHSA-m5q2) — the fix **generalizes both the extraction filter and the write-trap guard to a namespace check**: any *registered* symbol whose `Symbol.keyFor(sym)` is in the reserved `nodejs.` namespace is dangerous, mirroring the `Symbol.for` source-side override that was already namespace-based. `isDangerousSymbol` (setup-sandbox.js) and `isDangerousCrossRealmSymbol` (bridge.js) keep the explicit list as a fast path / regression documentation and add the namespace catch-all (using a pristine `Symbol.keyFor` captured at bootstrap); `getOwnPropertyDescriptors` scrubbing likewise drops any `nodejs.`-keyed slot instead of a fixed list. This is over-block-safe by construction: `Symbol.keyFor` returns a string only for registered symbols, so well-known symbols (`Symbol.iterator`, …) and sandbox-local `Symbol('nodejs.*')` surrogates are unaffected, and a benign registered symbol (`Symbol.for('myapp.x')`) still crosses. A regression test asserts a *novel* `nodejs.*` symbol not in the explicit list is filtered too. (The `Symbol.for('nodejs.stream.disturbed')` reconstruction path was already denied by the m5q2 whole-`nodejs.`-namespace override.) The sound oracle for any regression is host-side `stream.Readable.isDisturbed(rs)` staying `true` after the sandbox runs.
 
 ### Detection Rules
 
@@ -375,7 +375,7 @@ Multi-layer defense. **Sandbox side** (`setup-sandbox.js`): overrides `Symbol.fo
 
 **Advisories**: none
 
-**Tests**: none linked
+**Tests**: test/vm.js ("various attacks #1"), test/vm.js ("various attacks #2"), test/vm.js ("Object.create attack"), test/vm.js ("buffer attack"), test/vm.js ("constructor arbitrary code attack")
 
 ### Description
 
@@ -440,7 +440,7 @@ The bridge caches references at init time (`Reflect.apply`, `Reflect.construct`,
 
 **Advisories**: none
 
-**Tests**: none linked
+**Tests**: test/vm.js ("getOwnPropertyDescriptor Function constructor bypass attack"), test/vm.js ("getOwnPropertyDescriptor Function extraction via Object.entries attack"), test/vm.js ("getOwnPropertyDescriptor Function extraction via nested entries attack"), test/vm.js ("getOwnPropertyDescriptors (plural) Function extraction attack"), test/vm.js ("getOwnPropertyDescriptor on getOwnPropertyDescriptors result (nested descriptor attack)"), test/vm.js ("Function constructor extraction via Object.entries on getOwnPropertyDescriptors result")
 
 ### Description
 
@@ -494,9 +494,9 @@ Objects containing dangerous constructors are proxied with `preventUnwrap` -- th
 
 ## Attack Category 18: Array Species Self-Return via Constructor Manipulation
 
-**Advisories**: none
+**Advisories**: GHSA-grj5-jjm8-h35p
 
-**Tests**: none linked
+**Tests**: test/ghsa/GHSA-grj5-jjm8-h35p/ (repro.js, descriptor-chain-history.js), test/vm.js ("Array species self-return attack via constructor manipulation"), test/vm.js ("Array constructor write via defineProperty is intercepted"), test/vm.js ("neutralizeArraySpecies prevents species attack in apply trap"), test/vm.js ("species defense still blocks attacks via frozen host arrays (#567 follow-up)")
 
 **Uses**: [Category 3: Symbol-Based Attacks](host-reference-primitives.md#attack-category-3-symbol-based-attacks), [Category 10: Built-in Function Exploitation](host-reference-primitives.md#attack-category-10-built-in-function-exploitation)
 

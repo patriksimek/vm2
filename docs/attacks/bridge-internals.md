@@ -12,7 +12,7 @@ Categories in this file: [6](bridge-internals.md#attack-category-6-proxy-trap-ex
 
 **Advisories**: none
 
-**Tests**: none linked
+**Tests**: test/vm.js ("Proxy::getOwnPropertyDescriptor attack"), test/vm.js ("proxy trap via Object.prototype attack"), test/vm.js ("proxy trap errors"), test/vm.js ("sandbox global Proxy is removed and sealed")
 
 ### Description
 
@@ -88,7 +88,7 @@ The bridge wraps the Proxy constructor to sanitize handler objects. Proxy handle
 
 **Advisories**: GHSA-v37h-5mfm-c47c, GHSA-qcp4-v2jj-fjx8
 
-**Tests**: test/ghsa/GHSA-v37h-5mfm-c47c/, test/ghsa/GHSA-qcp4-v2jj-fjx8/
+**Tests**: test/ghsa/GHSA-v37h-5mfm-c47c/, test/ghsa/GHSA-qcp4-v2jj-fjx8/, test/vm.js ("Buffer.prototype.inspect handler exposure via showProxy attack"), test/vm.js ("doPreventExtensions not accessible via handler exposure through showProxy"), test/vm.js ("getFactory not accessible via handler exposure through showProxy"), test/vm.js ("Handler get() direct call with forged target leaking host Function constructor"), test/vm.js ("inspect with showProxy:true still reveals proxy structure (issue #566)")
 
 ### Description
 
@@ -126,31 +126,31 @@ obj.slice(20, {
     }
 });
 
-// Specific attack via handler.get() with forged target (NOW FIXED)
+// Specific attack via handler.get() with forged target
 // Uses host-side Array.reduce to call handler.get(rawHostFunction, 'constructor')
 // The constructor fallback returns thisReflectGetPrototypeOf(target).constructor
 // = Function.prototype.constructor = raw host Function
 
-// Specific attack via fromOtherWithContext method (NOW FIXED)
+// Specific attack via fromOtherWithContext method
 // handler.fromOtherWithContext({__proto__: null, x: sandboxProxy}).x
 // returns raw host function, bypassing proxy protection
 
-// Specific attack via doPreventExtensions method (NOW FIXED)
+// Specific attack via doPreventExtensions method
 // handler.doPreventExtensions(target, craftedObject, handler)
 // accepted object as a direct parameter, enabling crafted-object injection
 ```
 
-### Why fromOtherWithContext Was Dangerous (NOW FIXED)
+### Why fromOtherWithContext Leaks
 
 The `fromOtherWithContext` method was specifically designed to convert sandbox objects to host objects. When an attacker passed `{__proto__: null, x: sandboxProxy}`, the method returned a host object where `.x` was the **raw host function**, not a wrapped version. The fix moved this to a closure-scoped function, inaccessible from the handler reference.
 
-### Why handler.get() Direct Call Was Dangerous (NOW FIXED)
+### Why handler.get() Direct Call Leaks
 
 The `BaseHandler.prototype.get` method's `constructor` case had a fallback path that used the `target` parameter: `const proto = thisReflectGetPrototypeOf(target); return proto.constructor;`. When called directly (bypassing the proxy mechanism) with a raw host function as `target`, this returned `Function.prototype.constructor` -- the raw host `Function`. The attack used `Array.reduce` with `apply.bind(apply)` as the reducer to chain: `handler.get.call(handler, rawHostFunction, 'constructor')`.
 
 The fix adds `isThisDangerousFunctionConstructor` check on the return value, blocking Function, AsyncFunction, GeneratorFunction, and AsyncGeneratorFunction. The `__proto__` fallback was also hardened to use `otherReflectGetPrototypeOf(object)` instead of `target`.
 
-### Why Handler Class Reconstruction Was Dangerous (NOW FIXED, GHSA-v37h-5mfm-c47c)
+### Why Handler Class Reconstruction Leaks (GHSA-v37h-5mfm-c47c)
 
 After the closure-scoped WeakMap migration (`a6cd917`), handler instances no longer expose `.object`/`.factory` as instance properties, so reading properties off a leaked handler yields nothing useful. But the handler *class itself* was still reachable: `handler → Object.getPrototypeOf(handler) → BaseHandler.prototype → .constructor → BaseHandler`. Calling `new BaseHandler(attackerObject)` constructed a legitimate handler wrapping attacker-controlled state, which the `.set` trap would then use to plant a host-realm proxy of that state into attacker-visible memory -- giving the attacker a cross-realm read/write channel. `Reflect.construct`, custom `newTarget`, `class extends`, `Object.setPrototypeOf({}, BaseHandler.prototype)`, and `pp.set.call(forgedThis, ...)` all achieved variants of the same primitive.
 
@@ -186,7 +186,7 @@ These defenses are independent: even if one fails (e.g., future WeakMap tamperin
 
 **Advisories**: none
 
-**Tests**: none linked
+**Tests**: test/vm.js ("Monkey patching attack"), test/vm.js ("Function.prototype.call attack via Promise"), test/vm.js ("Object.defineProperty override attack via Promise species")
 
 ### Description
 
@@ -238,7 +238,7 @@ The bridge caches all critical methods (`Reflect.apply`, `Reflect.construct`, `R
 
 **Advisories**: none
 
-**Tests**: none linked
+**Tests**: test/vm.js ("proxy trap via Object.prototype attack"), test/vm.js ("__lookupGetter__ / __lookupSetter__ attack")
 
 ### Description
 
@@ -282,7 +282,7 @@ Proxy handlers use null-prototype objects (`{__proto__: null}`), preventing `Obj
 
 **Advisories**: GHSA-wp5r-2gw5-m7q7, GHSA-2cm2-m3w5-gp2f
 
-**Tests**: test/ghsa/GHSA-wp5r-2gw5-m7q7/, test/ghsa/GHSA-2cm2-m3w5-gp2f/
+**Tests**: test/ghsa/GHSA-wp5r-2gw5-m7q7/, test/ghsa/GHSA-2cm2-m3w5-gp2f/, test/vm.js ("internal state attack"), test/vm.js ("transformer attack")
 
 **Uses**: [Category 12](transformer-and-modules.md#attack-category-12-code-transformation-bypass) (the transformer is a syntactic gate; computed keys are invisible to it).
 
@@ -368,7 +368,7 @@ The leading `let ${INTERNAL_STATE_NAME}` lands the binding in the context's **`[
 
 **Advisories**: GHSA-9qj6-qjgg-37qq, GHSA-q3fm-4wcw-g57x, GHSA-grj5-jjm8-h35p
 
-**Tests**: test/ghsa/GHSA-9qj6-qjgg-37qq/, test/ghsa/GHSA-q3fm-4wcw-g57x/, test/ghsa/GHSA-grj5-jjm8-h35p/
+**Tests**: test/ghsa/GHSA-9qj6-qjgg-37qq/, test/ghsa/GHSA-q3fm-4wcw-g57x/, test/ghsa/GHSA-grj5-jjm8-h35p/, test/vm.js ("neutralizeArraySpecies prevents species attack in apply trap"), test/vm.js ("Array constructor write via defineProperty is intercepted")
 
 **Uses**: [Category 2: Prototype Chain Manipulation](host-reference-primitives.md#attack-category-2-prototype-chain-manipulation), [Category 4: Error Object Exploitation](error-sanitization.md#attack-category-4-error-object-exploitation), [Category 18: Array Species Self-Return via Constructor Manipulation](host-reference-primitives.md#attack-category-18-array-species-self-return-via-constructor-manipulation)
 
@@ -482,9 +482,9 @@ Together these fixes restore [Defense Invariant #11: Bridge-Internal Containers 
 
 ## Attack Category 44: `vm.freeze()` Read-Only Bypass via Accessor Setter Leak
 
-**Advisories**: none
+**Advisories**: GHSA-633r-hq9m-c4ff
 
-**Tests**: none linked
+**Tests**: test/ghsa/GHSA-633r-hq9m-c4ff/, test/vm.js ("with freeze"), test/vm.js ("ReadOnly proxy reports non-extensible without throwing (#567)"), test/vm.js ("species defense still blocks attacks via frozen host arrays (#567 follow-up)")
 
 **Uses**: [Category 6: Proxy Trap Exploitation](bridge-internals.md#attack-category-6-proxy-trap-exploitation), [Category 15: Property Descriptor Value Extraction](host-reference-primitives.md#attack-category-15-property-descriptor-value-extraction)
 

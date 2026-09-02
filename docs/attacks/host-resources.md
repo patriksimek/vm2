@@ -59,44 +59,65 @@ The fix preserves the native semantics for non-callable executors (`new Promise(
 ### Detection Rules
 
 - **`new Promise((r, j) => { ... })`** with executor body that triggers V8-internal throws (Symbol-named errors, stack-trace formatting issues, recursive proxy traps).
-- **`allowAsync: false`** combined with any Promise construction — historically *more* dangerous because `.catch` was blocked, guaranteeing unhandled. Now both modes are equally safe.
+- **`allowAsync: false`** combined with any Promise construction — this mode blocks the sandbox-side `.catch`, which would otherwise guarantee an unhandled rejection; `localPromise`'s swallow tail consumes the rejection regardless, so both modes are equally safe.
 - Hostile patterns: `new Promise(() => { throw hostError; })`, `Promise.reject(hostError)` without `.catch()`, async function bodies that throw without try/catch.
 
 ### Known Residual — async function / async generator / `await using`
 
-**Status: not yet fixed in v3.10.6. Confirmed exploitable on Node 15+.** Three working ~50–80 byte sandbox payloads terminate the host process:
+**Status: open as of v3.12.0 on Node v26.7.0, under the default `allowAsync: true`, for any async function or async generator whose body rejects.** Variants 1b, 1c and 2 below each terminate the host process: `run()` returns normally, then `unhandledRejection` fires with a sandbox-realm `Error`. Under `allowAsync: false` none of the async payloads run — the transformer flags async syntax (`hasAsync`) and `checkAsync` throws `VMError('Async not available')` before execution. The two `await using` payloads are inert in every mode, but for two different reasons. Payload 3 is rejected by **V8**, which does not allow top-level `await` in a script (`at new Script (node:vm:118:7)`); the transformer never even parses it, because the keyword fast path returns any source without `catch`/`import`/`async`/`with` unchanged. Payload 3b is the one the parser pin holds shut: it contains `async`, so acorn at the pinned `ecmaVersion: 2022` parses it and fails on the `using` declaration, while V8 and acorn at `latest` both accept it — so raising that parser version puts **3b** back in scope, not 3. Variant 1 as originally written does not reject at all: reading `.stack` on a Symbol-named error does not throw inside the sandbox, so the body completes normally.
 
 ```javascript
-// 1. async function with Symbol-named Error.stack
-new VM({ allowAsync: false }).run(`(async function(){
+// 1. async function with Symbol-named Error.stack — does not reject on Node v26.7.0
+new VM({ allowAsync: true }).run(`(async function(){
   var e = new Error(); e.name = Symbol(); e.stack;
 })();`);
 
-// 2. async generator throw on .next()
-new VM({ allowAsync: false }).run(`(async function*(){
+// 1b. OPEN — any async function body that rejects kills the host
+new VM({ allowAsync: true }).run(`(async function(){
+  throw new Error('boom');
+})();`);
+
+// 1c. OPEN — same, carrying the Symbol-named error as the rejection reason
+new VM({ allowAsync: true }).run(`(async function(){
+  var e = new Error(); e.name = Symbol(); e.stack; throw e;
+})();`);
+
+// 2. OPEN — async generator throw on .next()
+new VM({ allowAsync: true }).run(`(async function*(){
   throw new Error('boom');
 })().next();`);
 
-// 3. AsyncDisposableStack with throwing Symbol.asyncDispose
-new VM({ allowAsync: false }).run(`
+// 3. AsyncDisposableStack with throwing Symbol.asyncDispose — SyntaxError from
+//    V8: top-level `await` is not allowed in a script. The transformer never
+//    parses this source at all (no catch/import/async/with keyword => fast path).
+new VM({ allowAsync: true }).run(`
   await using x = { [Symbol.asyncDispose]() { throw Symbol() } };
 `);
+
+// 3b. the same inside an async function, so top-level await is not the blocker.
+//     V8 accepts this; the SyntaxError comes from the transformer's acorn pin
+//     (ecmaVersion 2022), which cannot parse the `using` declaration.
+new VM({ allowAsync: true }).run(`(async function(){
+  await using x = { [Symbol.asyncDispose]() { throw Symbol() } };
+})();`);
 ```
 
-V8 creates the rejection promises for `async function`, `async function*`, and `await using` machinery **via the realm's intrinsic Promise (`globalPromise`)** — *not* via `localPromise`. The `localPromise extends globalPromise` constructor and its swallow tail are therefore bypassed entirely. Closing this from inside vm2 requires either (a) a process-level `unhandledRejection` handler scoped to sandbox-realm errors, or (b) rebinding the realm's `%Promise%` intrinsic. Both approaches change observable host behaviour and are deferred past v3.10.6.
+V8 creates the rejection promises for `async function`, `async function*`, and `await using` machinery **via the realm's intrinsic Promise (`globalPromise`)** — *not* via `localPromise`. The `localPromise extends globalPromise` constructor and its swallow tail are therefore bypassed entirely. Closing this from inside vm2 requires either (a) a process-level `unhandledRejection` handler scoped to sandbox-realm errors, or (b) rebinding the realm's `%Promise%` intrinsic. Both approaches change observable host behaviour and are still deferred as of v3.12.0.
 
 **Recommended mitigation for embedders**: install a host-side `process.on('unhandledRejection', ...)` handler that filters or swallows sandbox-originated rejections. See README "Hardening recommendations" for code patterns.
 
-A `it.skip`-marked block in `test/ghsa/GHSA-hw58-p9xv-2mjh/repro.js` pins all three variants so any future fix is testable and so the gap stays visible to maintainers.
+An `it.skip`-marked block in `test/ghsa/GHSA-hw58-p9xv-2mjh/repro.js` pins the three originally-reported variants (1, 2, 3) so the gap stays visible to maintainers. Those pins are stale on two counts: each specifies `allowAsync: false`, under which no payload runs, and of the three only the async-generator variant still reproduces — the async-function pin uses the non-rejecting form 1 rather than 1b/1c, and the `await using` pin (payload 3) never reaches the sandbox because V8 rejects top-level `await` in a script. They need rewriting against the forms above, as forked-child tests, before any of them can be un-skipped.
+
+Re-verified 2026-09-02 on Node v26.7.0.
 
 ### Considered Attack Surfaces
 
 - **`Promise.reject(hostError)` directly**: routes through `localPromise` (because `Promise.reject` delegates to `new this(...)`) and gains the swallow tail. Covered.
-- **Silent-failure trade-off**: sandbox developers can no longer use Node's host-side `unhandledRejection` log to surface their own debug rejections. They must explicitly attach `.catch()` for visibility. Acceptable trade-off given the DoS severity; documented for users.
+- **Silent-failure trade-off**: sandbox developers cannot use Node's host-side `unhandledRejection` log to surface their own debug rejections. They must explicitly attach `.catch()` for visibility. Acceptable trade-off given the DoS severity; documented for users.
 
 ### Sibling — ignored host-promise rejection (host→sandbox direction) — GHSA-gjq8-xm47-88rc
 
-Category 22 and its parent GHSA-hw58 close the **sandbox→host** direction: a promise *constructed in the sandbox* that rejects with no handler. The mirror-image direction was still open. When an embedder-exposed host function — or a host builtin such as `events.once(emitter, name)` — returns a **host-realm** rejected `Promise`, the bridge `apply` trap wraps it and hands the sandbox a proxied promise, but the **underlying host promise** has no rejection reaction of its own. If sandbox code merely calls the function and ignores the result, Node's default `unhandledRejection` policy (Node 15+) sees the raw host promise reject with no handler and **terminates the host process**:
+Category 22 and its parent GHSA-hw58 close the **sandbox→host** direction: a promise *constructed in the sandbox* that rejects with no handler. Before GHSA-gjq8-xm47-88rc the mirror-image direction was open; `markHostPromiseHandled` now closes it. When an embedder-exposed host function — or a host builtin such as `events.once(emitter, name)` — returns a **host-realm** rejected `Promise`, the bridge `apply` trap wraps it and hands the sandbox a proxied promise, but the **underlying host promise** has no rejection reaction of its own. If sandbox code merely calls the function and ignores the result, Node's default `unhandledRejection` policy (Node 15+) sees the raw host promise reject with no handler and **terminates the host process**:
 
 ```js
 const vm = new VM({ sandbox: { hostReject: () => Promise.reject(new Error('boom')) } });
@@ -189,7 +210,7 @@ new VM({ bufferAllocLimit: 32*1024*1024 }).run(
 
 ### Considered Attack Surfaces
 
-- **`new Uint8Array(N)`, `new ArrayBuffer(N)`, `new SharedArrayBuffer(N)` and other typed-array constructors**: same primitive class — synchronous native allocation by attacker-controlled size. **Now capped** — see [Category 36](host-resources.md#attack-category-36-bufferalloclimit-bypass-via-arraybuffer--typedarray--webassemblymemory) (GHSA-v836-6xw4-9cx3), which wraps every `ArrayBuffer` / `SharedArrayBuffer` / TypedArray / `WebAssembly.Memory` constructor with the same `bufferAllocLimit` cap when a finite limit is configured.
+- **`new Uint8Array(N)`, `new ArrayBuffer(N)`, `new SharedArrayBuffer(N)` and other typed-array constructors**: same primitive class — synchronous native allocation by attacker-controlled size. [Category 36](host-resources.md#attack-category-36-bufferalloclimit-bypass-via-arraybuffer--typedarray--webassemblymemory) (GHSA-v836-6xw4-9cx3) caps these: it wraps every `ArrayBuffer` / `SharedArrayBuffer` / TypedArray / `WebAssembly.Memory` constructor with the same `bufferAllocLimit` cap when a finite limit is configured.
 - **`String.prototype.repeat(N)`**: produces a sandbox-realm string of size `len * N` bytes, similar primitive. Not capped here.
 - **Repeated allocations under the cap** (e.g., 32 × `Buffer.alloc(32 MiB)`): an aggregate per-run budget would close this but would require tracking allocation totals across the bridge. Out of scope for the canonical advisory.
 - **WebAssembly `memory.grow`**: governed by wasm `maximum` declaration at instantiation; not currently wrapped.
@@ -202,7 +223,7 @@ The fix closes the canonical reported DoS (Buffer.alloc family + concat + from +
 
 **Advisories**: GHSA-6785-pvv7-mvg7, GHSA-v836-6xw4-9cx3
 
-**Tests**: test/ghsa/GHSA-6785-pvv7-mvg7/, test/ghsa/GHSA-v836-6xw4-9cx3/
+**Tests**: test/ghsa/GHSA-6785-pvv7-mvg7/, test/ghsa/GHSA-v836-6xw4-9cx3/ (`GHSA-v836-6xw4-9cx3/repro.js` — 40 cases: per-constructor caps, constructor-walk recovery, resizable/growable, WebAssembly.Memory, coercion variants (string / `valueOf` / `Symbol.toPrimitive` / array-like), TOCTOU canonicalization, the documented residual, NodeVM forwarding, and non-breaking default behaviour)
 
 **Supersedes**: completes the "tracked for follow-up" residual of [Category 23: Unbounded `Buffer.alloc(N)` — Host Heap DoS](host-resources.md#attack-category-23-unbounded-bufferallocn--host-heap-dos).
 
@@ -250,10 +271,6 @@ Default `bufferAllocLimit: Infinity` leaves the native intrinsics **completely u
 ### Known Residual
 
 A non-iterable **array-like whose `length` is a toggling accessor** (`new Uint8Array({get length(){ return t++ ? BIG : 0 }})`) can still over-allocate: V8 reads an array-like's `length` itself, and pinning that read would require Proxy-wrapping the source — which would break the legitimate `new Uint8Array(buffer, offset, length)` view path (a correctness regression). The common data-property `{length: N}` amplifier **is** capped. The identical gap exists in the shipped `Buffer.from({length: N})` cap (Category 23). Accepted and asserted in `test/ghsa/GHSA-v836-6xw4-9cx3/repro.js` so any future change is visible. `String.prototype.repeat(N)` and aggregate per-run budgets remain out of scope, as in Category 23.
-
-### Tests
-
-`test/ghsa/GHSA-v836-6xw4-9cx3/repro.js` — 40 cases: per-constructor caps, constructor-walk recovery, resizable/growable, WebAssembly.Memory, coercion variants (string / `valueOf` / `Symbol.toPrimitive` / array-like), TOCTOU canonicalization, the documented residual, NodeVM forwarding, and non-breaking default behaviour.
 
 ---
 
@@ -315,7 +332,7 @@ new VM().run(`
 
 - `depoolBuffer(buf)` returns `buf` when it already owns an exact-size backing store, otherwise copies it into a standalone `LocalBuffer.alloc(n)` (non-pooled, zero-filled, byteOffset 0) via the raw host `Buffer.prototype.copy` primitive.
 - Applied at every sandbox-facing pooling factory: `bufferFrom` (the non-ArrayBuffer overloads), `concat`, `copyBytesFrom`, a new `bufferOf` wrapper, and the deprecated `Buffer(...)` / `new Buffer(...)` call forms (`BufferHandler` now routes its non-numeric path through `bufferFrom`).
-- The `Buffer.from(arrayBuffer | sharedArrayBuffer, byteOffset, length)` **sharing** overload is preserved (copying it would break the documented shared-memory contract). It is detected by a spoof-proof brand test — `apply`ing the captured `ArrayBuffer.prototype`/`SharedArrayBuffer.prototype` `byteLength` getter, whose internal-slot check a sandbox cannot fake. This is safe because, once small allocations no longer pool, the only ArrayBuffer a sandbox can pass is one it already owns, and every sandbox buffer's `.buffer` is now exact-size — so the shared view can only ever span the sandbox's own bytes.
+- The `Buffer.from(arrayBuffer | sharedArrayBuffer, byteOffset, length)` **sharing** overload is preserved (copying it would break the documented shared-memory contract). It is detected by a spoof-proof brand test — `apply`ing the captured `ArrayBuffer.prototype`/`SharedArrayBuffer.prototype` `byteLength` getter, whose internal-slot check a sandbox cannot fake. This is safe because small allocations do not pool, so the only ArrayBuffer a sandbox can pass is one it already owns, and every sandbox buffer's `.buffer` is now exact-size — so the shared view can only ever span the sandbox's own bytes.
 
 Views derived from a depooled buffer (`slice`, `subarray`, `map`, `filter`, species-constructed results) are safe: they either view the parent's now-exact-size, sandbox-owned backing store, or are freshly constructed through the Category-36-capped TypedArray constructors. No copy is needed for them.
 

@@ -12,7 +12,7 @@ Categories in this file: [4](error-sanitization.md#attack-category-4-error-objec
 
 **Advisories**: none
 
-**Tests**: none linked
+**Tests**: test/vm.js ("Error.prepareStackTrace attack"), test/vm.js ("Node internal prepareStackTrace attack"), test/vm.js ("transformer attack"), test/vm.js ("Error.prepareStackTrace safe default prevents host fallback"), test/vm.js ("Error.prepareStackTrace safe default handles Symbol names without throwing"), test/vm.js ("Error.prepareStackTrace = undefined does not enable host escape"), test/ghsa/GHSA-v27g-jcqj-v8rw/ (repro.js)
 
 ### Description
 
@@ -75,9 +75,9 @@ V8's `Error.prepareStackTrace` API provides access to CallSite objects that refe
 
 ## Attack Category 16: SuppressedError via Explicit Resource Management
 
-**Advisories**: none
+**Advisories**: GHSA-55hx-c926-fr95, GHSA-35vh-489p-v7cx (dup of GHSA-55hx-c926-fr95)
 
-**Tests**: none linked
+**Tests**: test/ghsa/GHSA-55hx-c926-fr95/ (repro.js, structural-leak.js, structural-leak-variants.js), test/vm.js ("SuppressedError escape via DisposableStack"), test/vm.js ("SuppressedError escape via using declaration"), test/vm.js ("SuppressedError escape via AsyncDisposableStack"), test/vm.js ("SuppressedError escape via async rejection path"), test/vm.js ("SuppressedError escape via deeply nested DisposableStack"), test/vm.js ("Promise.prototype.then/catch callback sanitization bypass")
 
 **Uses**: [Category 4: Error Object Exploitation](error-sanitization.md#attack-category-4-error-object-exploitation), [Category 12: Code Transformation Bypass](transformer-and-modules.md#attack-category-12-code-transformation-bypass)
 
@@ -142,6 +142,10 @@ try {
 }
 ```
 
+- Deeply nested `DisposableStack` chain, so the SuppressedError carrier is produced several disposal frames down: see test/vm.js ("SuppressedError escape via deeply nested DisposableStack").
+- Async rejection path: the SuppressedError is delivered to a `.catch` callback rather than a `catch` clause: see test/vm.js ("SuppressedError escape via async rejection path").
+- Host-realm `Promise` delivery, where the rejection value never passes the sandbox-side `then` / `catch` override: see test/ghsa/GHSA-55hx-c926-fr95/structural-leak.js and structural-leak-variants.js.
+
 ### Why It Works
 
 V8 creates `SuppressedError` instances using the sandbox context's intrinsic constructor during resource disposal. The resulting object is a sandbox object, so `ensureThis` returns it as-is. However, the `.error` and `.suppressed` properties are set by V8's internal code and may contain **host-realm** errors. Since these properties are accessed as regular property reads on a sandbox object (not through a bridge proxy), the host errors are returned without sanitization.
@@ -155,7 +159,7 @@ Note: `Error.cause` (ES2022) is a related concern that **was** assumed safe beca
 Three layers, structurally:
 
 1. **`handleException` recursion**: detects `SuppressedError` / `AggregateError` instances by prototype check and recursively sanitizes `.error` / `.suppressed` / `.errors[]` via `ensureThis`. `SuppressedError` is also added to `errorsList` in `bridge.js`. Cycle detection via WeakMap prevents infinite recursion.
-2. **Sandbox-side `Promise.prototype.then` / `.catch` overrides** route every callback through `handleException` for sandbox-realm promises (lines 199-228 of `setup-sandbox.js`).
+2. **Sandbox-side `Promise.prototype.then` / `.catch` overrides** route every callback through `handleException` for sandbox-realm promises (`wrappedPromiseThen` / `wrappedPromiseCatch` / `wrappedPromiseFinally`, installed on `globalPromise.prototype` via `localReflectDefineProperty` in `setup-sandbox.js`).
 3. **Bridge-level host-Promise interception** (GHSA-55hx supplementary fix): when sandbox code invokes a host-realm `Promise.prototype.then` / `.catch` / `.finally` (for example, via an embedder-exposed `async () => {}` whose returned promise is host-realm), the bridge `apply` trap recognizes the call (identity check against cached `otherGlobalPrototypes.Promise` methods) and wraps each sandbox-supplied callback with a sanitizing closure that pipes its argument through `handleException` (rejection) or `ensureThis` (fulfillment) before the user code runs. This closes the structural class where host machinery (PromiseReactionJob / PromiseResolveThenableJob) schedules sandbox callbacks against raw host rejection values, bypassing the sandbox-side override entirely. Setup is one-shot via `bridge.setHostPromiseSanitizers(handleException, ensureThis)` from `setup-sandbox.js`.
 
 ### Detection Rules
@@ -173,13 +177,13 @@ Three layers, structurally:
 
 **Advisories**: none
 
-**Tests**: none linked
+**Tests**: test/vm.js ("WebAssembly.JSTag escape via wasm exception handling"), test/vm.js ("WebAssembly.JSTag is not accessible in sandbox")
 
 **Uses**: [Category 4: Error Object Exploitation](error-sanitization.md#attack-category-4-error-object-exploitation), [Category 12: Code Transformation Bypass](transformer-and-modules.md#attack-category-12-code-transformation-bypass)
 
 ### Description
 
-`WebAssembly.JSTag` (available since ~Node 23) is a special tag that allows WebAssembly exception handling (`try_table`/`catch`) to catch JavaScript exceptions thrown during imported function calls. Since the transformer only instruments JavaScript `catch` clauses, exceptions caught in WebAssembly completely bypass `handleException()` sanitization.
+`WebAssembly.JSTag` (present on Node 22 and later; absent on Node 20 and earlier) is a special tag that allows WebAssembly exception handling (`try_table`/`catch`) to catch JavaScript exceptions thrown during imported function calls. Since the transformer only instruments JavaScript `catch` clauses, exceptions caught in WebAssembly completely bypass `handleException()` sanitization.
 
 ### Attack Flow
 
@@ -238,9 +242,9 @@ The entire exception sanitization strategy is built on instrumenting JavaScript 
 
 ## Attack Category 38: `Error.cause` Host Reference Leak to Sandbox
 
-**Advisories**: none
+**Advisories**: GHSA-m283-3h24-438v
 
-**Tests**: none linked
+**Tests**: test/ghsa/GHSA-m283-3h24-438v/ (repro.js)
 
 **Uses**: [Category 4: Error Object Exploitation](error-sanitization.md#attack-category-4-error-object-exploitation), [Category 16: SuppressedError via Explicit Resource Management](error-sanitization.md#attack-category-16-suppressederror-via-explicit-resource-management)
 
@@ -390,6 +394,11 @@ const vm = new VM({
 });
 ```
 
+- Arbitrary own property on a host error (`err.detail = process`, `err.originalError = require('child_process')`): see test/ghsa/GHSA-m283-3h24-438v/repro.js.
+- Own-property TOCTOU accessor on a non-spec key: see test/ghsa/GHSA-m283-3h24-438v/repro.js.
+- Prototype-inherited host reference (`Object.setPrototypeOf(err, {leak: process})`), including two levels up, an accessor on the prototype, and a symbol-keyed inherited property: see test/ghsa/GHSA-m283-3h24-438v/repro.js.
+- Lying Proxy carrier that hides its own keys, and an own `isProxy: false` claiming to be sandbox-realm: see test/ghsa/GHSA-m283-3h24-438v/repro.js.
+
 ### Why It Works
 
 The bridge invariant ["No host-realm object reaches sandbox code unwrapped"](../ATTACKS.md#defense-invariants) (Defense Invariant #1) was satisfied — `.cause` returned a bridge proxy. But the related invariant ["All caught exceptions are sanitized"](../ATTACKS.md#defense-invariants) (Defense Invariant #2) and especially #3 (cross-realm error containers are recursively sanitized) had a documented gap: the `handleException` chokepoint only recursed into `SuppressedError.{error,suppressed}` and `AggregateError.errors[]`. `.cause` was the third ES2022 / 2024 error-chain channel and went unaudited.
@@ -452,7 +461,7 @@ The fix restores **[Defense Invariant #3](../ATTACKS.md#defense-invariants)** at
 
 **Advisories**: GHSA-647f-g98j-qq25
 
-**Tests**: test/ghsa/GHSA-647f-g98j-qq25/
+**Tests**: test/ghsa/GHSA-647f-g98j-qq25/ (repro.js)
 
 **Uses**: [Category 38: `Error.cause` Host Reference Leak to Sandbox](error-sanitization.md#attack-category-38-errorcause-host-reference-leak-to-sandbox)
 
@@ -527,11 +536,11 @@ This restores **[Defense Invariant #3](../ATTACKS.md#defense-invariants)** (host
 
 **Advisories**: GHSA-v27g-jcqj-v8rw, GHSA-x6m4-chr9-cg97
 
-**Tests**: test/ghsa/GHSA-v27g-jcqj-v8rw/, test/ghsa/GHSA-x6m4-chr9-cg97/
+**Tests**: test/ghsa/GHSA-v27g-jcqj-v8rw/ (repro.js), test/ghsa/GHSA-x6m4-chr9-cg97/ (repro.js, adversarial.js)
 
 **Uses**: [Category 4: Error Object Exploitation](error-sanitization.md#attack-category-4-error-object-exploitation)
 
-**Supersedes**: completes [GHSA-v27g-jcqj-v8rw](../ATTACKS.md#defense-invariants) (`defaultSandboxPrepareStackTrace` / CallSite host-frame redaction). v27g redacts host frames only when the stack is formatted **in the sandbox realm**; this category is the residual where the stack was formatted **host-side** and crosses the bridge pre-formatted.
+**Supersedes**: completes the GHSA-v27g-jcqj-v8rw fix — `defaultSandboxPrepareStackTrace` and CallSite host-frame redaction, documented under [Category 4: Error Object Exploitation](error-sanitization.md#attack-category-4-error-object-exploitation). v27g redacts host frames only when the stack is formatted **in the sandbox realm**; this category is the residual where the stack was formatted **host-side** and crosses the bridge pre-formatted.
 
 ### Description
 
@@ -579,9 +588,9 @@ All redactors use module-load-cached `String.prototype` intrinsics and primitive
 
 ## Attack Category 49: Revisited Host Error Carrier Leaks a Live Proxy Through the Sanitizer Cycle Memo
 
-**Advisories**: none
+**Advisories**: GHSA-x965-fc75-jpqh
 
-**Tests**: none linked
+**Tests**: test/ghsa/GHSA-x965-fc75-jpqh/ (repro.js, adversarial.js)
 
 **Uses**: [Category 38: `Error.cause` Host Reference Leak to Sandbox](error-sanitization.md#attack-category-38-errorcause-host-reference-leak-to-sandbox)
 
@@ -616,6 +625,9 @@ new VM({sandbox:{hostThrow(){
 // residual:    same PLAIN host Error listed twice with a prototype-chain leak
 //              (sanitizeHostOwnProps rebuilds it but the memo still pointed at the raw carrier)
 ```
+
+- Nested duplicated host sub-aggregate, and a `SuppressedError` sharing a host sub-error with an aggregate: see test/ghsa/GHSA-x965-fc75-jpqh/repro.js.
+- Mixed graph `AggregateError` -> `SuppressedError` -> `Error{cause}` sharing one host node, and a `SuppressedError` self-cycle through `.suppressed` with a custom leak property: see test/ghsa/GHSA-x965-fc75-jpqh/adversarial.js.
 
 ### Why It Works
 

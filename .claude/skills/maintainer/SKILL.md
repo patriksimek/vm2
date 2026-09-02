@@ -29,7 +29,7 @@ You act unattended within this column. You do not cross into the other, ever.
 | Accept, reject, and close reports | **Pushing to `origin`** |
 | Post thread comments to reporters | **Merging a fork into `main`** |
 | Assign and edit credits | Releases, version bumps, `npm publish` |
-| Write fixes, tests, `ATTACKS.md` entries | Any change to public docs (`README.md`, `SECURITY.md`) |
+| Write fixes, tests, attack-catalog entries (`docs/attacks/`) | Any change to public docs (`README.md`, `SECURITY.md`) |
 | Push to per-advisory private forks | Requesting CVEs |
 | Ask reporters to review a fix | |
 
@@ -176,13 +176,13 @@ For every report, in this order:
 
 ### Phase E — Fix
 
-Invoke `/fix-vulnerability` against the **primary** advisory. It owns branch setup, the multi-angle exploration, testing across Node majors, `ATTACKS.md`, and the fork push. Do not re-derive its workflow here.
+Invoke `/fix-vulnerability` against the **primary** advisory. It owns branch setup, the multi-angle exploration, testing across Node majors, the attack catalog, and the fork push. Do not re-derive its workflow here.
 
 When a primary absorbs duplicates, the fix must close **every** absorbed PoC — collect them all from the cluster and add each as a regression test.
 
 ### Phase F — Request review
 
-Post a short summary to the primary's thread and ask the reporter to confirm. Terse: the context belongs in the code, the tests, and `ATTACKS.md`, not in the message.
+Post a short summary to the primary's thread and ask the reporter to confirm. Terse: the context belongs in the code, the tests, and the attack catalog, not in the message.
 
 ```
 GHSA-<id> — <one-line description>

@@ -571,28 +571,29 @@ The fix restores **[Defense Invariant #13](../ATTACKS.md#defense-invariants)** a
 
 ## Attack Category 40: Host-Authority Builtin Members Survive the Read-Only Wrap
 
-**Advisories**: GHSA-46pr-c5wc-xffx, GHSA-6w8r-xxw2-g3hx, GHSA-98xx-8mx4-x7cm, GHSA-h85j-hv3c-qfgq
+**Advisories**: GHSA-46pr-c5wc-xffx, GHSA-6w8r-xxw2-g3hx, GHSA-98xx-8mx4-x7cm, GHSA-h85j-hv3c-qfgq, GHSA-x3v6-43hc-82mc
 
-**Tests**: test/ghsa/GHSA-46pr-c5wc-xffx/, test/ghsa/GHSA-6w8r-xxw2-g3hx/, test/ghsa/GHSA-98xx-8mx4-x7cm/, test/ghsa/GHSA-h85j-hv3c-qfgq/
+**Tests**: test/ghsa/GHSA-46pr-c5wc-xffx/, test/ghsa/GHSA-6w8r-xxw2-g3hx/, test/ghsa/GHSA-98xx-8mx4-x7cm/, test/ghsa/GHSA-h85j-hv3c-qfgq/, test/ghsa/GHSA-x3v6-43hc-82mc/
 
 ### Description
 
-`NodeVM` exposes an allowed host builtin through `lib/builtin.js`'s default loader: `builtins.set(key, vm => vm.readonly(hostRequire(key)))`. `vm.readonly()` makes the module proxy reject property *assignment*, but it forwards every *method call* to the underlying host function with full host-process authority. Read-only is therefore the wrong containment for a builtin whose danger is not "sandbox writes a property" but "sandbox *calls* a member that reaches host-process authority." Four members of otherwise-legitimate builtins fall into this class, each usable from a NodeVM that allows only that one builtin (no `fs`, `process`, `child_process`, `module`, nesting, or `'*'` required):
+`NodeVM` exposes an allowed host builtin through `lib/builtin.js`'s default loader: `builtins.set(key, vm => vm.readonly(hostRequire(key)))`. `vm.readonly()` makes the module proxy reject property *assignment*, but it forwards every *method call* to the underlying host function with full host-process authority. Read-only is therefore the wrong containment for a builtin whose danger is not "sandbox writes a property" but "sandbox *calls* a member that reaches host-process authority." Five members of otherwise-legitimate builtins fall into this class, each usable from a NodeVM that allows only that one builtin (no `fs`, `process`, `child_process`, `module`, nesting, or `'*'` required):
 
 - **`crypto.setEngine(path)`** (GHSA-46pr-c5wc-xffx) — hands `path` to OpenSSL's ENGINE loader; the OS dynamic loader runs the shared library's constructor as native code *before* OpenSSL validates the file, so a bundled native library executes even though the call ultimately reports `ERR_CRYPTO_ENGINE_UNKNOWN`. **Native RCE.**
 - **`node:sqlite` `DatabaseSync(':memory:', {allowExtension: true}).loadExtension(path)`** (GHSA-6w8r-xxw2-g3hx) — SQLite loads the named library into the host process and invokes its native extension entry point. **Native RCE.** (Same report noted a resolver-normalization quirk: `require('node:node:sqlite')` resolves because the resolver treats any `node:`-prefixed string as core and the runtime strips only one prefix.)
+- **`crypto.setFips(bool)`** (GHSA-x3v6-43hc-82mc) — flips the FIPS mode of the entire host process, so trusted host code that later calls `crypto.getFips()` observes the sandbox-chosen value (guest `setFips(1)` → host `getFips()` returns `1`). No native code, but a process-wide crypto-configuration mutation across the isolation boundary. **Process-wide config mutation.**
 - **`tls.setDefaultCACertificates(hostArray)`** (GHSA-98xx-8mx4-x7cm) — replaces the host thread's default CA trust store, so subsequent host TLS clients accept attacker-signed certificates. The native type check requiring a *host* array is satisfied by `url`'s `URLSearchParams.getAll()`, which the bridge unwraps back to a host array. **Process-wide trust mutation.**
 - **`https.globalAgent` / `http.globalAgent`** (GHSA-h85j-hv3c-qfgq) — the exposed module hands back the *real shared host singleton*. `globalAgent.on('free', (socket, options) => …)` receives live host request options (Authorization tokens, private host/port) and the released `TLSSocket` whenever an unrelated host request completes. **Host credential / traffic exfiltration.**
 
 ### Why It Works
 
-`vm.readonly()` was designed to expose data-shaped host objects (constants, config) that the sandbox should read but not mutate. It has no notion of "this callable, when invoked, performs a host-privileged side effect." For the four members above the dangerous operation is a *call*, not a *write*, so the read-only proxy forwards it verbatim. `https.globalAgent` is worse still: it is not even a call — the sandbox merely reads a process-global `EventEmitter` singleton and subscribes to it, and the read-only proxy faithfully returns the host object.
+`vm.readonly()` was designed to expose data-shaped host objects (constants, config) that the sandbox should read but not mutate. It has no notion of "this callable, when invoked, performs a host-privileged side effect." For the members above the dangerous operation is a *call*, not a *write*, so the read-only proxy forwards it verbatim. `https.globalAgent` is worse still: it is not even a call — the sandbox merely reads a process-global `EventEmitter` singleton and subscribes to it, and the read-only proxy faithfully returns the host object.
 
 ### Mitigation
 
 `lib/builtin.js` sanitizes the host module *before* the read-only wrap (`sanitizeBuiltinMembers(key, hostRequire(key))`), via a small per-module table (`BUILTIN_MEMBER_SANITIZERS`). The `node:` prefix is stripped before lookup so `node:crypto` and `crypto` share fate. Each sanitizer returns a shallow copy with just the dangerous member neutralized — the rest of the module (hashing, signing, TLS helpers, HTTPS requests, SQL queries) is untouched, so this is member-level neutralization, not module denial:
 
-- **crypto** — `setEngine` replaced with a stub that throws instead of forwarding to host OpenSSL, so no library is ever loaded.
+- **crypto** — `setEngine` replaced with a stub that throws instead of forwarding to host OpenSSL, so no library is ever loaded; `setFips` replaced with a throwing stub so guest code cannot flip the host process's FIPS mode (GHSA-x3v6-43hc-82mc). `setEngine` and `setFips` are the only `set*` members `crypto` exposes, so the class is closed; `getFips()` (read-only) is untouched. The deprecated `crypto.fips` accessor (DEP0093, setter backed by `setFips`) is non-enumerable, so the `Object.assign` copy never carries it, and the read-only wrap refuses the write regardless.
 - **node:sqlite** — the `DatabaseSync` constructor is wrapped so `allowExtension` is forced off (for object- **and function-typed** options args — Node's `DatabaseSync` accepts a function as options, and functions carry own properties); Node itself then throws `ERR_INVALID_STATE` from both `loadExtension()` and `enableLoadExtension()`. The resolver is also hardened to collapse/reject repeated `node:` prefixes.
 - **tls** — `setDefaultCACertificates` replaced with a throwing stub (parallels the existing `dns` denial for process-wide network-state mutation).
 - **http / https** — `globalAgent` replaced with a fresh sandbox-dedicated `Agent`, so the sandbox can never reach the host's shared singleton; the module's own `request()`/`get()` continue to work.
@@ -602,6 +603,7 @@ This complements the existing whole-module `DANGEROUS_BUILTINS` denylist (`modul
 ### Detection Rules
 
 - `crypto.setEngine(...)` from sandbox code.
+- `crypto.setFips(...)` from sandbox code (process-wide FIPS-mode mutation; watch also for any future `crypto` `set*` member).
 - `node:sqlite` `DatabaseSync(..., {allowExtension: true})` or `.loadExtension(...)` / `.enableLoadExtension(...)` from sandbox code; also any `require('node:node:...')` double-prefix spelling.
 - `tls.setDefaultCACertificates(...)` from sandbox code (watch for `URLSearchParams.getAll()` used to manufacture a host array).
 - Reads of `https.globalAgent` / `http.globalAgent`, especially `.on('free'|'keylog'|...)` subscriptions.

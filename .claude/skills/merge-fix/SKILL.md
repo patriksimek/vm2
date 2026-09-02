@@ -225,7 +225,7 @@ These are semantic conflicts and you must reason about them as a security engine
 
 #### 5e. `test/*.js` (main suites) and `test/ghsa/<other-id>/`
 
-- Conflicts in `test/vm.js` / `test/nodevm.js` / `test/escape-scanner.js` follow the same logic as `lib/*.js` — both sides likely added related test cases; keep both.
+- Conflicts in `test/vm.js` / `test/nodevm.js` follow the same logic as `lib/*.js` — both sides likely added related test cases; keep both.
 - `test/ghsa/<full-GHSA-id>/` for **this** advisory is the branch's own directory and should not conflict. If it does, something is wrong with the branch hygiene — stop and surface.
 - Tests in other advisories' directories (`test/ghsa/<other-id>/`) should never appear in this branch's diff. If they do, the branch was not properly isolated; surface and let the user decide whether to revert those hunks.
 
@@ -267,7 +267,7 @@ Draft the message from the branch's own commits + the doc updates, not from the 
 
 ```bash
 git log fix/<full-GHSA-id> --format='%s%n%n%b' main..ghsa-<short-id>/main
-git diff --cached docs/ATTACKS.md CHANGELOG.md
+git diff --cached docs/ATTACKS.md docs/attacks/ CHANGELOG.md
 ```
 
 If any phrase you considered including names a person, a handle, or a date — drop it.

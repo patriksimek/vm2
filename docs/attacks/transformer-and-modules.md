@@ -44,7 +44,7 @@ catch (a$tmpname) {
 
 ### Why It Works
 
-The transformer renames catch clause variables to internal names and wraps them with sanitization. If an attacker can guess or use the internal variable name directly, they bypass the wrapping logic. `eval()` and `new Function()` do route their source back through the transformer -- `EvalHandler` and `FunctionHandler` in `lib/setup-sandbox.js` (the latter through `makeFunction`) both call `host.transformAndCheck` -- but `eval()` inherits the same fast-path bailout as top-level `vm.run` source, so a string carrying none of the trigger keywords is never AST-parsed. The transformer uses `ecmaVersion: 2022`, so `using` declarations (ES2024) are invisible -- the transformer does not instrument their implicit catch semantics.
+The transformer renames catch clause variables to internal names and wraps them with sanitization. If an attacker can guess or use the internal variable name directly, they bypass the wrapping logic. `eval()` and `new Function()` do route their source back through the transformer -- `EvalHandler` and `FunctionHandler` in `lib/setup-sandbox.js` (the latter through `makeFunction`) both call `host.transformAndCheck` -- but `eval()` inherits the same fast-path bailout as top-level `vm.run` source, so a string carrying none of the trigger keywords is never AST-parsed. The transformer uses `ecmaVersion: 2022`, so `using` declarations (ES2024) are invisible to the transformer when the keyword fast path skips the AST parse (source containing none of `catch`, `import`, `async`, `with`); when the source is parsed, acorn at `ecmaVersion: 2022` rejects `using` with a SyntaxError. In the fast-path case, the transformer does not instrument their implicit catch semantics.
 
 ### Mitigation
 

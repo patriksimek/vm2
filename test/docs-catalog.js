@@ -188,4 +188,28 @@ describe('docs catalog', function () {
 			});
 		});
 	});
+
+	it('cites only test paths that exist on the Tests lines', function () {
+		const TEST_PATH_RE = /test\/[A-Za-z0-9_./-]+/g;
+		all.forEach(c => {
+			const tokens = c.meta.Tests.match(TEST_PATH_RE) || [];
+			tokens.forEach(token => {
+				const cleaned = token.charAt(token.length - 1) === '/' ? token.slice(0, -1) : token;
+				assert.ok(fs.existsSync(path.join(__dirname, '..', cleaned)),
+					'Category ' + c.number + ' cites test path ' + cleaned + ' which does not exist');
+			});
+		});
+	});
+
+	it('has no index row without an entry', function () {
+		const lines = read(INDEX);
+		const rows = {};
+		lines.forEach(line => {
+			const m = /^\|\s*(\d+)\s*\|(.*)\|\s*$/.exec(line);
+			if (m) rows[Number(m[1])] = m[2];
+		});
+		Object.keys(rows).forEach(n => {
+			assert.ok(byNumber[n], 'Index row ' + n + ' has no matching category entry');
+		});
+	});
 });

@@ -282,7 +282,7 @@ A non-iterable **array-like whose `length` is a toggling accessor** (`new Uint8A
 
 **Uses**: [Category 15: Property Descriptor Value Extraction](host-reference-primitives.md#attack-category-15-property-descriptor-value-extraction) (in spirit — a getter, `Uint8Array.prototype.buffer`, hands back more than the sandbox should see)
 
-**Advisory**: GHSA-fcqc-726x-5wfc. CWE-200 (Information Exposure) + CWE-787 (Out-of-bounds Write). This is a **confidentiality + integrity** escape, not a DoS — distinct from the `bufferAllocLimit` DoS categories (23, 36) that share the `Buffer.*` chokepoint.
+Advisory: GHSA-fcqc-726x-5wfc. CWE-200 (Information Exposure) + CWE-787 (Out-of-bounds Write). This is a **confidentiality + integrity** escape, not a DoS — distinct from the `bufferAllocLimit` DoS categories (23, 36) that share the `Buffer.*` chokepoint.
 
 ### Description
 

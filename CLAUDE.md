@@ -92,6 +92,7 @@ Use the `/hacker` skill after making security-related changes to systematically 
 - Add the row to the category index in `docs/ATTACKS.md`, the "How The Bridge Defends" table, and for compounds the "Compound Attack Patterns" list.
 - Add new APIs or features to "Considered Attack Surfaces" or "Future Risks" in `docs/ATTACKS.md`.
 - `npm test` runs `test/docs-catalog.js`, which fails on a renumbering, a dead link, or a missing metadata line.
+- Add a one-line entry to `CHANGELOG.md` under the next release.
 
 ## Workflow
 

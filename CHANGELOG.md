@@ -5,6 +5,7 @@
 ### Security fixes
 
 - **GHSA-6454-5x88-m6jw** — sandbox-to-host RCE through an embedder-exposed host `Promise`. Writing `constructor[Symbol.species]` on the raw host promise and calling `.then` / `.catch` / `.finally` with the settlement-direction handler omitted made V8 deliver the raw host settlement (e.g. `process`) to a sandbox-captured capability, with no callback slot for the rejection sanitizer to wrap. Structural fix in `lib/bridge.js`: `neutralizeHostPromiseSpeciesOn` shadows the host promise's `constructor` across the call so the result capability is always a genuine host `%Promise%`, and the indirection peel now also covers host `Reflect.apply` and `.finally`. See ATTACKS.md Category 53 and `test/ghsa/GHSA-6454-5x88-m6jw/`.
+- **GHSA-j89j-5m6r-cr2q** — sandbox escape to host RCE through any embedder-exposed sloppy-mode host function. Calling it with a nullish receiver (`greet()`, `.call(null)`, `Reflect.apply(fn, undefined, [])`, `bind(null)()`) makes V8 bind `this` to the host realm's global object, which the bridge then wrapped and delivered to the sandbox (`greet().process.getBuiltinModule('child_process')`). Structural fix in `lib/bridge.js`: the host global is cached at bridge init and refused at the three host→sandbox coercion chokepoints, returning `undefined` so strict-function semantics are preserved. See ATTACKS.md Category 54 and `test/ghsa/GHSA-j89j-5m6r-cr2q/`.
 
 ## [3.12.0]
 

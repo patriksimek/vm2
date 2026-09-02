@@ -4,7 +4,7 @@ Ways for sandbox code to obtain a raw host-realm object or the host `Function` c
 
 Defense invariants enforced by fixes in this family: 1, 4, 7, 8 (see [Defense Invariants](../ATTACKS.md#defense-invariants)).
 
-Categories in this file: [1](host-reference-primitives.md#attack-category-1-constructor-chain-traversal), [2](host-reference-primitives.md#attack-category-2-prototype-chain-manipulation), [3](host-reference-primitives.md#attack-category-3-symbol-based-attacks), [5](host-reference-primitives.md#attack-category-5-function-callercallee-access), [8](host-reference-primitives.md#attack-category-8-cross-realm-symbol-extraction-from-host-objects), [10](host-reference-primitives.md#attack-category-10-built-in-function-exploitation), [15](host-reference-primitives.md#attack-category-15-property-descriptor-value-extraction), [18](host-reference-primitives.md#attack-category-18-array-species-self-return-via-constructor-manipulation).
+Categories in this file: [1](host-reference-primitives.md#attack-category-1-constructor-chain-traversal), [2](host-reference-primitives.md#attack-category-2-prototype-chain-manipulation), [3](host-reference-primitives.md#attack-category-3-symbol-based-attacks), [5](host-reference-primitives.md#attack-category-5-function-callercallee-access), [8](host-reference-primitives.md#attack-category-8-cross-realm-symbol-extraction-from-host-objects), [10](host-reference-primitives.md#attack-category-10-built-in-function-exploitation), [15](host-reference-primitives.md#attack-category-15-property-descriptor-value-extraction), [18](host-reference-primitives.md#attack-category-18-array-species-self-return-via-constructor-manipulation), [54](host-reference-primitives.md#attack-category-54-host-global-leak-via-a-sloppy-host-functions-nullish-this-ordinarycallbindthis).
 
 ---
 
@@ -572,3 +572,62 @@ The neutralize-on-entry/restore-on-exit pattern mirrors `resetPromiseSpecies` in
 - **`ho.assign(r, {constructor: ...})`** -- bypassing proxy set trap via host Object.assign.
 - **`.map(f)` on arrays with custom constructor** -- triggering ArraySpeciesCreate.
 - **`ho.entries({})` or `Object.entries()`** -- creating host arrays for species manipulation.
+
+---
+
+## Attack Category 54: Host Global Leak via a Sloppy Host Function's Nullish `this` (OrdinaryCallBindThis)
+
+**Advisories**: GHSA-j89j-5m6r-cr2q
+
+**Tests**: test/ghsa/GHSA-j89j-5m6r-cr2q/
+
+**Uses**: [Category 10](host-reference-primitives.md#attack-category-10-built-in-function-exploitation) (an exposed host function as the conduit)
+
+### Description
+
+An embedder exposes an ordinary **sloppy-mode** (non-strict) host function to the sandbox — the normal vm2 use case (`new VM({sandbox: {greet: function(){…}}})`, or any function built with the `Function` constructor, which is sloppy regardless of the surrounding module's strictness). Sandbox code invokes it with a **nullish receiver**: a bare call `greet()`, `greet.call(null)`, `greet.apply(undefined)`, `Reflect.apply(greet, undefined, [])`, or `greet.bind(null)()`.
+
+vm2's apply trap forwards the call with `context = otherFromThis(context)`, which leaves a nullish receiver nullish, then `otherReflectApply(object, undefined, args)`. V8's **OrdinaryCallBindThis** (ECMA-262 10.2.1.2) then substitutes the **host realm's global object** for a sloppy function's `this`. Whatever the function does with `this` — return it, `return globalThis`, or stash it into a passed-in sandbox object/array — surfaces a reference to the host global, which an unguarded bridge wraps and delivers into the sandbox. The sandbox then reaches `this.process.getBuiltinModule('child_process').execSync(…)` = **host RCE**.
+
+Sandbox→host direction only (`isHost === false`). Strict / ESM host functions are unaffected: their `this` stays `undefined` and never touches the global.
+
+### Attack Flow
+
+1. Embedder exposes a plain sloppy host function `greet` on the sandbox.
+2. Sandbox calls it with no receiver: `const g = greet();`.
+3. Apply trap runs `otherReflectApply(greet, undefined, [])`; V8 binds `this = host global`.
+4. `greet` returns/leaks the host global; without the guard the bridge wraps it in a proxy and returns it to the sandbox.
+5. `g.process.getBuiltinModule('child_process').execSync('…')` executes in the host.
+
+### Canonical Examples
+
+```js
+const {VM} = require('vm2');
+const greet = Function('return this;');   // sloppy — this === host global when called bare
+new VM({sandbox: {greet}}).run(`
+  const g = greet();                      // undefined once the guard is in place
+  g.process.getBuiltinModule('child_process').execSync('id').toString();
+`);
+```
+
+Also leaks via a stashed `this`: `Function('o','o.g=this;return o;')` called as `keep(s)` on a sandbox object `s` leaves the host global at `s.g`; via an explicit `return globalThis`; and via a host function passing its global-`this` as an argument to a sandbox callback.
+
+### Why It Works
+
+The substitution happens inside V8's C++ call machinery, not in JS the bridge instruments. The apply trap correctly forwards a nullish `this` as nullish (that is the spec-correct receiver for the call), so nothing at the *call* site is wrong — the leak is at the *return/delivery* site, where the bridge wraps the resulting host global like any other host object. [Defense Invariant #1](../ATTACKS.md#defense-invariants) (no host-realm object reaches sandbox code unwrapped) is violated for the one host object the sandbox can conjure without ever holding a reference to it: the global.
+
+### Mitigation
+
+Close the **class** at the host→sandbox delivery chokepoint, not the individual call shapes. The host realm's global object is cached at bridge init (`thisRealmGlobal = global`, published as `result.global`, read by the other bridge as `otherGlobal`; `global` — not `globalThis` — for Node 8 compatibility). The three read-side coercion functions in `lib/bridge.js` — `thisFromOtherWithFactory` (primary: covers apply-trap return, get-trap reads, argument coercion, set-into-sandbox-object value coercion, and callback arguments), `thisEnsureThis` (re-entry / `this`-coercion / catch bindings), and `thisFromOtherForThrow` (throw path) — each refuse to wrap the host global: `if (!isHost && other === otherGlobal) return undefined;`, placed **before** the `mappingOtherToThis` cache lookup so a stale cache entry cannot re-deliver it. Restores **[Defense Invariant #1](../ATTACKS.md#defense-invariants)**.
+
+Returning `undefined` (not a proxy sentinel like `emptyFrozenObject`) makes a sloppy function's global-`this` observable to the sandbox exactly as a strict function's `this` already is. This is why denying **delivery** of the global is chosen over receiver-neutralization (substituting a safe host receiver before `otherReflectApply`): the latter would change a *strict* function's `this` from `undefined` to that object, and strict-vs-sloppy cannot be detected synchronously. A single object-identity compare, no new host closure handed to the sandbox, preserves the strict-mode control and covers every delivery path at one place.
+
+### Detection Rules
+
+- A sandbox-side host-value coercion path (`thisFromOther*` / `ensureThis`) that wraps and returns a host-realm object without an identity check against the host global.
+- Any apply-trap forwarding that passes a nullish `this` to a host function whose strictness is unknown, where the return value is then wrapped for the sandbox.
+- Sandbox source that calls an exposed host function bare or with `.call(null)` / `.apply(undefined)` / `Reflect.apply(fn, undefined, …)` and then reads `.process` / `.require` / `.global` off the result.
+
+### Known Residual
+
+The guard is a pinpoint *identity* check on the host global — correct and complete for V8's sloppy-`this` substitution, which uses the exact `global` object — not a capability check. A host function that hands back something *derived from* the global with a different identity still leaks: `return this.process` (a sub-property), `return {...this}` / `Object.assign({}, this)` (a shallow copy — carries `process` as an own-enumerable on Node ≤ 10), `return new Proxy(this, {})`, or a global obtained from another realm (`vm.runInNewContext('this', {process})`). Every one of these requires the embedder to author code that copies/wraps/injects from the sloppy `this` — equivalent to putting `process` in the sandbox directly — and none is reachable from an innocent exposed `function(){}` (the vulnerability class), which returns the global's exact identity and is blocked. This becomes a bug the moment an embedder exposes a host function that returns or stores a value *derived from* its sloppy `this` (`return this.process`, a shallow copy, a wrapping proxy): the sandbox then holds that derived host value, which is indistinguishable from the embedder having exposed it directly. Closing that shape would require receiver substitution, which cannot be adopted without solving strict-mode detection first (it would change a strict function's `this` from `undefined` to a sentinel and break the strict-`this` control).

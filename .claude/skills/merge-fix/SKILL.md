@@ -183,7 +183,7 @@ Conflicts here are almost always additive — both branches added a new line und
 - Order them by GHSA ID ascending under the release header, or by the order the user prefers (ask once if unsure, then apply consistently).
 - If the branch you are landing also bumped to a new release header that's already on `main` from another advisory, collapse into the single release header on `main`.
 
-**Trim verbose entries before committing.** The fix-vulnerability skill tends to produce paragraph-long bullet points that mirror the full ATTACKS.md write-up. That is redundant — ATTACKS.md and the per-advisory tests are the source of truth. A CHANGELOG entry is a release-notes index, not a second copy of the analysis.
+**Trim verbose entries before committing.** The fix-vulnerability skill tends to produce paragraph-long bullet points that mirror the full attack-catalog write-up. That is redundant — the catalog (`docs/attacks/*.md`) and the per-advisory tests are the source of truth. A CHANGELOG entry is a release-notes index, not a second copy of the analysis.
 
 Target shape, in 2–4 sentences max:
 
@@ -195,13 +195,13 @@ Use the existing 3.11.1 entry (`GHSA-8hg8-63c5-gwmx`) as the reference shape —
 
 If the branch's entry is already short, leave it. If it is one giant paragraph quoting the commit body, rewrite it down to the target shape before the squash commit lands. The rewrite is part of conflict resolution — do it in the same edit pass, not as a follow-up commit.
 
-#### 5b. `docs/ATTACKS.md`
+#### 5b. The attack catalog (`docs/ATTACKS.md` and `docs/attacks/`)
 
-The fix-vulnerability skill assigns each new attack class a sequential category number (`Category 28`, `Category 29`, …). If two advisories both grew from the same base and both claimed the next number, you must renumber:
+The fix-vulnerability skill assigns each new attack class the next unused category number across all family files. If two advisories both grew from the same base and both claimed the same number, you must renumber:
 
 - The category that lands first keeps its number.
 - The category landing now (this branch) takes the next free number on current `main` — i.e. `(max category number on main) + 1`.
-- Update **all in-doc cross-references** to the renumbered category (search for `Category N`, `category-N`, anchor links, and Compound Attack Patterns / How The Bridge Defends rows). Do not skip the table update — those tables are how the doc stays usable.
+- Update **all cross-references** to the renumbered category: `Category N` mentions and `#attack-category-N-` anchors in every `docs/attacks/*.md` and in `docs/ATTACKS.md`, its row in the category index, and its Compound Attack Patterns / How The Bridge Defends rows. `test/docs-catalog.js` fails on a duplicate number, a gap, or an unresolved anchor, so run `npm test` before considering the renumbering done.
 
 If both branches edited the same row in `Summary → How The Bridge Defends` or `Summary → Compound Attack Patterns`, merge the rows by hand to preserve both defenses.
 
@@ -299,7 +299,7 @@ done
 Any failure means the integration introduced a regression that the per-branch test pass did not see. Likely causes:
 - Another already-landed advisory's defense interacts with this one.
 - Conflict resolution in `lib/*.js` accidentally weakened a previously-restored invariant.
-- Renumbering in `ATTACKS.md` broke an anchor that a test asserts on.
+- Renumbering in the attack catalog broke a link (`test/docs-catalog.js` fails) or an anchor that a test asserts on.
 
 Roll back with `git reset --hard HEAD~1`, re-do step 5 with the new information, and re-run. Do **not** patch the failing test to make it green unless you can articulate, in writing, why the prior behavior was the insecure one — and even then, surface that to the user before committing.
 
@@ -321,7 +321,7 @@ GHSA-<full-id> integrated into local main as <new HEAD short-sha>.
 Commit:        fix(GHSA-<full-id>): <subject>
 Stacked on:    <"origin/main" | comma-separated list of local-only commits this landed on top of>
 Conflicts:     <none | list of paths with one-line resolution per>
-Renumbered:    <none | ATTACKS.md Category N -> Category M>
+Renumbered:    <none | Category N -> Category M in docs/attacks/<family>.md>
 Version:       <unchanged | X.Y.Z -> X.Y.(Z+1)>
 Test sweep:    Node 8/10/12/14/16/18/20/22/24/25/26 all pass
 

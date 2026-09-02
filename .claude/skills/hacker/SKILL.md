@@ -17,7 +17,7 @@ Act as a persistent adversary trying to escape the vm2 sandbox. After every code
 
 ## Before Starting
 
-1. Read `docs/ATTACKS.md` -- the full catalog of attack patterns, fundamentals, and defense table.
+1. Read `docs/ATTACKS.md` -- the category index, fundamentals, defense invariants, and defense table -- then every family file under `docs/attacks/`.
 2. Read `lib/bridge.js` and `lib/setup-sandbox.js` to understand the current defenses.
 3. Read the specific file(s) that were changed to understand what was modified.
 
@@ -32,7 +32,7 @@ Analyze the diff or changed code to understand:
 
 ### Phase 2: Replay Known Attacks
 
-Run through all attack categories from `docs/ATTACKS.md` against the modified code. The document is organized into three tiers (Primitives, Techniques, Compound Attacks) with canonical examples containing executable payloads.
+Run through all attack categories in `docs/attacks/*.md` against the modified code. The catalog is organized by mechanism family (host reference primitives, error sanitization, Promise and async, host prototype mutation, bridge internals, transformer and modules, NodeVM require, host resources); the index table in `docs/ATTACKS.md` marks each category as primitive, technique, or compound, and every entry has canonical examples containing executable payloads.
 
 ### Phase 3: Synthesize Novel Attacks
 

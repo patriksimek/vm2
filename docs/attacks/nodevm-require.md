@@ -10,9 +10,9 @@ Categories in this file: [21](nodevm-require.md#attack-category-21-nodevm-builti
 
 ## Attack Category 21: NodeVM Builtin Allowlist Bypass via Host-Passthrough Builtins
 
-**Advisories**: GHSA-947f-4v7f-x2v8, GHSA-rp36-8xq3-r6c4, GHSA-8686-vhfx-7r3j, GHSA-6rh5-qq4q-97xh, GHSA-qhwx-74w5-xhxq, GHSA-m5w8-4gq2-6f8x
+**Advisories**: GHSA-947f-4v7f-x2v8, GHSA-rp36-8xq3-r6c4, GHSA-8686-vhfx-7r3j, GHSA-6rh5-qq4q-97xh, GHSA-qhwx-74w5-xhxq, GHSA-m5w8-4gq2-6f8x, GHSA-pq68-rvw4-xp4r
 
-**Tests**: test/ghsa/GHSA-947f-4v7f-x2v8/, test/ghsa/GHSA-rp36-8xq3-r6c4/, test/ghsa/GHSA-8686-vhfx-7r3j/, test/ghsa/GHSA-6rh5-qq4q-97xh/, test/ghsa/GHSA-qhwx-74w5-xhxq/, test/ghsa/GHSA-m5w8-4gq2-6f8x/, test/nodevm.js ("disabled require"), test/nodevm.js ("enabled require for certain modules"), test/nodevm.js ("disable setters on builtin modules")
+**Tests**: test/ghsa/GHSA-947f-4v7f-x2v8/, test/ghsa/GHSA-rp36-8xq3-r6c4/, test/ghsa/GHSA-8686-vhfx-7r3j/, test/ghsa/GHSA-6rh5-qq4q-97xh/, test/ghsa/GHSA-qhwx-74w5-xhxq/, test/ghsa/GHSA-m5w8-4gq2-6f8x/, test/ghsa/GHSA-pq68-rvw4-xp4r/, test/nodevm.js ("disabled require"), test/nodevm.js ("enabled require for certain modules"), test/nodevm.js ("disable setters on builtin modules")
 
 ### Description
 
@@ -21,6 +21,7 @@ NodeVM's `require.builtin` allowlist defends sandbox code from reaching dangerou
 - `module` exposes `Module._load(name)`, `Module._resolveFilename`, `Module._cache`, `createRequire` — all of which load any host builtin or external module ignoring vm2's allowlist.
 - `worker_threads` exposes `new Worker(src, {eval: true})` — runs arbitrary JS in a fresh thread that has no vm2 sandbox at all.
 - `cluster` exposes `cluster.fork()` — spawns a host child process running attacker-controlled code.
+- `child_process` exposes `execSync` / `exec` / `spawn` / `execFile` / `fork` — the most direct host-command primitive there is; one line of sandbox code runs an arbitrary host command with the embedder's privileges.
 - `vm` exposes `vm.runInThisContext` — evaluates code directly in the host realm, bypassing every bridge proxy.
 - `repl` exposes `repl.start({eval, input, output})` — constructs an interactive evaluator attached to host streams.
 - `inspector` (and `inspector/promises`, subpath family) exposes the inspector protocol — attaches a debugger to the host process and runs `Session().post('Runtime.evaluate', { expression })` against host JS.
@@ -121,7 +122,7 @@ A third failure of the same mental model is **granularity**. `fs` and `fs/promis
 
 Three-layer denylist enforcement in `lib/builtin.js` (restores **[Invariant 13 — The NodeVM builtin allowlist is a closed system](../ATTACKS.md#defense-invariants)**):
 
-1. **`DANGEROUS_BUILTINS` Set** at module load — `['module', 'worker_threads', 'cluster', 'vm', 'repl', 'inspector', 'process', 'trace_events', 'wasi', 'diagnostics_channel', 'async_hooks', 'perf_hooks', 'v8', 'os', 'dns']`. The last six were added by [Category 35](nodevm-require.md#attack-category-35-nodevm-process-wide-observability-builtins-host-data-info-leak) for the process-wide observability info-leak class (`os` and `dns` via GHSA-m5w8-4gq2-6f8x, which additionally close the host-process *write* APIs `os.setPriority` / `dns.setServers` / `dns.setDefaultResultOrder`); they share the deny-by-default enforcement but a different threat model (data exposure / host-state mutation, not code execution).
+1. **`DANGEROUS_BUILTINS` Set** at module load — `['module', 'worker_threads', 'cluster', 'child_process', 'vm', 'repl', 'inspector', 'process', 'trace_events', 'wasi', 'diagnostics_channel', 'async_hooks', 'perf_hooks', 'v8', 'os', 'dns', 'test']`. `diagnostics_channel` through `dns` were added by [Category 35](nodevm-require.md#attack-category-35-nodevm-process-wide-observability-builtins-host-data-info-leak) for the process-wide observability info-leak class (`os` and `dns` via GHSA-m5w8-4gq2-6f8x, which additionally close the host-process *write* APIs `os.setPriority` / `dns.setServers` / `dns.setDefaultResultOrder`); they share the deny-by-default enforcement but a different threat model (data exposure / host-state mutation, not code execution).
 2. **Family-prefix check** via `isDangerousBuiltin(key)` — any `<family>/...` whose family is in the denylist is also blocked (e.g. `inspector/promises`, future `inspector/foo`, hypothetical `process/foo`, `module/foo`). The check also strips the optional `node:` URL-style prefix so `node:process` and `node:inspector/promises` are caught.
 3. **Filter from `BUILTIN_MODULES`** — closes the `'*'` wildcard expansion path. `'*'` will never auto-allow these names regardless of the user's exclusion list.
 4. **Reject in `addDefaultBuiltin`** — closes the explicit-allowlist path (`builtin: ['module']`, `builtin: ['process']`, `builtin: ['inspector/promises']`) and the lower-level `makeBuiltins([...])` API used by custom resolvers. The `SPECIAL_MODULES` escape hatch is preserved: a future safe wrapper (e.g. a `module` shim that exposes only `builtinModules` metadata) can be registered there if a real consumer needs it.
@@ -130,7 +131,11 @@ Three-layer denylist enforcement in `lib/builtin.js` (restores **[Invariant 13 �
 
 6. **Deny-token family coverage** (GHSA-6rh5-qq4q-97xh) — the same negative-token check now treats `<family>/<sub>` as denied whenever `-<family>` is present, so `-fs` denies `fs/promises`, `-path` denies `path/posix` / `path/win32`, `-stream` denies `stream/promises` / `stream/web` / `stream/consumers`. This is the user-deny-token mirror of the family-prefix matching `isDangerousBuiltin` already applies to the hard `DANGEROUS_BUILTINS` denylist. Points 5 and 6 are composed in a single chokepoint, `isBuiltinDenied(builtins, name)`, which normalizes the `node:` prefix off *both* the module name and the token before matching and then applies the family split to the normalized name — so `-node:fs` denies all four of `fs`, `node:fs`, `fs/promises`, `node:fs/promises`. Coverage is strictly additive: a family with no deny token keeps every subpath, and the explicit (non-wildcard) allowlist branch is untouched, so `builtin: ['fs']` behaves exactly as before.
 
-7. **`test` family denied** (GHSA-qhwx-74w5-xhxq) — `test` joins `DANGEROUS_BUILTINS`, which is the whole fix: no new code path is needed. Because `BUILTIN_MODULES` is built by filtering `nmod.builtinModules` through `isDangerousBuiltin`, the family disappears from the source list, so it is absent from `'*'` expansion *and* from the explicit-allowlist branch — `builtin: ['node:test']` now names a module that is not in the list, exactly as `builtin: ['cluster']` already behaved. (`child_process` is deliberately *not* on this denylist and remains grantable by explicit request; `test` is denylisted because, unlike `child_process`, no embedder reaches for it expecting process-spawning authority.) `addDefaultBuiltin` refuses it a second time for the low-level registration path. Subpath coverage (`test/reporters`) falls out of the existing family-prefix match added for `inspector/promises`; no special case was required. `isDangerousBuiltin` additionally strips *repeated* `node:` prefixes, so the doubled spelling `node:node:test` — which the resolver normalizes down to a single prefix before lookup — cannot survive as an unnormalized denylist miss. Note this is `isDangerousBuiltin` (the hard, non-configurable denylist), which is a separate chokepoint from `isBuiltinDenied` (points 5 and 6, user-supplied deny tokens); the two do not interact.
+7. **`test` family denied** (GHSA-qhwx-74w5-xhxq) — `test` joins `DANGEROUS_BUILTINS`, which is the whole fix: no new code path is needed. Because `BUILTIN_MODULES` is built by filtering `nmod.builtinModules` through `isDangerousBuiltin`, the family disappears from the source list, so it is absent from `'*'` expansion *and* from the explicit-allowlist branch — `builtin: ['node:test']` now names a module that is not in the list, exactly as `builtin: ['cluster']` already behaved. (`test` is denylisted because it is a host-process launcher with no legitimate in-sandbox use — the same rationale that later brought `child_process` onto the list; see point 8.) `addDefaultBuiltin` refuses it a second time for the low-level registration path. Subpath coverage (`test/reporters`) falls out of the existing family-prefix match added for `inspector/promises`; no special case was required. `isDangerousBuiltin` additionally strips *repeated* `node:` prefixes, so the doubled spelling `node:node:test` — which the resolver normalizes down to a single prefix before lookup — cannot survive as an unnormalized denylist miss. Note this is `isDangerousBuiltin` (the hard, non-configurable denylist), which is a separate chokepoint from `isBuiltinDenied` (points 5 and 6, user-supplied deny tokens); the two do not interact.
+
+8. **`child_process` family denied** (GHSA-pq68-rvw4-xp4r) — `child_process` joins `DANGEROUS_BUILTINS`, closing the last host-process-spawning primitive reachable through the default loader. Before GHSA-pq68 it was reachable under `builtin: ['*']`, an explicit `builtin: ['child_process']`, `['*', '-fs']`, and the `node:` spellings, and the read-only wrap forwarded `execSync` / `exec` / `spawn` / `execFile` / `fork` straight to the host — arbitrary host command execution from a sandbox with no `fs` or `process` of its own. That reach was a documented carve-out ("embedders may legitimately want it for trusted scripts"), but the rationale applies identically to `cluster` / `worker_threads` / `node:test`, which are hard-denied on the "spawns a host process" basis; the carve-out was internally inconsistent, and for untrusted code an explicit `['child_process']` is a full host RCE, not a contained capability. The mechanics are identical to point 7: filtered from `BUILTIN_MODULES` (so `'*'` never expands to it), refused in `addDefaultBuiltin` (so an explicit request is rejected), and family/`node:`-normalized in `isDangerousBuiltin` (so `node:child_process` and the doubled `node:node:child_process` are covered).
+
+   **Upgrade path** for an embedder that genuinely needs child-process access for *trusted* scripts: re-expose it through the `mocks` escape hatch, which is applied ahead of the dangerous check — either the real module (`require: { mock: { child_process: require('child_process') } }`, which forces `require('child_process')` into the embedder's own host code and so makes the decision explicit and auditable) or, better, a controlled facade exposing only the specific method the embedder needs (`mock: { child_process: { execFileSync: … } }`). A bare `builtin: ['child_process']` no longer grants it.
 
 The fix does not affect the `mocks` / `overrides` escape hatches — users who genuinely need a stub for one of these names can register a sandbox-safe replacement.
 
@@ -143,7 +148,7 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 
 ### Detection Rules
 
-- **`builtin: ['*']` or `['*', '-X']`** in NodeVM config — on an unpatched version this expands to include `module`/`worker_threads`/`cluster`/`vm`/`repl`/`inspector`/`trace_events`/`wasi`; the shipped filter removes them. **Note: `'*'` still allows `child_process`, `fs`, `dgram`, `net`, `http`, `dns`, etc. — it is NOT a sandbox-safe default for untrusted code.**
+- **`builtin: ['*']` or `['*', '-X']`** in NodeVM config — on an unpatched version this expands to include `module`/`worker_threads`/`cluster`/`child_process`/`vm`/`repl`/`inspector`/`trace_events`/`wasi`/`test`; the shipped filter removes them. **Note: `'*'` still allows `fs`, `dgram`, `net`, `http`, etc. — it is NOT a sandbox-safe default for untrusted code.**
 - **`require('module')._load(...)`** — the canonical bypass primitive.
 - **`new Worker(src, {eval:true})`** — out-of-band code execution.
 - **`cluster.fork()`** — host process spawn.
@@ -162,8 +167,8 @@ The fix does not affect the `mocks` / `overrides` escape hatches — users who g
 ### Considered Attack Surfaces
 
 - **`async_hooks`, `diagnostics_channel`, `perf_hooks`, `v8`** are now denied as process-wide observability primitives — see [Category 35](nodevm-require.md#attack-category-35-nodevm-process-wide-observability-builtins-host-data-info-leak). They expose host-process state rather than host-code-loading primitives, but are functionally identical from the embedder's perspective: any allowlist that includes them leaks per-request user data, auth tokens, and heap contents into the sandbox.
-- **`child_process`** is NOT on the auto-denylist because users may legitimately want it for trusted scripts (e.g., dev tooling running known scripts in vm2 for hot-reload isolation). For untrusted code, `child_process` is a full-host-RCE primitive — embedders MUST exclude it explicitly (`['*', '-child_process']`, or equivalently `['*', '-node:child_process']` since GHSA-8686-vhfx-7r3j) or, better, use an explicit allowlist of just the modules they need. The README's "Hardening recommendations" section calls this out.
-- **`fs`** is allowed under `'*'` because file-system access can be a legitimate sandbox capability for many use cases (e.g., user-script template engines reading templates). Users who want filesystem isolation use `VMFileSystem` or exclude `fs` explicitly. Since GHSA-6rh5-qq4q-97xh a `-fs` token also covers `fs/promises`; on earlier versions it did not, and `fs/promises` alone is a complete host filesystem read/write primitive. Same caveat as `child_process` — `'*'` is not sandbox-safe for untrusted code.
+- **`child_process`** is on the hard denylist (GHSA-pq68-rvw4-xp4r): a full-host-RCE primitive (`execSync` / `spawn` / `fork` run arbitrary host commands) of the same "spawns a host process" class as `cluster` / `worker_threads` / `node:test`, so it is denied both under `'*'` and on explicit request. Before GHSA-pq68 it was a documented carve-out grantable for trusted scripts, reversed because the carve-out was inconsistent with the rest of the denylist and untrusted code reached it via `['*']`, `['child_process']`, or `['*', '-fs']`. Trusted-script embedders who genuinely need it re-expose it through `require.mock` (see Mitigation point 8) — the real module or a controlled facade — which makes the choice explicit in the embedder's own host code.
+- **`fs`** is allowed under `'*'` because file-system access can be a legitimate sandbox capability for many use cases (e.g., user-script template engines reading templates). Users who want filesystem isolation use `VMFileSystem` or exclude `fs` explicitly. Since GHSA-6rh5-qq4q-97xh a `-fs` token also covers `fs/promises`; on earlier versions it did not, and `fs/promises` alone is a complete host filesystem read/write primitive. `'*'` is not sandbox-safe for untrusted code.
 - **`dgram`, `net`, `http`, `https`, `dns`** are network-IO builtins, allowed under `'*'`. Any of them give untrusted code outbound network access from the host. Embedders should explicitly exclude or allowlist.
 
 ---
@@ -263,8 +268,8 @@ CWE-284 (Improper Access Control). CWE-697 (Incorrect Comparison) for the origin
 
 1. **Host configures `nesting: true`** *without* providing an explicit `require` config object — e.g. `new NodeVM({ nesting: true })`. The developer assumes the absence of `require` means "no host modules" (matching the rest of the API's default-deny stance).
 2. **Sandbox code requires `vm2`**: succeeds because `NESTING_OVERRIDE` injected `vm2` into the builtin map even though the surrounding `require` config is empty/denied.
-3. **Sandbox constructs inner NodeVM** with attacker-chosen `require` config: `new NVM({ require: { builtin: ['child_process'] } })`.
-4. **Inner sandbox loads `child_process`** and runs arbitrary commands as the host process user.
+3. **Sandbox constructs inner NodeVM** with attacker-chosen `require` config: `new NVM({ require: { builtin: ['fs'] } })` (or `external: true` with host context — any capability the outer config denied).
+4. **Inner sandbox loads host `fs`** and reads or writes any file the host process can reach. (Before GHSA-pq68-rvw4-xp4r the inner config could name `child_process` directly for host command execution; that module is now hard-denied even for the inner sandbox, so the payoff is the host filesystem or externals rather than a shell.)
 
 ### Canonical Example
 
@@ -273,12 +278,12 @@ CWE-284 (Improper Access Control). CWE-697 (Incorrect Comparison) for the origin
 const vm = new NodeVM({ nesting: true }); // `require` omitted; defaults to false post-destructure
 vm.run(`
   const { NodeVM: NVM } = require('vm2');
-  const inner = new NVM({ require: { builtin: ['child_process'] } });
+  const inner = new NVM({ require: { builtin: ['fs'] } });
   module.exports = inner.run(
-    'module.exports = require("child_process").execSync("id").toString()'
+    'module.exports = require("fs").readFileSync("/etc/hostname", "utf8")'
   );
 `);
-// uid=1000(...) ...
+// host file contents — the outer NodeVM granted no builtins at all
 ```
 
 - Every array/boxed/exotic `require` shape rejected at construction, and the `require: {}` escape hatch still granting host `vm2` only: see test/ghsa/GHSA-8hr7-r645-pc6w/adversarial.js.
@@ -550,7 +555,7 @@ The fix restores **[Defense Invariant #13](../ATTACKS.md#defense-invariants)** a
 
 ### Detection Rules
 
-- **`builtin: ['*']` or `builtin: ['*', '-X']`** in NodeVM config — on an unpatched version this auto-allows `diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8`; here they are filtered. Same caveat as Category 21: `'*'` still allows `fs`, `child_process` (if not excluded), `net`, `http`, `dns` — not a sandbox-safe default for untrusted code.
+- **`builtin: ['*']` or `builtin: ['*', '-X']`** in NodeVM config — on an unpatched version this auto-allows `diagnostics_channel`, `async_hooks`, `perf_hooks`, `v8`; here they are filtered. Same caveat as Category 21: `'*'` still allows `fs`, `net`, `http` — not a sandbox-safe default for untrusted code.
 - **`require('diagnostics_channel').channel(...).subscribe(...)`** — host HTTP/DB/IPC observability subscription.
 - **`require('async_hooks').executionAsyncResource()` / `.createHook({...}).enable()`** — host async context inspection.
 - **`require('perf_hooks').performance.getEntriesByType('mark' | 'measure' | 'resource')`** — host performance timeline read.

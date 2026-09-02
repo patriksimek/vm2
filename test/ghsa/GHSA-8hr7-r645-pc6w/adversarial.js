@@ -108,9 +108,9 @@ describe('GHSA-8hr7-r645-pc6w adversarial (end-to-end)', () => {
 		const rce = `
 			try {
 				const {NodeVM} = require('vm2');
-				const inner = new NodeVM({require: {builtin: ['child_process']}});
-				const cp = inner.run("module.exports = require('child_process')", 'inner.js');
-				cp.execSync(${JSON.stringify('node -e "require(\'fs\').writeFileSync(process.argv[1],\'pwned\')"')} + ' ' + ${JSON.stringify(sentinel)});
+				const inner = new NodeVM({require: {builtin: ['fs']}});
+				const hostFs = inner.run("module.exports = require('fs')", 'inner.js');
+				hostFs.writeFileSync(${JSON.stringify(sentinel)}, 'pwned');
 				module.exports = {escaped: true};
 			} catch (e) {
 				module.exports = {escaped: false, err: e.message};

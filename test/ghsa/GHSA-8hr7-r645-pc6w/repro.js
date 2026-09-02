@@ -31,9 +31,12 @@
  *
  * ## Oracle
  *
- * Attempt the PoC and assert the sandbox never reaches host `child_process`
- * (marker 'PWN'). The fix either throws at construction (malformed nesting
- * config) or denies `require('vm2')` — either way no host command runs.
+ * Attempt the PoC and assert the sandbox never reaches a host builtin through
+ * a nested unrestricted NodeVM (marker 'PWN', produced by reading this very
+ * file through inner host `fs`). The fix either throws at construction
+ * (malformed nesting config) or denies `require('vm2')` — either way no host
+ * capability is reached. (`child_process` itself is hard-denied since
+ * GHSA-pq68-rvw4-xp4r, so it can no longer serve as the oracle.)
  */
 
 'use strict';
@@ -48,13 +51,14 @@ if (typeof it.cond !== 'function') {
 }
 
 // Build a NodeVM with the given require option + nesting, run the nested-escape
-// payload, and return 'PWN' iff the sandbox reached host child_process. Any
-// construction/run throw (the fix's guard) is a safe outcome.
+// payload, and return 'PWN' iff the sandbox reached host `fs` through the
+// inner NodeVM. Any construction/run throw (the fix's guard) is a safe outcome.
 function attemptEscape(requireOpt) {
+	const innerSrc = "module.exports = require('fs').readFileSync(" + JSON.stringify(__filename) + ", 'utf8').length > 0 ? 'PWN' : 'NOPWN'";
 	const payload =
 		"const { NodeVM } = require('vm2');\n" +
-		"const inner = new NodeVM({ require: { builtin: ['child_process'] } });\n" +
-		"module.exports = inner.run(\"module.exports = require('child_process').execSync('echo PWN').toString().trim()\");";
+		"const inner = new NodeVM({ require: { builtin: ['fs'] } });\n" +
+		'module.exports = inner.run(' + JSON.stringify(innerSrc) + ');';
 	try {
 		const outer = new NodeVM({ nesting: true, require: requireOpt });
 		return outer.run(payload, 'attacker.js');
@@ -65,9 +69,9 @@ function attemptEscape(requireOpt) {
 
 describe('GHSA-8hr7-r645-pc6w (nesting guard accepts non-config require → RCE)', function () {
 
-	it('canonical PoC: {nesting:true, require:[]} must not reach host child_process', function () {
+	it('canonical PoC: {nesting:true, require:[]} must not reach a host builtin through nested vm2', function () {
 		const out = attemptEscape([]);
-		assert.notStrictEqual(out, 'PWN', 'sandbox reached host child_process via array-shaped require');
+		assert.notStrictEqual(out, 'PWN', 'sandbox reached host fs via array-shaped require');
 	});
 
 	it('variant: require = new Array(0) (array subclass-free) must not escape', function () {

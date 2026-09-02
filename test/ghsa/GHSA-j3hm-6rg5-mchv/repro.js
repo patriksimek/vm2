@@ -50,12 +50,13 @@ describe('GHSA-j3hm-6rg5-mchv — sandbox cannot rebuild an unrestricted NodeVM 
 
 	it('closes ONE escalation route: the sandbox cannot require() vm2 itself to build a nested unrestricted VM', () => {
 		const vm = new NodeVM({ require: { external: true, root: REPO_ROOT } });
+		const innerSrc = "module.exports = require('fs').existsSync(" + JSON.stringify(VM2_ENTRY) + ") ? 'J3HM' : 'no'";
 		let escaped = false, threw = false;
 		try {
 			const out = vm.run(`
 				const real = require(${JSON.stringify(VM2_ENTRY)});
-				const inner = new real.NodeVM({ require: { builtin: ['child_process'], external: false } });
-				module.exports = inner.run("module.exports = require('child_process').execSync('echo J3HM').toString()", 'inner.js');
+				const inner = new real.NodeVM({ require: { builtin: ['fs'], external: false } });
+				module.exports = inner.run(${JSON.stringify(innerSrc)}, 'inner.js');
 			`, 'untrusted.js');
 			escaped = typeof out === 'string' && out.includes('J3HM');
 		} catch (e) { threw = true; }

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Security fixes
+
+- **GHSA-5h3f-q97h-ccvc** — a NodeVM with a custom `require.resolve` authorized the resolved path as a raw string prefix, so resolving an allowlisted package permanently authorized every prefix-sharing sibling beside it (`.../node_modules/foo` authorized `.../node_modules/foo2/index.js`), and the `{module, path}` return shape authorized the whole `node_modules` search directory; with the default `context: 'host'` the sibling's top-level code ran in the host realm. Fix in `lib/resolver-compat.js`: custom-resolver authorizations are recorded as resolved base paths in `externalPaths` and matched with the shared `isPathWithin` boundary predicate (exact match, or a separator at the boundary), with the extension candidates the loader probes authorized individually by full equality so an extension-less answer still resolves, and the object shape authorizes only the resolved package's directory inside the search directory. An authorization is also taken back when the load it was recorded for finds no module. **Behavior change:** a `{module, path}` answer whose `module` is absolute, relative or contains a `..` segment is now refused (it cannot name a package inside the search directory) and reports module-not-found; return the string shape to name a path directly. See ATTACKS.md Category 46 and `test/ghsa/GHSA-5h3f-q97h-ccvc/`.
+
 ## [3.12.1]
 
 ### Security fixes

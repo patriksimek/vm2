@@ -699,9 +699,9 @@ Re-verified 2026-09-02 on Node v26.7.0.
 
 ## Attack Category 46: NodeVM External-Package Allowlist Bypass via Unanchored Module-Path Prefix
 
-**Advisories**: GHSA-7q3f-wx44-378m
+**Advisories**: GHSA-7q3f-wx44-378m, GHSA-5h3f-q97h-ccvc
 
-**Tests**: test/ghsa/GHSA-7q3f-wx44-378m/, test/nodevm.js ("relative require not allowed to enter node modules"), test/nodevm.js ("allows specific transitive external dependencies in sandbox context")
+**Tests**: test/ghsa/GHSA-7q3f-wx44-378m/, test/ghsa/GHSA-5h3f-q97h-ccvc/, test/nodevm.js ("relative require not allowed to enter node modules"), test/nodevm.js ("allows specific transitive external dependencies in sandbox context"), test/nodevm.js ("can resolve paths based on a custom resolver"), test/nodevm.js ("can resolve conditional exports with a custom resolver")
 
 **Related**: [Category 45: NodeVM External-Package Allowlist Bypass via Unanchored Matcher and `..` Traversal](nodevm-require.md#attack-category-45-nodevm-external-package-allowlist-bypass-via-unanchored-matcher-and--traversal) (the *specifier*-space sibling of this check; see **Composition** below), [Category 24: NodeVM `require.root` Symlink Bypass (Path Check/Use TOCTOU)](nodevm-require.md#attack-category-24-nodevm-requireroot-symlink-bypass-path-checkuse-toctou) (the `realpath()` boundary this check delegates to first)
 
@@ -718,6 +718,15 @@ if (path.startsWith(mod.path)) {
 
 `startsWith` is a *containment* test on a string, not a *boundary* test on a path. For an allowlisted module at `.../node_modules/foo`, the sibling `.../node_modules/foo2/index.js` starts with `.../node_modules/foo`, so the test passed. The `node_modules` guard on the remainder did not catch it: that guard exists to stop a genuine *nested* dependency (`foo/node_modules/bar`), and a **sibling's** remainder (`2/index.js`) never contains a `node_modules` segment at all. The one check that would have caught it — requiring a separator after the prefix — was absent.
 
+The **authorization record** `isPathAllowedForModule` falls back to — `this.externals` — carried the same shape of mistake on the *filename* side. `LegacyResolver.customResolve` appends an entry to it every time the embedder's custom `require.resolve` returns a path, and before GHSA-5h3f-q97h-ccvc that entry was a raw prefix regex:
+
+```javascript
+this.externals.push(new RegExp('^' + escapeRegExp(resolved)));       // string return
+this.externals.push(new RegExp('^' + escapeRegExp(resolvedPath)));   // {module, path} return
+```
+
+`^/app/node_modules/foo` matches `/app/node_modules/foo2/index.js`, so resolving the one allowlisted package permanently authorized every prefix-sharing sibling of it — reachable directly by absolute path from the top-level sandbox script, with no cooperating relative require inside the allowlisted package and no `mod` involved. The object return shape is the same mistake one level wider: `path` there is a `node_modules` **search directory**, so authorizing it authorized every package inside it, prefix-sharing or not. With the default `context: 'host'` the sibling is loaded by the host `require()` and its top-level code runs with host authority — host `child_process`, host `fs`, host env.
+
 CWE-22 (Improper Limitation of a Pathname to a Restricted Directory). CWE-863 (Incorrect Authorization).
 
 ### Attack Flow
@@ -728,7 +737,14 @@ CWE-22 (Improper Limitation of a Pathname to a Restricted Directory). CWE-863 (I
 4. **The prefix test approves the sibling** — `path.startsWith(mod.path)` is true, the remainder `2/index.js` has no `node_modules` segment, so `isPathAllowedForModule` returns `true`.
 5. **The un-allowlisted sibling loads**, its top-level code runs, and its exports reach sandbox code — a package the embedder never authorized, with `transitive: false` explicitly set.
 
-### Canonical Example
+The custom-resolver route (GHSA-5h3f-q97h-ccvc) needs neither a cooperating package nor `transitive`:
+
+1. **Embedder configures a custom resolver** — `new NodeVM({require: {external: {modules: ['foo'], transitive: false}, root: appDir, context: 'host', resolve: n => lookUp(n)}})`. This is the plugin-host shape: resolution is pointed at the application's own dependency directory, and `context: 'host'` (the default) means resolved modules run in the host realm.
+2. **Sandbox requires the one allowlisted package** — `require('foo')`. The specifier passes the Category 45 allowlist pre-check, the embedder's resolver returns `.../node_modules/foo`, and `customResolve` records that path as authorized.
+3. **Sandbox requires a prefix-sharing sibling by absolute path** — `require('/app/node_modules/foo2/index.js')`. The recorded prefix has no boundary, so `isPathAllowedForModule`'s `this.externals` fallback approves it.
+4. **The host `require()` runs the sibling's top-level code**, in the host realm, with the embedder's authority. Sandbox escape.
+
+### Canonical Examples
 
 ```javascript
 // Embedder: exactly one external package, no transitive loading.
@@ -741,6 +757,23 @@ new NodeVM({require: {external: {modules: ['foo'], transitive: false},
 require('foo').reach('foo2');   // loads un-allowlisted /app/node_modules/foo2
 ```
 
+The custom-resolver route, where the authorization record itself is widened:
+
+```javascript
+// Embedder: one allowlisted package, resolved through a custom resolver.
+new NodeVM({require: {external: {modules: ['foo'], transitive: false}, root: '/app',
+                      context: 'host',      // the default: resolved modules run in the HOST
+                      resolve: n => n === 'foo' ? '/app/node_modules/foo' : undefined}});
+
+// Sandbox — two lines, no cooperating package needed:
+require('foo');                                  // authorizes the resolved path
+require('/app/node_modules/foo2/index.js');      // prefix-sharing sibling, host-required
+require('/app/node_modules/foo/../foo2/index.js');   // same target, spelled with `..`
+```
+
+- A resolver returning a **file** (`/app/pkgs/foo/index.js`) authorized `/app/pkgs/foo/index.jsx` and `/app/pkgs/foo/index.js.evil.js` the same way.
+- A resolver returning the **object** shape (`{module: 'foo', path: '/app/node_modules'}`) authorized `/app/node_modules` itself, i.e. every package in that directory — no prefix collision required.
+
 ### Why This Works
 
 The check compares two strings that both happen to be paths, using an operator that knows nothing about path structure. `foo` and `foo2` are unrelated packages, but `"foo2"` contains `"foo"` at offset 0, and `startsWith` reports only that. Package-name namespaces are attacker-populatable and prefix collisions are common in practice (`foo` / `foo2`, `lodash` / `lodash.merge`, `react` / `react-dom`), so containment at a path prefix is never a containment guarantee about *directories*. This is the same failure class as Category 45 one layer down, and the base `CustomResolver.isPathAllowed` already had the correct idiom a few lines above — it simply was not applied here.
@@ -752,12 +785,27 @@ The check compares two strings that both happen to be paths, using an operator t
 `lib/resolver-compat.js` — `isPathAllowedForModule` now requires a **path boundary** after `mod.path`, exactly mirroring the idiom in the base `CustomResolver.isPathAllowed`: the path either equals `mod.path`, or `mod.path` already ends in a separator, or the character at `mod.path.length` is a separator.
 
 ```javascript
-const len = mod.path.length;
-if (path.startsWith(mod.path) &&
-    (path.length === len || (len > 0 && this.fs.isSeparator(mod.path[len - 1])) || this.fs.isSeparator(path[len]))) {
+isPathWithin(base, path) {
+    if (!path.startsWith(base)) return false;
+    const len = base.length;
+    if (path.length === len) return true;
+    if (len > 0 && this.fs.isSeparator(base[len - 1])) return true;
+    return this.fs.isSeparator(path[len]);
+}
 ```
 
-Separator testing goes through `this.fs.isSeparator`, the same filesystem-aware predicate the rest of the resolver uses, so Windows backslash separators are handled by the `VMFileSystem` in force rather than by a hardcoded character. (Note that the obvious one-line form `path.startsWith(mod.path + path.sep)` is **wrong** in this function: the parameter `path` shadows the `path` module, so `path.sep` is `undefined` on a string and the comparison silently degrades.) The `node_modules` remainder test, the `mod.allowTransitive` short-circuit, and the `this.externals` fallback are unchanged — this fix only tightens the prefix into a boundary.
+That predicate lives on `CustomResolver` and is the resolver's single path-containment primitive: `isPathAllowedForModule` tests `mod.path` with it, `CustomResolver.isPathAllowed` tests each `require.root` entry with it, and `isCustomResolved` tests each custom-resolver authorization with it. One implementation means a future containment decision cannot be written with `startsWith` by habit and reintroduce the class in a third place.
+
+Separator testing goes through `this.fs.isSeparator`, the same filesystem-aware predicate the rest of the resolver uses, so Windows backslash separators are handled by the `VMFileSystem` in force rather than by a hardcoded character. (Note that the obvious one-line form `path.startsWith(mod.path + path.sep)` is **wrong** in this function: the parameter `path` shadows the `path` module, so `path.sep` is `undefined` on a string and the comparison silently degrades.) The `node_modules` remainder test and the `mod.allowTransitive` short-circuit are unchanged — this part of the fix only tightens the prefix into a boundary.
+
+**The authorization record is boundary-matched too** (GHSA-5h3f-q97h-ccvc). `customResolve` no longer appends a regex to `this.externals`. `this.externals` is now exactly what `makeExternalMatcher` builds — static, `node_modules`-anchored allowlist matchers — and every path the embedder's resolver authorizes is recorded in a separate list, `this.externalPaths`, of resolved base paths matched with `isPathWithin`, with a companion exact-match list `this.externalExact`. Both readers of the old record were updated: `isPathAllowedForModule`'s fallback and `registerModule`'s `allowTransitive` computation, which both now also consult `isCustomResolved`, so a custom-resolved module keeps the transitive standing it had, with the boundary applied. Four properties follow:
+
+- **The resolved path is authorized, not its string prefix.** `/app/node_modules/foo` authorizes itself and its descendants; `/app/node_modules/foo2/index.js`, `/app/pkgs/foo/index.jsx` and `/app/pkgs/foo/index.js.evil.js` are denied. Bases are stored through `this.fs.resolve`, and every candidate reaches `isPathAllowed` already normalized by `tryFile`/`readPackage`, so a `..` or doubled separator in an absolute require (`/app/node_modules/foo/../foo2/index.js`) is normalized away before the boundary test rather than spelling its way back inside the base.
+- **The `{module, path}` return shape authorizes the package, not the search directory.** `path` is a `node_modules` lookup directory; only `path`/`<package name>` — the first specifier segment, or the first two for a scoped name — is recorded, so resolving `@sc/pkg` does not authorize `@sc/pkg2`. A `module` that is absolute, relative, or `..`-bearing would widen that base back to the search directory or above it, or aim the extension candidates below outside the package, so such a resolution is refused outright: `customResolve` returns `undefined` and the standard loader reports module-not-found.
+- **An answer the loader has to find by probing an extension still resolves, exactly.** `LOAD_AS_FILE` probes `<path><ext>` for each configured extension, which a boundary-matched base does not cover, so those candidates are authorized individually in `externalExact` and matched by full string equality — `resolve()` returning `/app/pkgs/foo/index` still loads `index.js`, and `{module: 'bar', path: dir}` still loads the file `dir/bar.js`. An exact entry authorizes no descendants and no siblings, so `index.jsx`, `index2.js`, `bar.jsx` and `bar2.js` stay denied. Extensions that are not their own basename are skipped, exactly as `tryWithExtension` skips them, so a separator inside a configured extension cannot widen the entry.
+- **An answer that resolves to nothing leaves nothing behind.** The authorization has to be recorded before the load, because the load is what consults it; `loadAuthorized` therefore removes the record again when the load returns no filename or throws. Without that, a resolver answer naming a directory with no loadable module would permanently authorize that directory for every later require.
+
+This restores the closed-system property of [Defense Invariant #13](../ATTACKS.md#defense-invariants) on the external-package side: what the embedder named in `require.external`, resolved to the package directories and files the resolver actually answers with, is the set of host modules the sandbox can load. Nothing is authorized merely for sharing a name prefix with something that was. Within an authorized base the authorization is a *directory* one, and the Residual Risk section below records what that still admits.
 
 **Path space — the check is deliberately lexical on BOTH sides.** `isPathAllowedForModule` calls `super.isPathAllowed(path)` first, which is where Category 24's `realpath()` lives — but that call canonicalizes into a *local* variable purely to test against `rootPaths`; it neither returns nor rewrites `path`. So the `path` and `mod.path` this boundary check sees are both the resolver's lexically-resolved paths (verified empirically: on macOS the observed path is `/tmp/…`, not the canonical `/private/tmp/…`). That symmetry is the point. Both operands come from the same resolver in the same space, so the comparison is like-for-like; canonicalizing only one side would introduce a fresh mismatch — a legitimate subpath reached through a symlinked `node_modules` would stop matching its own `mod.path` and be over-blocked. Escape *through* a symlink is a filename-space concern and is already held by the `realpath()` gate against `require.root` (Category 24), which runs first and independently. Neither check subsumes the other.
 
@@ -765,30 +813,36 @@ Separator testing goes through `this.fs.isSeparator`, the same filesystem-aware 
 
 The two external-allowlist defenses are orthogonal and operate in different value spaces at different times:
 
-| | Category 45 (GHSA-c48m-32m9-vx93) | Category 46 (GHSA-7q3f-wx44-378m) |
+| | Category 45 (GHSA-c48m-32m9-vx93) | Category 46 (GHSA-7q3f-wx44-378m, GHSA-5h3f-q97h-ccvc) |
 |---|---|---|
-| Function | `LegacyResolver.customResolve` | `LegacyResolver.isPathAllowedForModule` |
+| Function | `LegacyResolver.customResolve` | `LegacyResolver.isPathAllowedForModule`, and what `customResolve` records for it |
 | Space | Specifier (bare module name as written) | Filename (resolved absolute path) |
 | Timing | Before the custom resolver, before any `realpath()` | After resolution, at the authorization decision |
-| Precondition | A custom `require.resolve` is configured | None — the ordinary loader path |
+| Precondition | A custom `require.resolve` is configured | None — the ordinary loader path; the custom-resolver route additionally needs a configured `require.resolve` |
 | Guards against | Lexical escape of the package *name* boundary | Escape of the package *directory* boundary |
 
-Neither weakens the other: Category 45's rejection is a `return undefined` that makes resolution fall through without appending to `this.externals`, and Category 46 only narrows an existing `true`-returning branch. A request must satisfy both, plus Category 24's `realpath()` root check, to load.
+Neither weakens the other: Category 45's rejection is a `return undefined` that makes resolution fall through without recording an authorization, and Category 46 only narrows what an authorization covers. A request must satisfy both, plus Category 24's `realpath()` root check, to load.
 
 ### Detection Rules
 
 - `startsWith` (or `indexOf(x) === 0`) applied to a filesystem path where directory containment is intended, without a following separator test.
+- `new RegExp('^' + escapeRegExp(somePath))` — an escaped path turned into a matcher is the same unanchored prefix in regex clothing, and reads as safe because it is escaped.
 - A containment guard on the *remainder* of a prefix strip (here, the `node_modules` test) being relied upon to catch cases the prefix test itself should have rejected — the remainder of a sibling match is not structurally distinguishable from the remainder of a legitimate subpath.
 - Any authorization comparison where one operand is canonicalized and the other is not.
+- Anything appended to an authorization record at *runtime* from a value an embedder callback returned — those entries outlive the require that created them and are consulted for every later require.
+- An authorization derived from a **search directory** rather than from the artifact that was actually resolved inside it; the directory is always wider than the answer.
 
 ### Residual Risk
 
 - **Case-insensitive filesystems.** `.../node_modules/FOO/index.js` does not match `mod.path` of `.../node_modules/foo` and is denied. Safe direction; an embedder relying on macOS/Windows case-insensitivity gets a denial rather than a load.
 - **A genuinely nested `foo/foo2`** (a directory literally inside the allowlisted package) is still allowed, correctly — it is part of `foo`.
 - **`transitive: true` is unaffected, by design.** That option sets `mod.allowTransitive`, which short-circuits `isPathAllowedForModule` *before* the prefix check, so an allowlisted package may still load sibling directories. This is what the option means — npm flattens `node_modules`, so a genuine transitive dependency *is* a sibling — and it is unchanged before and after this fix (verified against the pre-fix control). The advisory's configuration, and the only one this fix alters, is `transitive: false`.
-- **The `this.externals` regex fallback is unchanged** and remains the authorization record for paths the resolver has already approved; this fix does not narrow it. A path appended there by Category 45's route stays allowed by design.
+- **The static `this.externals` matchers are unchanged.** `makeExternalMatcher` anchors them on `[\\/]node_modules[\\/]<pattern>` with an end-or-separator tail, so they already carry the boundary; `external: ['foo']` authorizes the whole `.../node_modules/foo` package tree by design, including files a resolver never returned.
+- **The embedder's resolver is still trusted for allowlisted specifiers.** A `require.resolve` that maps `foo` to an arbitrary directory authorizes that directory and its descendants — that is what configuring a resolver means. What is no longer inherited is everything *beside* the answer.
+- **A `{module, path}` answer whose `module` is absolute, relative or `..`-bearing is refused.** Such a specifier cannot name a package *inside* the search directory, which is the only thing that shape can authorize, so `customResolve` returns `undefined` and the require reports module-not-found. This is the one configuration whose observable behaviour changes; a resolver that wants to name a path directly returns the string shape instead.
+- **Authorization inside a base is a directory authorization, and two pre-existing consequences of that are unchanged by GHSA-5h3f-q97h-ccvc.** A symlink *inside* an authorized base that points at a sibling package is followed: `externalPaths` matching is lexical (deliberately, for the same like-for-like reason as the `mod.path` check above), while `realpath()` is applied only to `rootPaths`, so the candidate is judged by its lexical path and loaded through its target — bounded by `require.root`, which still holds against the canonical path (Category 24). And a nested `foo/node_modules/nested` under a custom-resolved `foo` loads even with `transitive: false`, because the `externalPaths` fallback carries no `node_modules`-remainder guard, unlike the adjacent `mod.path` branch that does.
 
-Re-verified 2026-09-02 on Node v26.7.0.
+Re-verified 2026-09-02 on Node v26.7.0. The custom-resolver route (GHSA-5h3f-q97h-ccvc) is verified on Node v26.7.0 and Node v8.17.0 by `test/ghsa/GHSA-5h3f-q97h-ccvc/`.
 
 ---
 

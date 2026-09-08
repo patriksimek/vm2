@@ -39,6 +39,13 @@ jobs:
               if: ${{ matrix.node-version >= 20 }}
               run: npm test
 
+            # `npm test` regenerates lib/sources.js (pretest). If that changed
+            # anything, a bootstrap file was edited without committing the
+            # regenerated module, and installs from git would ship stale code.
+            - name: Verify lib/sources.js is committed up to date
+              if: ${{ matrix.node-version >= 20 }}
+              run: git diff --exit-code -- lib/sources.js
+
             - name: Run unit tests (node < 20)
               if: ${{ matrix.node-version < 20 }}
               run: node scripts/legacy-test-runner.js

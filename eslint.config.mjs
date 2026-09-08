@@ -7,7 +7,9 @@ export default [
 	// config below and had no effect, so a worktree's copy of lib/ and test/
 	// was being reported as a second set of errors.
 	{
-		ignores: ['eslint.config.mjs', '.claude/worktrees/**', '.superpowers/**'],
+		// lib/sources.js is generated (scripts/build-sources.js): four files as
+		// string literals, nothing to lint and ~400 KB to parse.
+		ignores: ['eslint.config.mjs', 'lib/sources.js', '.claude/worktrees/**', '.superpowers/**'],
 	},
 	// Everything is CommonJS. `sourceType: 'commonjs'` is what allows the
 	// top-level `return` in lib/setup-sandbox.js and lib/setup-node-sandbox.js

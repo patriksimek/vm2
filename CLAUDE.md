@@ -34,6 +34,7 @@ Exported from `lib/main.js` via `index.js`:
 | `lib/filesystem.js` | `VMFileSystem` implementation. |
 | `lib/resolver.js` | Module resolution for `NodeVM`. |
 | `lib/events.js` | Sandbox-safe copy of Node's `events`. |
+| `lib/sources.js` | **Generated** by `scripts/build-sources.js`. `bridge.js`, `setup-sandbox.js`, `setup-node-sandbox.js`, and `events.js` embedded as string literals so the runtime never reads package files from disk and bundlers (Bun compile, esbuild, pkg) work. Regenerate with `npm run build:sources` after editing any of those four files (`npm test` does it via `pretest`; `test/sources.js` fails if it is stale). Never edit by hand. |
 
 ### CLI
 
@@ -97,6 +98,7 @@ Use the `/hacker` skill after making security-related changes to systematically 
 ## Workflow
 
 - Keep changes small and focused. Security-sensitive code discourages large refactors.
+- After editing `bridge.js`, `setup-sandbox.js`, `setup-node-sandbox.js`, or `events.js`, run `npm run build:sources` before any ad-hoc `node -e` check. The runtime executes the embedded copy in `lib/sources.js`, not the file on disk.
 - Include threat model reasoning and escape-prevention tests for boundary changes.
 - Follow existing ESLint code style.
 - Vulnerabilities: follow `SECURITY.md`, not public issues.

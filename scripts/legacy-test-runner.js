@@ -94,6 +94,7 @@ global.afterEach = fn => {
 
 require('../test/vm');
 require('../test/nodevm');
+require('../test/sources');
 
 // Auto-discover GHSA regression suites under test/ghsa/. mocha (Node 20+) does
 // this via --recursive; for Node 8-18 the legacy runner has to walk the tree.

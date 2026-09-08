@@ -96,8 +96,12 @@ describe('GHSA-fcqc-726x-5wfc (shared Buffer pool discloses/corrupts host memory
 		assert.strictEqual(poolByteLength('Buffer.allocUnsafe(1)'), 1, 'Buffer.allocUnsafe');
 		assert.strictEqual(poolByteLength('Buffer.allocUnsafeSlow(1)'), 1, 'Buffer.allocUnsafeSlow');
 		// Views derived from a depooled buffer only ever see the parent's own bytes.
-		assert.strictEqual(poolByteLength('Buffer.from([1, 2, 3]).slice(0, 1)'), 3, 'slice view');
-		assert.strictEqual(poolByteLength('Buffer.from([1, 2, 3]).subarray(0, 1)'), 3, 'subarray view');
+		// Since GHSA-489w-w794-jq94 the bridge bounds every host->sandbox `.buffer`
+		// read to the reading view's own extent, so a sub-view now sees only its own
+		// bytes (1) rather than the whole parent store (3) — strictly tighter, and
+		// still within this test's claim that `.buffer` never exceeds the view.
+		assert.strictEqual(poolByteLength('Buffer.from([1, 2, 3]).slice(0, 1)'), 1, 'slice view');
+		assert.strictEqual(poolByteLength('Buffer.from([1, 2, 3]).subarray(0, 1)'), 1, 'subarray view');
 		// byteOffset must be 0 so the .buffer view starts at the buffer's own bytes.
 		assert.strictEqual(new VM().run('Buffer.from([0]).byteOffset'), 0, 'byteOffset');
 		if (typeof Buffer.copyBytesFrom === 'function') {

@@ -314,13 +314,13 @@ A non-iterable **array-like whose `length` is a toggling accessor** (`new Uint8A
 
 ## Attack Category 41: Shared Buffer Pool Discloses / Corrupts Host Memory
 
-**Advisories**: GHSA-fcqc-726x-5wfc
+**Advisories**: GHSA-fcqc-726x-5wfc, GHSA-489w-w794-jq94
 
-**Tests**: test/ghsa/GHSA-fcqc-726x-5wfc/
+**Tests**: test/ghsa/GHSA-fcqc-726x-5wfc/, test/ghsa/GHSA-489w-w794-jq94/
 
 **Uses**: [Category 15: Property Descriptor Value Extraction](host-reference-primitives.md#attack-category-15-property-descriptor-value-extraction) (in spirit — a getter, `Uint8Array.prototype.buffer`, hands back more than the sandbox should see)
 
-Advisory: GHSA-fcqc-726x-5wfc. CWE-200 (Information Exposure) + CWE-787 (Out-of-bounds Write). This is a **confidentiality + integrity** escape, not a DoS — distinct from the `bufferAllocLimit` DoS categories (23, 36) that share the `Buffer.*` chokepoint.
+CWE-200 (Information Exposure) + CWE-787 (Out-of-bounds Write). This is a **confidentiality + integrity** escape, not a DoS — distinct from the `bufferAllocLimit` DoS categories (23, 36) that share the `Buffer.*` chokepoint. The category has two halves: buffers the SANDBOX allocates (GHSA-fcqc-726x-5wfc) and buffers the HOST allocates and hands in (GHSA-489w-w794-jq94).
 
 ### Description
 
@@ -374,9 +374,98 @@ new VM().run(`
 
 Views derived from a depooled buffer (`slice`, `subarray`, `map`, `filter`, species-constructed results) are safe: they either view the parent's now-exact-size, sandbox-owned backing store, or are freshly constructed through the Category-36-capped TypedArray constructors. No copy is needed for them.
 
+### Variant: Host-Allocated Buffers Crossing The Bridge (GHSA-489w-w794-jq94)
+
+The `depoolBuffer` rule above only reaches buffers a **sandbox-facing factory** produced. A buffer the **host** allocated and then handed to the sandbox never passes through any of those wrappers, so its `.buffer` still delivers the whole pool. Every ordinary NodeVM configuration produces such buffers: `require: { builtin: ['zlib'] }` and `zlib.deflateSync('hello')` returns a 13-byte host `Buffer` sitting at some offset inside Node's 64 KiB pool. The same holds for an embedder-supplied `sandbox: { b: Buffer.from('hello') }`, for a host `Buffer` passed as a callback argument, and for `fs.readFileSync` results.
+
+#### Attack Flow
+
+1. Host code (a builtin, the embedder, or a Node internal on the same tick) allocates small buffers holding secrets; Node packs them into the shared pool.
+2. Sandbox obtains any host-allocated `Buffer` — a builtin's return value, a sandbox-injected buffer, a callback argument.
+3. Sandbox reads the buffer's backing store — `.buffer`, or its legacy twin `.parent` (DEP0004), both of which return the **same** `ArrayBuffer`. The bridge `get` trap forwards the raw host accessor and wraps its result, which is the **whole pool**.
+4. Sandbox builds a full-width view with `Buffer.from(ab, 0, ab.byteLength)` — the sharing overload, which delegates to host `Buffer.from` and therefore views the raw pool.
+5. Sandbox reads it (disclosure) or writes it (corruption), reaching every byte of every host buffer currently pooled.
+
+#### Canonical Examples
+
+```javascript
+// Host-builtin return value (NodeVM with the zlib builtin)
+new NodeVM({ require: { builtin: ['zlib'] } }).run(`
+    const r  = require('zlib').deflateSync('hello');   // 13-byte host Buffer
+    const ab = r.buffer;                               // the ENTIRE 64 KiB pool
+    const view = Buffer.from(ab, 0, ab.byteLength);
+    view.toString('latin1');                           // DISCLOSE host buffers
+    view.fill(0x41);                                   // CORRUPT them
+`, 'attack.js');
+
+// Embedder-supplied host Buffer
+new VM({ sandbox: { b: Buffer.from('hello') } }).run(`
+    const ab = b.buffer;                               // the ENTIRE 64 KiB pool
+    Buffer.from(ab, 0, ab.byteLength).fill(0x41);
+`);
+
+// The SAME store under its legacy name. `Buffer.prototype.parent` (DEP0004) is
+// still live, so a defense that keys on the property name `buffer` alone leaves
+// the whole escape open through this one accessor.
+new VM({ sandbox: { b: Buffer.from('hello') } }).run(`
+    const p = b.parent;                                // the ENTIRE 64 KiB pool
+    Buffer.from(p, 0, p.byteLength).fill(0x41);
+`);
+
+// Getter-extraction shape: pull the raw host %TypedArray%.prototype.buffer (or
+// Buffer.prototype.parent) getter out through a host-bound __lookupGetter__
+// primitive (Category 30/37) and invoke it with the host Buffer as receiver,
+// sidestepping the `get` trap.
+new VM({ sandbox: { b: Buffer.from('hello') } }).run(`
+    const g = Buffer.call.call({}.__lookupGetter__, b, 'buffer');
+    g.call(b).byteLength;                              // 65536 before the fix
+`);
+```
+
+#### Why It Works
+
+The backing store is reached through accessors that read a V8 internal slot — `%TypedArray%.prototype.buffer`, `DataView.prototype.buffer`, and the legacy `Buffer.prototype.parent`, all of which hand back the *same* `ArrayBuffer`. The bridge invokes it on the raw host object and wraps whatever comes back, so the pool ArrayBuffer crosses as an ordinary value — no capability check is involved. The sandbox-side `Buffer.from(arrayBuffer, byteOffset, length)` ownership rule cannot catch it either: a **full-width view of the pool owns its whole backing store** (`byteOffset === 0`, `byteLength === buffer.byteLength`), so it satisfies the ownership test exactly and is passed through unchanged. The rule has to be applied to the *host view being read*, not to the sandbox buffer being built — and keyed on the identity of the value being delivered, not on a list of property names, or a sibling accessor re-opens it.
+
+#### Mitigation
+
+`lib/bridge.js` restores the **backing-store ownership invariant** stated in the Mitigation above — a buffer visible to the sandbox may expose no byte beyond its own — in the **host→sandbox** direction, where no sandbox-side factory can enforce it. The references it needs are captured at bridge init, per [Defense Invariant #8](../ATTACKS.md#defense-invariants). The rule is keyed on **identity, not on a property name**: when a value read off a host `ArrayBufferView` **is** that view's backing store and the view does not own the whole store (`byteOffset !== 0 || byteLength !== store.byteLength`), the sandbox receives a **bounded copy** — a host-side `ArrayBuffer.prototype.slice(byteOffset, byteOffset + byteLength)` of exactly the view's own bytes — never the shared store. `.buffer`, `.parent` and any future alias are covered by that one rule.
+
+- `otherBoundedViewStore(view, value)` is the chokepoint. It classifies the view (`%TypedArray%.prototype` vs `DataView.prototype`) and the store (`ArrayBuffer.prototype` vs `SharedArrayBuffer.prototype`) by prototype-chain identity against references cached at bridge init, reads the view's store and extent through the matching cached intrinsic getters, and copies with the realm-correct `slice`.
+- Applied in `BaseHandler.get` for every object-valued read off a host view and, defensively, in `BaseHandler.getOwnPropertyDescriptor` for a shadowing own data descriptor. The hot-path gate is the cached host `ArrayBuffer.isView`, an internal-slot check that cannot be faked or throw; everything else runs only for genuine host views.
+- **Fail closed, where the bridge can tell.** If `view` carries the `ArrayBufferView` internal slot but the bridge cannot read its extent — a realm exposing `%TypedArray%.prototype` without its `buffer` / `byteOffset` / `byteLength` accessors, a detached view on an engine whose getters throw, or a `slice` that throws — an `ArrayBuffer` coming off that view is refused with `VMError` rather than delivered. Silently substituting an empty store would corrupt legitimate data flows with no diagnosable signal; delivering the store is the vulnerability itself. Values that are *not* backing stores still cross normally, so ordinary property reads on such a view keep working. This says nothing about a store the bridge cannot **classify** — see the Known Residual.
+- **The brand check itself must be reachable.** `ArrayBuffer.isView` is resolved from the OTHER realm's global `ArrayBuffer` first, with `ArrayBuffer.prototype.constructor` only as a fallback: hanging it off `constructor` alone let a host app disable the entire defense by shadowing that one property before vm2 loaded. If neither route yields it in a realm that has view prototypes at all, `otherIsView` falls back to a prototype-chain walk and `otherBoundedViewStore` refuses outright, so a missing brand check can never mean "bounding off".
+- **A foreign store on a host view is refused.** A backing store read off a host view that is *not* that view's own store can only have been planted by the embedder (an own data property or accessor shadowing `buffer` / `parent` with some other `ArrayBuffer`). There is no extent to bound it to and it is very likely another pooled store, so it is refused with `VMError` — one identity compare on a path already taken.
+- `SharedArrayBuffer`-backed views are bounded the same way: `SharedArrayBuffer.prototype.slice` yields a fresh, smaller `SharedArrayBuffer`, so the wider shared store — and any host-realm view onto it — stops at the bridge.
+- The raw host `%TypedArray%.prototype.buffer`, `DataView.prototype.buffer` and `Buffer.prototype.parent` getters — and the matching offset getters `%TypedArray%.prototype.byteOffset`, `DataView.prototype.byteOffset` and `Buffer.prototype.offset`, so an extracted getter cannot contradict the bounded store by reporting the view's true offset inside the pool — are registered as **undeliverable** raw host accessors (the same identity set and chokepoints the raw prototype readers of [Category 37](host-prototype-mutation.md) use), so the getter-extraction shape collapses to a non-callable sentinel and every invocation shape — direct, `Function.prototype.call`/`.apply`/`.bind`, `Reflect.apply`/`construct` — is refused. Ordinary property reads are unaffected: they never travel through the `apply` trap. Host `Buffer` is not a JS intrinsic and is exposed on Node's global through a lazy getter, so it is resolved off the OTHER realm's global at bridge init, through both descriptor shapes, and skipped entirely on a host without `Buffer`.
+- **The triple stays consistent.** Once a view's store is delivered bounded, that view's `byteOffset` — and the legacy numeric `offset` — read as `0` from the same `get` trap, because the store the sandbox holds now starts at the view's own first byte. Without this the standard Node re-view idiom `Buffer.from(v.buffer, v.byteOffset, v.length)` would throw `RangeError: "offset" is outside of buffer bounds`.
+- `bufferOwnsExactBackingStore` in `lib/setup-sandbox.js` no longer tries to *observe* ownership — bounding makes `byteOffset === 0` and `buffer.byteLength === length` read identically for a pooled buffer and an owning one, and each `.buffer` read of a non-owning view costs a copy. It decides by construction instead, from Node's own pooling rule (`allocate()` uses the shared pool only when `size < (Buffer.poolSize >>> 1)`): anything smaller is copied unconditionally, anything larger already owns its store. Over-copying is always safe; the bridge-side bounding is the backstop if Node's rule ever changes. The `Buffer.from(arrayBuffer, byteOffset, length)` **sharing** overload is preserved for a host-realm `ArrayBuffer` too — the sandbox-side internal-slot brand test cannot recognize a bridge proxy, so `bufferFrom` additionally accepts the result when its own backing store **is** the argument, an identity no sandbox look-alike can forge.
+
+**Observable behaviour.** For a host view that does not own its whole backing store:
+
+- `.buffer` / `.parent` is a **bounded copy**: `hostBuf.buffer !== hostBuf.buffer` (a fresh copy per read) and writes through it are not host-visible.
+- `byteOffset` and the legacy numeric `offset` read as **0**.
+- Sub-views the sandbox itself creates from a host-backed `Buffer` (`hostBuf.subarray(4, 8).buffer`) lose `.buffer` aliasing with their parent as well — they are bounded to their own bytes. Index writes on such a sub-view still alias the parent and are still host-visible; only the *store* is decoupled. This is accepted, not engineered around: a sub-view that could widen back to its parent's store is the same escape one hop away.
+- Every `.buffer` / `.parent` read of a non-owning host view is a **fresh host-side copy**, so reading one in a loop amplifies allocation and copying proportionally to the view's size times the number of reads. It is bounded by the sandbox `timeout` like any other sandbox-driven work, and by the view's own length — not by the pool's — but a large sub-view read repeatedly is measurably more expensive than it was.
+- `Buffer.from(hostArrayBuffer, byteOffset, length)` over a **strict sub-range** of a host-realm `ArrayBuffer` **below `Buffer.poolSize / 2`** returns a copy rather than a live view, for the same reason. Larger sub-ranges stay live views: such stores are never pooled, so `depoolBuffer` leaves them alone. The full-range form — the documented re-view idiom — always shares.
+- The `Buffer.from(arrayBuffer, …)` sharing overload discussed here is about **host-realm** `ArrayBuffer`s, which reach the sandbox as bridge proxies. A **sandbox-realm** `ArrayBuffer` passed to a host `Buffer` API is rejected by Node's own internal-slot check, exactly as before this fix — pre-existing behaviour, unchanged.
+- A `SharedArrayBuffer`-backed view is delivered as a **copy**, so an embedder that wants live cross-realm sharing must hand the sandbox a view that spans the whole store.
+
+A host buffer that owns its whole store (`Buffer.alloc(n)`, anything at or above `Buffer.poolSize / 2`) is untouched: same object, identity-stable, still write-through — the only case where writing through `.buffer` ever had defined host-visible meaning.
+
+**Known Residual.** The bridge can only bound a store it can tie to a *view*, and can only recognise a store whose prototype chain it can classify. Two embedder-authored shapes remain:
+
+- **A bare `ArrayBuffer` handed over directly** — a host object property whose value *is* a pooled `ArrayBuffer` (`{ pool: Buffer.from('x').buffer }`), or a host function that returns one (`function leak() { return Buffer.from('x').buffer; }`). No view is in the picture at all, so there is no extent to measure against and the store is delivered as-is. Planting such a store *on a view*, as an own `buffer` / `parent` property or accessor, is no longer a residual — it is refused; see the Mitigation.
+- **A store the bridge cannot classify** — for example a host view over an `ArrayBuffer` from a *different host realm* (another `vm` context, a worker), whose prototype is not the cached `ArrayBuffer.prototype`. `otherBackingStoreInfo` returns null and the value is delivered raw rather than refused. Such a store is not Node's shared pool but an embedder-constructed cross-realm one, and refusing it would break legitimate multi-realm embedders, so it is documented rather than closed.
+
+Both require the embedder to deliberately hand over a raw or cross-realm `ArrayBuffer`. The rule for embedders is: hand the sandbox the `Buffer` (or a full-store view) and let the bridge bound it — never its raw backing store.
+
 ### Detection Rules
 
 - `Buffer.from([0]).buffer.byteLength !== 1` inside a sandbox → pooling leak is open.
+- `hostBuffer.buffer.byteLength > hostBuffer.length` for any host-allocated buffer reachable from the sandbox (a builtin's return value, an injected `sandbox` buffer, a callback argument) → the host→sandbox half is open.
+- `hostBuffer.parent.byteLength > hostBuffer.length` → the same half is open through the legacy `parent` accessor. More generally: **any** own accessor on a host binary-data prototype that returns the backing `ArrayBuffer` must be bounded or denied, not just `buffer`. Enumerate them per engine — on Node 26 they are `%TypedArray%.prototype.buffer`, `DataView.prototype.buffer` and `Buffer.prototype.parent` — and prefer a rule keyed on the identity of the delivered value over a list of names.
+- Any new host→sandbox read path that can surface a host `ArrayBuffer` without passing through `otherBoundedViewStore`.
+- Sandbox code that reaches for a raw host backing-store getter (`__lookupGetter__`, `getOwnPropertyDescriptor` on a host prototype) rather than reading the property.
 - Any sandbox-facing `Buffer`/typed-array factory whose result has `byteOffset !== 0` or `buffer.byteLength !== length`.
 - Reading `.buffer` on a pooled buffer and passing it to the `Buffer.from(ab, off, len)` overload.
 - New `Buffer.*` factories in future Node versions must be checked for pool-backing, not just alloc-size (the `BUFFER_STATIC_CLASSIFIED` fail-closed gate from Category 23 catches *unclassified* methods, but a method classified SAFE for alloc-size could still return a pooled buffer — reclassify with pooling in mind).

@@ -221,6 +221,44 @@ const SKIPS = [
 		phase: 2,
 		security: false,
 	},
+	{
+		match: 'embedded bootstrap sources bootstrap frames stay classified as host frames in sandbox stack traces',
+		// Honoured even under VM2_BUN_NO_SKIP: this one terminates the Bun process
+		// (CI run 34224395793 died right after the preceding test with no TAP
+		// epilogue; reproduced locally on Bun 1.4.0), so leaving it enabled would
+		// stop the canary reaching its summary.
+		neverUnskip: true,
+		reason:
+			'Same shape as the GHSA-v27g-jcqj-v8rw quarantine: a sandbox ' +
+			'Error.prepareStackTrace that calls CallSite methods on frames created ' +
+			'inside a bridged array-method callback and a Promise then-wrapper ' +
+			'terminates the Bun process outright. The /vm2/lib/* host-frame ' +
+			'classification it asserts is therefore untestable on JSC.',
+		phase: 2,
+		security: true,
+	},
+	{
+		match: 'embedded bootstrap sources every CallSite accessor on a bootstrap frame is redacted',
+		reason:
+			'CallSite objects handed to a sandbox Error.prepareStackTrace have no ' +
+			'methods on JSC, so the accessor sweep observes nothing and cannot ' +
+			'exercise the redaction. Running it would be a vacuous green; the ' +
+			'deepStrictEqual on the (empty) cross-realm array also fails on the ' +
+			'prototype comparison.',
+		phase: 2,
+		security: true,
+	},
+	{
+		match: 'embedded bootstrap sources NodeVM require() failures do not expose setup-node-sandbox frames',
+		reason:
+			'JSC formats the require-failure stack itself, ignoring the sandbox ' +
+			'prepareStackTrace and the GHSA-v27g / GHSA-x6m4 redactors: the ' +
+			'string carries /vm2/lib/setup-sandbox.js frames AND host absolute ' +
+			'paths (lib/bridge.js, lib/nodevm.js, the test file, mocha). Same ' +
+			'information-disclosure class as the Error.captureStackTrace entry above.',
+		phase: 2,
+		security: true,
+	},
 ];
 
 const NO_SKIP = process.env.VM2_BUN_NO_SKIP === '1';

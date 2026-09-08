@@ -259,7 +259,68 @@ const SKIPS = [
 		phase: 2,
 		security: true,
 	},
-];
+	{
+		match: 'GHSA-489w-w794-jq94 (host Buffers expose the shared allocation pool) Test 2: an embedder-exposed pooled host Buffer does not expose the pool',
+		reason:
+			'Bun has no shared Buffer allocation pool, so Buffer.from("hello") OWNS its ' +
+			'5-byte store and the bridge shares it by design (same as Test 8\'s owning ' +
+			'control, which passes). The probe\'s own fill(0x41) therefore lands on ' +
+			'the exposed buffer -- the "corrupted" assertion only distinguishes a ' +
+			'pooled copy from a shared store, and on JSC that buffer is never pooled. ' +
+			'No pool exists to leak; nothing crosses the isolation boundary.',
+		phase: 2,
+		security: false,
+	},
+	{
+		match: 'GHSA-489w-w794-jq94 (host Buffers expose the shared allocation pool) Test 11: the legacy `parent` accessor does not expose the pool',
+		reason:
+			'Bun has no shared Buffer allocation pool: Buffer.from("hello") owns an ' +
+			'exact-size 5-byte store (byteOffset 0, buffer.byteLength 5), where Node ' +
+			'hands out a window into a 64 KiB pool. The test\'s own precondition ' +
+			'guard ("host buffer is not pool-backed; test would be vacuous") fires, ' +
+			'so there is no pool to leak and nothing to exercise. Not a defence gap: ' +
+			'the bounding in lib/bridge.js is only reachable for a non-owning view, ' +
+			'and owning views are shared by design (Test 8 control).',
+		phase: 2,
+		security: false,
+	},
+	{
+		match: 'GHSA-489w-w794-jq94 (host Buffers expose the shared allocation pool) Test 14 (control): the standard re-view idiom still works on a pooled host buffer',
+		reason:
+			'Bun has no shared Buffer allocation pool: Buffer.from("hello") owns an ' +
+			'exact-size 5-byte store (byteOffset 0, buffer.byteLength 5), where Node ' +
+			'hands out a window into a 64 KiB pool. The test\'s own precondition ' +
+			'guard ("host buffer is not pool-backed; test would be vacuous") fires, ' +
+			'so there is no pool to leak and nothing to exercise. Not a defence gap: ' +
+			'the bounding in lib/bridge.js is only reachable for a non-owning view, ' +
+			'and owning views are shared by design (Test 8 control).',
+		phase: 2,
+		security: false,
+	},
+	{
+		match: 'GHSA-489w-w794-jq94 (host Buffers expose the shared allocation pool) Test 16: shadowing host ArrayBuffer.prototype.constructor does not disable the bounding',
+		reason:
+			'Bun has no shared Buffer allocation pool: Buffer.from("hello") owns an ' +
+			'exact-size 5-byte store (byteOffset 0, buffer.byteLength 5), where Node ' +
+			'hands out a window into a 64 KiB pool. The test\'s own precondition ' +
+			'guard ("host buffer is not pool-backed; test would be vacuous") fires, ' +
+			'so there is no pool to leak and nothing to exercise. Not a defence gap: ' +
+			'the bounding in lib/bridge.js is only reachable for a non-owning view, ' +
+			'and owning views are shared by design (Test 8 control).',
+		phase: 2,
+		security: false,
+	},
+	{
+		match: 'GHSA-489w-w794-jq94 (host Buffers expose the shared allocation pool) Test 18: a foreign backing store planted on a host view is refused',
+		reason:
+			'Bun has no shared Buffer allocation pool, so the store the test plants ' +
+			'(Buffer.from("hello").buffer) is a 5-byte owned ArrayBuffer and the ' +
+			'"planted store is not pooled; test would be vacuous" precondition fires. ' +
+			'The foreign-store refusal itself is engine-independent (identity ' +
+			'compare in lib/bridge.js); only its pool-based oracle is unavailable.',
+		phase: 2,
+		security: false,
+	},];
 
 const NO_SKIP = process.env.VM2_BUN_NO_SKIP === '1';
 

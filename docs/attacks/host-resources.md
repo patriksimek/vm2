@@ -8,9 +8,9 @@ Categories in this file: [22](host-resources.md#attack-category-22-promise-execu
 
 ## Attack Category 22: Promise Executor Unhandled Rejection — Host Process DoS
 
-**Advisories**: GHSA-hw58-p9xv-2mjh, GHSA-gjq8-xm47-88rc
+**Advisories**: GHSA-hw58-p9xv-2mjh, GHSA-gjq8-xm47-88rc, GHSA-2v2p-6j97-cjg9
 
-**Tests**: test/ghsa/GHSA-hw58-p9xv-2mjh/, test/ghsa/GHSA-gjq8-xm47-88rc/
+**Tests**: test/ghsa/GHSA-hw58-p9xv-2mjh/, test/ghsa/GHSA-gjq8-xm47-88rc/, test/ghsa/GHSA-2v2p-6j97-cjg9/
 
 ### Description
 
@@ -115,7 +115,7 @@ Re-verified 2026-09-02 on Node v26.7.0.
 - **`Promise.reject(hostError)` directly**: routes through `localPromise` (because `Promise.reject` delegates to `new this(...)`) and gains the swallow tail. Covered.
 - **Silent-failure trade-off**: sandbox developers cannot use Node's host-side `unhandledRejection` log to surface their own debug rejections. They must explicitly attach `.catch()` for visibility. Acceptable trade-off given the DoS severity; documented for users.
 
-### Sibling — ignored host-promise rejection (host→sandbox direction) — GHSA-gjq8-xm47-88rc
+### Sibling — ignored host-promise rejection (host→sandbox direction) — GHSA-gjq8-xm47-88rc, GHSA-2v2p-6j97-cjg9
 
 Category 22 and its parent GHSA-hw58 close the **sandbox→host** direction: a promise *constructed in the sandbox* that rejects with no handler. Before GHSA-gjq8-xm47-88rc the mirror-image direction was open; `markHostPromiseHandled` now closes it. When an embedder-exposed host function — or a host builtin such as `events.once(emitter, name)` — returns a **host-realm** rejected `Promise`, the bridge `apply` trap wraps it and hands the sandbox a proxied promise, but the **underlying host promise** has no rejection reaction of its own. If sandbox code merely calls the function and ignores the result, Node's default `unhandledRejection` policy (Node 15+) sees the raw host promise reject with no handler and **terminates the host process**:
 
@@ -133,9 +133,47 @@ Why the Category 22 defenses do not cover it: the swallow tail lives on `localPr
 - **No leak.** The no-op never touches the rejection value; no raw host error or host promise reaches the sandbox through this path. Sanitization is still owned by GHSA-55hx / `handleException`.
 - **Non-promises are inert.** The built-in `then` requires the `[[PromiseState]]` internal slot and throws on anything else; the call is wrapped in try/catch, so fulfilled promises and non-promise return values are untouched.
 
-**Detection rule:** a host function crossing the bridge that returns a promise the sandbox does not chain on. Structurally, any new host→sandbox return path that can carry a promise must pass through `markHostPromiseHandled` (the `apply` trap already does; `get`/`construct` return non-promise-or-benign values today — see residuals).
+**Detection rule:** a host function crossing the bridge that returns a promise the sandbox does not chain on.
 
 Regression coverage: `test/ghsa/GHSA-gjq8-xm47-88rc/` (forked-child survival for `hostReject` / host async fn / `events.once`; in-process delivery of the sanitized rejection and of fulfilled promises).
+
+#### Every other delivery route — GHSA-2v2p-6j97-cjg9
+
+The `apply` return value is only one of the ways a host promise reaches the sandbox. Before GHSA-2v2p-6j97-cjg9 the other routes were all still bare, and each one kills the host exactly as the parent PoC does:
+
+- **`construct` trap.** A host constructor's body may `return` an object, which overrides `this`. `BaseHandler.construct` wrapped that value with `thisFromOtherWithFactory` and never marked it. Reached through `new` and through `Reflect.construct`, and equally with a promise that rejects on a later tick.
+- **`get` trap.** A host accessor that mints a fresh rejected promise per read: the sandbox reads the property once and drops the value.
+- **Callback arguments.** A host function that hands a rejected host promise to a sandbox callback — the promise is an argument, so it never transits an `apply` *return*.
+
+```javascript
+// (advisory GHSA-2v2p-6j97-cjg9)
+function HostRejectCtor() { return Promise.reject(new Error('ctor-boom')); }
+new VM({ sandbox: { HostRejectCtor } }).run('new HostRejectCtor(); 1');
+// Host process aborts on the next microtask drain — the sandbox never touched
+// the value. Same outcome for `Reflect.construct(HostRejectCtor, [])`, for a
+// host getter returning `Promise.reject(...)`, and for a rejected host promise
+// passed as an argument to a sandbox callback.
+```
+
+**Why it works:** GHSA-gjq8's mitigation is bound to one trap. Marking per return path is a *specific* fix: it closes the route in the PoC and leaves every sibling route open, because the property that actually matters is about **delivery**, not about calls.
+
+**Mitigation:** the mark moves to the host→sandbox delivery chokepoint. `thisProxyOther` in `lib/bridge.js` is the single function that gives a host object its sandbox proxy — `apply` and `construct` returns, `get`/descriptor values, callback arguments and iterator yields all funnel through it via `thisFromOtherWithFactory` / `thisEnsureThis` / `thisFromOtherForThrow`. Its `!isHost` delivery block (which already marks host prototypes for GHSA-88hf-g992-jg85) now also calls `markHostPromiseHandled(other)` when `isOtherPromise(other)` holds. This restores the invariant **every host promise delivered into the sandbox carries a benign rejection reaction before sandbox code can ignore it** — the host→sandbox half of [Defense Invariant #2](../ATTACKS.md#defense-invariants) ("paths that bypass JS-level `catch` instrumentation … host-realm `Promise.then` rejection … are closed at the bridge"). Properties:
+
+- **One mark per host object.** `thisProxyOther` runs on the first crossing only; later deliveries hit the `mappingOtherToThis` cache, already marked. A promise that rejects long after it crossed is covered, because the reaction is attached at crossing time.
+- **No throw/catch per delivered object.** `isOtherPromise` is a brand check: it walks the *other* realm's prototype chain to the cached host `Promise.prototype` (`otherPromisePrototype`, captured at bridge init next to `otherPromiseThen`). Nothing is invoked on the value, so a non-promise host object costs a short prototype walk instead of a thrown `TypeError`. `Object.prototype.toString` is deliberately not used as the brand: it reads `Symbol.toStringTag`, which fires host `get` traps — a host `Proxy` whose `get` trap mints a fresh rejected promise would be crashed by the brand check itself. The walk is capped at 100 links so an embedder-authored `Proxy` chain that regenerates its own prototype cannot spin it.
+- **Second host realms are covered.** A promise minted in another host realm (`vm.runInNewContext`, nested contextify) matches no cached identity, so a chain that terminates at a non-null object which is *not* the cached host `Object.prototype` is treated as a possible promise and handed to `markHostPromiseHandled`. The built-in `Promise.prototype.then` brand-checks the `[[PromiseState]]` slot, which is realm-independent, so a foreign-realm promise gets marked and a foreign-realm non-promise or thenable never has its own `then` invoked. Same-realm and null-prototype objects terminate before that branch, so the hot path keeps its no-throw property.
+- **The call traps keep their unconditional mark.** `apply` keeps the GHSA-gjq8 call and `construct` gains the matching one, both after `stripDangerousSymbolsFromHostResult`. They are not redundant: a host promise whose prototype chain the host detached (`Object.setPrototypeOf(p, null)`) is invisible to the brand check but still tracked by V8, and `markHostPromiseHandled`'s `[[PromiseState]]`-slot try/catch handles it. Once per call, this costs nothing on the hot delivery path.
+- **Nothing else changes.** As with GHSA-gjq8: promises multicast, so a sandbox `.then`/`.catch` still observes the sanitized rejection; the no-op `onRejected` returns `undefined`, so the derived promise fulfills; fulfilled promises, non-promise constructor returns, and prototype-carrying host instances are untouched.
+
+**Detection rules:**
+
+- Any host→sandbox delivery path — a constructor return, an accessor, a callback argument, an iterator yield — that can carry a host promise the sandbox is free to ignore.
+- A fix expressed per trap rather than at `thisProxyOther`: assume the sibling traps are open until each is covered.
+- Embedder shapes that hand promises out without a call: `Object.defineProperty(hostObj, 'ready', {get() { return doAsync(); }})`, factory constructors returning `fetch`-style promises, host emitters passing a pending promise to a sandbox listener.
+
+**Known residual:** the brand check depends on the walk reaching a recognisable terminus, so *any* host-side chain manipulation that stops it early defeats it — a detached prototype (`Object.setPrototypeOf(Promise.reject(x), null)`), a `Proxy` prototype whose `getPrototypeOf` throws, a chain longer than the 100-link cap. Delivered through a non-call route, such a promise is recognized by neither layer (through a call it still is, because `apply` / `construct` mark unconditionally). The sandbox has no lever on any of this: there is no `Proxy` in the sandbox realm, so no `getPrototypeOf` trap can be mounted, and `Object.setPrototypeOf` / `__proto__ =` / `Reflect.setPrototypeOf` on a host object are all refused with `VMError`. Every one of these shapes has to be built by the embedder.
+
+Regression coverage: `test/ghsa/GHSA-2v2p-6j97-cjg9/` (forked-child survival under `--unhandled-rejections=strict` for the constructor, late-rejecting, `class` + `new`, `class` + `Reflect.construct`, prototype-detached, getter and callback-argument routes, plus a cross-realm promise through a getter, a data property and a callback argument; in-process controls for the sanitized rejection through the construct and getter routes, non-promise and fulfilled constructor returns, prototype methods, and a late `.catch`).
 
 ---
 

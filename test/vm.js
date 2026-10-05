@@ -3110,6 +3110,14 @@ describe('precompiled scripts', () => {
 		assert.ok(Object.keys(failScript).includes('compiler'));
 		assert.ok(!Object.keys(failScript).includes('_code'));
 	});
+
+	it('invalidates compiled code after wrap', () => {
+		const vm = new VM();
+		const script = new VMScript('41');
+		assert.strictEqual(vm.run(script), 41);
+		script.wrap('(', ')+1');
+		assert.strictEqual(vm.run(script), 42);
+	});
 });
 
 describe('freeze, protect', () => {

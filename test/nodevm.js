@@ -610,6 +610,14 @@ describe('precompiled scripts', () => {
 		assert.ok( val1 != val2);
 	});
 
+	it('invalidates the strict cache after a code change', () => {
+		const vm = new NodeVM({strict: true});
+		const script = new VMScript('module.exports = "A"');
+		assert.strictEqual(vm.run(script), 'A');
+		script.code = 'module.exports = "B"';
+		assert.strictEqual(vm.run(script), 'B');
+	});
+
 	it.cond('VMScript options', NODE_VERSION >= 12, () => {
 		const vm = new NodeVM();
 		// V8 Stack Trace API: https://v8.dev/docs/stack-trace-api

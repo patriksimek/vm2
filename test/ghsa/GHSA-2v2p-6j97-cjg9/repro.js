@@ -139,6 +139,21 @@ describe('GHSA-2v2p-6j97-cjg9 (unhandled host promise delivered outside the appl
 			return assertSurvived('construct-detached');
 		});
 
+	itCond('host constructor returning a rejected promise re-parented onto Object.prototype — host survives',
+		HAS_STRICT_REJECTIONS, function () {
+			return assertSurvived('construct-reparented');
+		});
+
+	itCond('host function returning a prototype-detached rejected promise — host survives',
+		HAS_STRICT_REJECTIONS, function () {
+			return assertSurvived('apply-detached');
+		});
+
+	itCond('host function returning a rejected promise re-parented onto Object.prototype — host survives',
+		HAS_STRICT_REJECTIONS, function () {
+			return assertSurvived('apply-reparented');
+		});
+
 	itCond('host getter returning a fresh rejected promise, read once and ignored — host survives',
 		HAS_STRICT_REJECTIONS, function () {
 			return assertSurvived('getter');
@@ -224,6 +239,46 @@ describe('GHSA-2v2p-6j97-cjg9 (unhandled host promise delivered outside the appl
 		assert.strictEqual(out[1], 1, 'nested host properties must still be readable');
 		assert.strictEqual(out[2], 'undefined', 'a plain host object must not gain a then');
 	});
+
+	// The mark asks "is this a promise?" on every object a host call returns.
+	// Answering by calling `then` and catching the TypeError costs a host
+	// exception per non-promise object, so where the host has a no-throw check
+	// (`util.types.isPromise`, Node 10+) `then` must only be reached for promises.
+	itCond('host calls returning NON-promise objects never invoke host Promise.prototype.then',
+		!!(require('util').types && require('util').types.isPromise), function () {
+			const realThen = Promise.prototype.then;
+			const nonPromiseReceivers = [];
+			let promiseReceivers = 0;
+			const p = Promise.resolve(7);
+			let out;
+			// The bridge caches `then` when the VM is created, so the counting
+			// stand-in has to be in place before that and is removed straight after.
+			Promise.prototype.then = function (a, b) {
+				if (this === p) promiseReceivers++; else nonPromiseReceivers.push(Object.prototype.toString.call(this));
+				return Reflect.apply(realThen, this, [a, b]);
+			};
+			try {
+				function HostThing() { this.n = 1; }
+				const vm = new VM({sandbox: {
+					makeDate: function () { return new Date(0); },
+					makePlain: function () { return {v: 1}; },
+					makeArray: function () { return [1, 2]; },
+					makeFn: function () { return function () {}; },
+					makePromise: function () { return p; },
+					HostThing: HostThing
+				}});
+				out = vm.run(`
+					var d = makeDate(); var o = makePlain(); var a = makeArray(); var f = makeFn();
+					var t = new HostThing(); makePromise();
+					[d.getTime(), o.v, a.length, typeof f, t.n];
+				`);
+			} finally {
+				Promise.prototype.then = realThen;
+			}
+			assert.deepStrictEqual([out[0], out[1], out[2], out[3], out[4]], [0, 1, 2, 'function', 1]);
+			assert.deepStrictEqual(nonPromiseReceivers, [], 'then must not be called on a non-promise host object');
+			assert.ok(promiseReceivers >= 1, 'a returned host promise must still be marked through then');
+		});
 
 	it('host constructor returning a FULFILLED promise still resolves normally to the sandbox', function () {
 		function HostResolveCtor() {

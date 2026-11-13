@@ -58,6 +58,26 @@ function HostDetachedCtor() {
 	return p;
 }
 
+// The same two shapes returned from a plain host FUNCTION call (the apply
+// trap). Detached to null, and re-parented onto Object.prototype so that the
+// promise is indistinguishable from a plain object by its prototype chain:
+// only its [[PromiseState]] slot says what it is.
+function hostDetachedFn() {
+	var p = Promise.reject(new Error('fn-detached-boom'));
+	Object.setPrototypeOf(p, null);
+	return p;
+}
+function hostReparentedFn() {
+	var p = Promise.reject(new Error('fn-reparented-boom'));
+	Object.setPrototypeOf(p, Object.prototype);
+	return p;
+}
+function HostReparentedCtor() {
+	var p = Promise.reject(new Error('ctor-reparented-boom'));
+	Object.setPrototypeOf(p, Object.prototype);
+	return p;
+}
+
 // Host accessor handing a FRESH rejected host promise to the sandbox on read.
 var hostAccessorObject = {};
 Object.defineProperty(hostAccessorObject, 'p', {
@@ -82,6 +102,9 @@ var sandbox = {
 	HostLateCtor: HostLateCtor,
 	HostRejectClass: HostRejectClass,
 	HostDetachedCtor: HostDetachedCtor,
+	HostReparentedCtor: HostReparentedCtor,
+	hostDetachedFn: hostDetachedFn,
+	hostReparentedFn: hostReparentedFn,
 	hostAccessorObject: hostAccessorObject,
 	hostCallsBack: hostCallsBack
 };
@@ -133,6 +156,9 @@ var codes = {
 	'class-new': 'new HostRejectClass(); 1',
 	'class-reflect': 'Reflect.construct(HostRejectClass, []); 1',
 	'construct-detached': 'new HostDetachedCtor(); 1',
+	'construct-reparented': 'new HostReparentedCtor(); 1',
+	'apply-detached': 'hostDetachedFn(); 1',
+	'apply-reparented': 'hostReparentedFn(); 1',
 	// Delivery through the `get` trap.
 	getter: 'hostAccessorObject.p; 1',
 	// Delivery as a callback argument.

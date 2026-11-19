@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- `bufferAllocLimit` added to `VMOptions` in `index.d.ts`.
+
 ## [3.12.2]
 
 ### Security fixes

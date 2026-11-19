@@ -168,6 +168,11 @@ export interface VMOptions {
    * If set to `false` any attempt to run code using async will throw a `VMError` (default: `true`).
    */
   allowAsync?: boolean;
+  /**
+   * Maximum size in bytes for a single `Buffer.alloc` / `allocUnsafe` / `allocUnsafeSlow` / `Buffer(N)` / `new Buffer(N)`
+   * call inside the sandbox. Must be a non-negative number (default: `Infinity`, no cap).
+   */
+  bufferAllocLimit?: number;
 }
 
 /**
